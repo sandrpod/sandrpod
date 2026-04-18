@@ -48,6 +48,34 @@ class Sandbox:
     def region(self) -> str:
         return self._info.get("region", "")
 
+    @property
+    def arch(self) -> str:
+        """CPU 架构（继承自 Poder 主机，e.g. amd64, arm64）"""
+        return self._info.get("arch", "")
+
+    @property
+    def os(self) -> str:
+        """操作系统类型（e.g. linux）"""
+        return self._info.get("os", "")
+
+    @property
+    def os_version(self) -> str:
+        """操作系统版本（e.g. Ubuntu 22.04.3 LTS）"""
+        return self._info.get("os_version", "")
+
+    def env_info(self) -> "EnvironmentInfo":
+        """
+        获取容器内真实运行环境信息（通过 Toolbox /info 端点）。
+
+        比 arch/os/os_version 属性更精确：由容器自身上报，
+        额外包含 kernel_version、shell、work_dir。
+
+        Returns:
+            EnvironmentInfo 对象
+        """
+        resp = self._request("GET", f"/api/v1/sandboxes/{self.name}/toolbox/info")
+        return EnvironmentInfo(resp.json())
+
     def refresh(self) -> None:
         """刷新状态"""
         resp = self._request("GET", f"/api/v1/pods/{self.name}")
@@ -120,6 +148,34 @@ class ProcessResult:
 
     def __str__(self) -> str:
         return self.stdout
+
+
+class EnvironmentInfo:
+    """容器运行环境信息（来自 Toolbox /info 端点）"""
+
+    def __init__(self, data: Dict[str, Any]):
+        self.arch: str = data.get("arch", "")
+        self.os: str = data.get("os", "")
+        self.os_version: str = data.get("os_version", "")
+        self.kernel_version: str = data.get("kernel_version", "")
+        self.shell: str = data.get("shell", "")
+        self.work_dir: str = data.get("work_dir", "")
+
+    def __repr__(self) -> str:
+        return (
+            f"<EnvironmentInfo arch={self.arch!r} os={self.os!r} "
+            f"os_version={self.os_version!r} kernel={self.kernel_version!r}>"
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "arch": self.arch,
+            "os": self.os,
+            "os_version": self.os_version,
+            "kernel_version": self.kernel_version,
+            "shell": self.shell,
+            "work_dir": self.work_dir,
+        }
 
 
 class SandboxProcess:

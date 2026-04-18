@@ -33,9 +33,13 @@ const (
 
 // PoderResources Poder 资源
 type PoderResources struct {
-	CPUCores      int   `json:"cpu_cores"`
-	MemoryBytes   int64 `json:"memory_bytes"`
-	MaxContainers int   `json:"max_containers"`
+	CPUCores      int    `json:"cpu_cores"`
+	MemoryBytes   int64  `json:"memory_bytes"`
+	MaxContainers int    `json:"max_containers"`
+	Arch          string `json:"arch,omitempty"`       // e.g. amd64, arm64
+	OS            string `json:"os,omitempty"`         // e.g. linux, darwin
+	OSVersion     string `json:"os_version,omitempty"` // e.g. Ubuntu 22.04.3 LTS
+	KernelVersion string `json:"kernel_version,omitempty"` // e.g. 5.15.0-91-generic
 }
 
 // PoderUsage Poder 当前使用情况

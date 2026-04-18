@@ -136,6 +136,10 @@ func main() {
 				CPUCores:      cpuCores,
 				MemoryBytes:   memBytes,
 				MaxContainers: maxContainers,
+				Arch:          r.Header.Get("X-Poder-Arch"),
+				OS:            r.Header.Get("X-Poder-OS"),
+				OSVersion:     r.Header.Get("X-Poder-OS-Version"),
+				KernelVersion: r.Header.Get("X-Poder-Kernel-Version"),
 			},
 		})
 
@@ -245,6 +249,12 @@ func main() {
 					State string `json:"state"`
 				}
 				json.Unmarshal(respBody, &poderResp)
+				poderArch, poderOS, poderOSVersion := "", "", ""
+				if pi, ok := poderStore.Get(pID); ok {
+					poderArch = pi.Resources.Arch
+					poderOS = pi.Resources.OS
+					poderOSVersion = pi.Resources.OSVersion
+				}
 				sandbox := &podpkg.SandboxInfo{
 					ID:           poderResp.ID,
 					Name:         req.Name,
@@ -254,6 +264,9 @@ func main() {
 					IP:           poderResp.IP,
 					PoderID:      pID,
 					ProxyURL:     "tunnel://" + pID,
+					Arch:         poderArch,
+					OS:           poderOS,
+					OSVersion:    poderOSVersion,
 					CreatedAt:    time.Now(),
 				}
 				sandboxStore.Add(sandbox)
@@ -358,6 +371,12 @@ func main() {
 				return
 			}
 
+			sbArch, sbOS, sbOSVersion := "", "", ""
+			if pi, ok := poderStore.Get(job.PoderID); ok {
+				sbArch = pi.Resources.Arch
+				sbOS = pi.Resources.OS
+				sbOSVersion = pi.Resources.OSVersion
+			}
 			sandbox := &podpkg.SandboxInfo{
 				ID:           job.ID,
 				Name:         req.Name,
@@ -367,6 +386,9 @@ func main() {
 				PoderID:      job.PoderID,
 				ProxyURL:     "tunnel://" + job.PoderID,
 				State:        podpkg.StatePending,
+				Arch:         sbArch,
+				OS:           sbOS,
+				OSVersion:    sbOSVersion,
 				CreatedAt:    time.Now(),
 			}
 			sandboxStore.Add(sandbox)

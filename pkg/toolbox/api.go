@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -49,6 +50,16 @@ type HealthStatus struct {
 	Timestamp int64  `json:"timestamp"`
 }
 
+// EnvironmentInfo 容器运行环境信息（供 AI 生成脚本时参考）
+type EnvironmentInfo struct {
+	Arch          string `json:"arch"`           // e.g. amd64, arm64
+	OS            string `json:"os"`             // e.g. linux
+	OSVersion     string `json:"os_version"`     // e.g. Ubuntu 22.04.3 LTS
+	KernelVersion string `json:"kernel_version"` // e.g. 5.15.0-91-generic
+	Shell         string `json:"shell"`          // e.g. /bin/bash
+	WorkDir       string `json:"work_dir"`       // default working directory
+}
+
 // Server Toolbox HTTP 服务器
 type Server struct {
 	addr           string
@@ -83,6 +94,7 @@ func (s *Server) Start() error {
 
 	// API 路由
 	mux.HandleFunc("/health", s.healthHandler)
+	mux.HandleFunc("/info", s.infoHandler)
 	mux.HandleFunc("/process", s.processHandler)
 	mux.HandleFunc("/processAsync", s.processAsyncHandler)
 	mux.HandleFunc("/status", s.statusHandler)
@@ -143,6 +155,51 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp)
+}
+
+// infoHandler GET /info — 返回容器运行环境信息，供 AI 生成可执行脚本时参考
+func (s *Server) infoHandler(w http.ResponseWriter, r *http.Request) {
+	info := getEnvInfo()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(info)
+}
+
+// getEnvInfo 收集容器运行环境信息
+func getEnvInfo() EnvironmentInfo {
+	osVersion := runtime.GOOS
+	if data, err := os.ReadFile("/etc/os-release"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if val, ok := strings.CutPrefix(line, "PRETTY_NAME="); ok {
+				osVersion = strings.Trim(val, `"`)
+				break
+			}
+		}
+	}
+
+	kernelVersion := ""
+	if data, err := os.ReadFile("/proc/version"); err == nil {
+		fields := strings.Fields(strings.TrimSpace(string(data)))
+		// "Linux version 5.15.0-91-generic ..."
+		if len(fields) >= 3 {
+			kernelVersion = fields[2]
+		}
+	}
+
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/sh"
+	}
+
+	workDir, _ := os.Getwd()
+
+	return EnvironmentInfo{
+		Arch:          runtime.GOARCH,
+		OS:            runtime.GOOS,
+		OSVersion:     osVersion,
+		KernelVersion: kernelVersion,
+		Shell:         shell,
+		WorkDir:       workDir,
+	}
 }
 
 func (s *Server) processHandler(w http.ResponseWriter, r *http.Request) {

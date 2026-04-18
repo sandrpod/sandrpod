@@ -98,10 +98,16 @@ def list(ctx):
         if not sandboxes:
             click.echo("No sandboxes found")
             return
-        click.echo(f"{'Name':<20} {'State':<12} {'Provider':<10} {'Region':<12}")
-        click.echo("-" * 60)
+        click.echo(f"{'Name':<20} {'State':<12} {'Provider':<10} {'Region':<12} {'Arch':<8} {'OS Version'}")
+        click.echo("-" * 85)
         for sb in sandboxes:
-            click.echo(f"{sb.get('name', 'N/A'):<20} {sb.get('state', 'N/A'):<12} {sb.get('provider_type', 'N/A'):<10} {sb.get('region', 'N/A'):<12}")
+            arch = sb.get("arch", "-")
+            os_ver = sb.get("os_version", "-")
+            click.echo(
+                f"{sb.get('name', 'N/A'):<20} {sb.get('state', 'N/A'):<12} "
+                f"{sb.get('provider_type', 'N/A'):<10} {sb.get('region', 'N/A'):<12} "
+                f"{arch:<8} {os_ver}"
+            )
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -134,13 +140,38 @@ def get(ctx, name):
     client = ctx.obj["client"]
     try:
         sandbox = client.get_sandbox(name)
-        click.echo(f"Name: {sandbox.get('name')}")
-        click.echo(f"State: {sandbox.get('state')}")
-        click.echo(f"Region: {sandbox.get('region')}")
+        click.echo(f"Name:          {sandbox.get('name')}")
+        click.echo(f"State:         {sandbox.get('state')}")
+        click.echo(f"Region:        {sandbox.get('region')}")
         click.echo(f"Provider Type: {sandbox.get('provider_type')}")
         click.echo(f"Instance Type: {sandbox.get('instance_type')}")
-        click.echo(f"Poder ID: {sandbox.get('poder_id')}")
-        click.echo(f"IP: {sandbox.get('ip', 'N/A')}")
+        click.echo(f"Poder ID:      {sandbox.get('poder_id')}")
+        click.echo(f"IP:            {sandbox.get('ip', 'N/A')}")
+        if sandbox.get("arch"):
+            click.echo(f"Arch:          {sandbox.get('arch')}")
+        if sandbox.get("os"):
+            click.echo(f"OS:            {sandbox.get('os')}")
+        if sandbox.get("os_version"):
+            click.echo(f"OS Version:    {sandbox.get('os_version')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("name")
+@click.pass_context
+def env(ctx, name):
+    """Show sandbox runtime environment info (arch, OS, shell, etc.)"""
+    client = ctx.obj["client"]
+    try:
+        info = client.get_sandbox_env(name)
+        click.echo(f"Arch:           {info.get('arch', 'N/A')}")
+        click.echo(f"OS:             {info.get('os', 'N/A')}")
+        click.echo(f"OS Version:     {info.get('os_version', 'N/A')}")
+        click.echo(f"Kernel Version: {info.get('kernel_version', 'N/A')}")
+        click.echo(f"Shell:          {info.get('shell', 'N/A')}")
+        click.echo(f"Work Dir:       {info.get('work_dir', 'N/A')}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -517,10 +548,17 @@ def poders(ctx):
         if not poders:
             click.echo("No poders found")
             return
-        click.echo(f"{'ID':<20} {'State':<10} {'Provider':<10} {'URL':<30}")
-        click.echo("-" * 75)
+        click.echo(f"{'ID':<20} {'State':<10} {'Provider':<10} {'Arch':<8} {'OS Version':<30} {'URL'}")
+        click.echo("-" * 95)
         for p in poders:
-            click.echo(f"{p.get('id', 'N/A'):<20} {p.get('state', 'N/A'):<10} {p.get('provider_type', 'N/A'):<10} {p.get('url', 'N/A'):<30}")
+            res = p.get("resources", {})
+            arch = res.get("arch", "-")
+            os_ver = res.get("os_version", "-")
+            click.echo(
+                f"{p.get('id', 'N/A'):<20} {p.get('state', 'N/A'):<10} "
+                f"{p.get('provider_type', 'N/A'):<10} {arch:<8} {os_ver:<30} "
+                f"{p.get('url', 'N/A')}"
+            )
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

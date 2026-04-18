@@ -287,6 +287,22 @@ class CLIClient:
 
     # ========== Poder 操作 ==========
 
+    def get_sandbox_env(self, name: str) -> Dict[str, Any]:
+        """
+        获取 Sandbox 容器运行环境信息（供 AI 生成脚本时参考）
+
+        从容器内 Toolbox 直接读取，比沙箱元数据更精确，
+        包含 arch、os、os_version、kernel_version、shell、work_dir。
+
+        Args:
+            name: Sandbox 名称
+
+        Returns:
+            EnvironmentInfo dict
+        """
+        resp = self._request("GET", f"/api/v1/sandboxes/{name}/toolbox/info")
+        return resp.json()
+
     def list_poders(self) -> List[Dict[str, Any]]:
         """列出所有 Poder"""
         resp = self._request("GET", "/api/v1/poders")

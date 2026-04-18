@@ -16,6 +16,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -613,6 +614,10 @@ func connectTunnel(ctx context.Context, poderID string, mux http.Handler, p *pod
 		headers.Set("X-Poder-CPU-Cores", strconv.Itoa(resources.CPUCores))
 		headers.Set("X-Poder-Memory-Bytes", strconv.FormatInt(resources.MemoryBytes, 10))
 		headers.Set("X-Poder-Max-Containers", strconv.Itoa(resources.MaxContainers))
+		headers.Set("X-Poder-Arch", resources.Arch)
+		headers.Set("X-Poder-OS", resources.OS)
+		headers.Set("X-Poder-OS-Version", resources.OSVersion)
+		headers.Set("X-Poder-Kernel-Version", resources.KernelVersion)
 
 		wsConn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, headers)
 		if err != nil {
@@ -731,11 +736,50 @@ func getHostResources() (podpkg.PoderResources, error) {
 		memTotal = 8 * 1024 * 1024 * 1024
 	}
 
+	osVersion := getOSVersion()
+	kernelVersion := getKernelVersion()
+
 	return podpkg.PoderResources{
 		CPUCores:      cpuCount,
 		MemoryBytes:   memTotal,
 		MaxContainers: 10,
+		Arch:          runtime.GOARCH,
+		OS:            runtime.GOOS,
+		OSVersion:     osVersion,
+		KernelVersion: kernelVersion,
 	}, nil
+}
+
+// getOSVersion reads /etc/os-release for a human-readable OS version string.
+// Falls back to runtime.GOOS on failure.
+func getOSVersion() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return runtime.GOOS
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.HasPrefix(line, "PRETTY_NAME=") {
+			val := strings.TrimPrefix(line, "PRETTY_NAME=")
+			return strings.Trim(val, `"`)
+		}
+	}
+	return runtime.GOOS
+}
+
+// getKernelVersion reads /proc/version for the kernel version string.
+func getKernelVersion() string {
+	data, err := os.ReadFile("/proc/version")
+	if err != nil {
+		return ""
+	}
+	// /proc/version is one line; extract up to "version X.Y.Z"
+	line := strings.TrimSpace(string(data))
+	fields := strings.Fields(line)
+	// Format: "Linux version 5.15.0-91-generic ..."
+	if len(fields) >= 3 && strings.EqualFold(fields[0], "linux") {
+		return fields[2]
+	}
+	return line
 }
 
 func getHostUsage() (cpuUsage, memUsage float64) {

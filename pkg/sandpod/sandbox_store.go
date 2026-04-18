@@ -24,6 +24,10 @@ type SandboxInfo struct {
 	ContainerID   string            `json:"container_id,omitempty"`    // 实际容器 ID
 	ProxyURL      string            `json:"proxy_url,omitempty"`       // Toolbox Proxy URL
 	APIURL        string            `json:"api_url,omitempty"`
+	// 运行环境信息（供 AI 生成可执行脚本时参考）
+	Arch          string            `json:"arch,omitempty"`       // e.g. amd64, arm64（继承自 Poder 主机）
+	OS            string            `json:"os,omitempty"`         // e.g. linux
+	OSVersion     string            `json:"os_version,omitempty"` // e.g. Ubuntu 22.04.3 LTS
 	CreatedAt     time.Time         `json:"created_at"`
 	LastActivity  time.Time         `json:"last_activity"`
 	Labels        map[string]string `json:"labels,omitempty"`
