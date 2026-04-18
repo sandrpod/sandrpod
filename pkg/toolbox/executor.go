@@ -12,7 +12,6 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -63,7 +62,12 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 	case "node", "nodejs":
 		cmd = exec.Command("node", "-e", code)
 	case "bash", "sh", "shell":
-		cmd = exec.Command("/bin/bash", "-c", code)
+		// On Windows, use PowerShell; on Unix, use /bin/bash.
+		shell := nativeShell()
+		args := append(nativeShellRunArgs(), code)
+		cmd = exec.Command(shell, args...)
+	case "powershell", "pwsh":
+		cmd = exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", code)
 	case "go":
 		cmd = exec.Command("go", "run", "-")
 		cmd.Stdin = strings.NewReader(code)
@@ -77,18 +81,12 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 		return nil, fmt.Errorf("unsupported language: %s", language)
 	}
 
-	// 设置执行环境 - 使用 /workspace 作为默认工作目录（容器内）
-	// 如果该路径不存在（本地 agent 场景），回退到当前工作目录
-	workDir := "/workspace"
-	if _, err := os.Stat(workDir); os.IsNotExist(err) {
-		workDir, _ = os.Getwd()
-	}
-	cmd.Dir = workDir
-	// 继承父进程的环境变量，确保 PATH 可以找到 python3/node 等命令
+	// 设置工作目录和环境变量
+	cmd.Dir = defaultWorkDir()
+	// 继承父进程的环境变量��确保 PATH 可以找到 python3/node 等命令
 	cmd.Env = os.Environ()
-	cmd.SysProcAttr = &syscall.SysProcAttr{
-		Setpgid: true, // 进程组隔离
-	}
+	// 进程组隔离（Unix only；Windows 为 no-op）
+	setSysProcAttr(cmd)
 
 	// 使用管道进行流式输出
 	stdoutPipe, _ := cmd.StdoutPipe()
@@ -110,11 +108,11 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		io.Copy(&stdout, stdoutPipe)
+		io.Copy(&stdout, stdoutPipe) //nolint:errcheck
 	}()
 	go func() {
 		defer wg.Done()
-		io.Copy(&stderr, stderrPipe)
+		io.Copy(&stderr, stderrPipe) //nolint:errcheck
 	}()
 
 	// 等待完成或超时
@@ -126,8 +124,8 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 
 	select {
 	case <-ctx.Done():
-		syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		cmd.Wait()
+		killProcess(cmd)
+		cmd.Wait() //nolint:errcheck
 		return &ProcessResult{
 			ExitCode:  124,
 			Stdout:    stdout.String(),

@@ -114,13 +114,11 @@ func (m *SessionManager) Create(sessionId string) (*Session, error) {
 		return nil, &SessionError{Op: "create", Err: err}
 	}
 
-	// 创建持久 shell 进程
-	cmd := exec.Command("/bin/bash", "-i")
-	workDir := "/workspace"
-	if _, err := os.Stat(workDir); os.IsNotExist(err) {
-		workDir, _ = os.Getwd()
-	}
-	cmd.Dir = workDir
+	// 创建持久 shell 进程（Unix: /bin/bash -i；Windows: powershell.exe -NoExit）
+	shell := nativeShell()
+	args := nativeShellSessionArgs()
+	cmd := exec.Command(shell, args...)
+	cmd.Dir = defaultWorkDir()
 	cmd.Env = os.Environ()
 
 	// 获取 stdin pipe

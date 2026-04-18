@@ -67,8 +67,8 @@ func (m *SessionManager) Execute(sessionId, cmdId, command string, async bool) (
 	session.LastActivity = time.Now()
 	session.mu.Unlock()
 
-	// 构建命令包装脚本
-	cmdWrapper := m.buildCommandWrapper(command, logFile, exitFile)
+	// 构建命令包装脚本（通过平台函数生成 bash/PowerShell 语法）
+	cmdWrapper := buildCommandWrapper(command, logFile, exitFile)
 
 	// 通过 stdin 发送命令
 	session.mu.Lock()
@@ -87,35 +87,6 @@ func (m *SessionManager) Execute(sessionId, cmdId, command string, async bool) (
 	return m.waitForCommand(sessionCommand)
 }
 
-// buildCommandWrapper 构建命令包装脚本
-// 注意：不使用后台执行，命令直接在 shell 中顺序执行，cd 等状态会保持
-func (m *SessionManager) buildCommandWrapper(command, logFile, exitFile string) string {
-	// 检查命令是否已包含输出重定向
-	// 注意：这里只是简单检测，实际应该更严谨地解析
-	if strings.Contains(command, ">") || strings.Contains(command, ">>") {
-		// 用户已指定输出重定向，直接执行并捕获退出码
-		// 不再加 logfile 重定向，避免覆盖用户的重定向
-		return fmt.Sprintf(`%s; echo $? > %s
-`,
-			command,
-			exitFile,
-		)
-	}
-	// 无重定向时，捕获输出到 logfile
-	return fmt.Sprintf(`%s > %s 2>&1; echo $? > %s
-`,
-		command,
-		logFile,
-		exitFile,
-	)
-}
-
-// escapeShellCommand 转义 shell 命令
-func escapeShellCommand(cmd string) string {
-	// 简单的转义处理，替换单引号为挑战式转义
-	// 注意：这里只是简单处理，实际应该更严谨
-	return cmd
-}
 
 // waitForCommand 等待命令完成
 func (m *SessionManager) waitForCommand(sessionCommand *SessionCommand) (*SessionExecuteResponse, error) {
