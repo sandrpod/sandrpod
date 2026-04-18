@@ -1,0 +1,41 @@
+# Copyright 2024 SandrPod
+# Server + Poder 本地开发部署
+
+services:
+  server:
+    image: sandrpod/server:v0.1.0
+    container_name: sandrpod-server
+    ports:
+      - "18080:8080"
+    networks:
+      - sandrpod
+    environment:
+      - PORT=8080
+      - TOKEN=
+      - OFFLINE_TIMEOUT=30s
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  poder:
+    image: sandrpod/poder:v0.1.0
+    container_name: sandrpod-poder
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - sandrpod
+    environment:
+      - API_URL=http://server:8080
+      - REGION=local
+      - PROVIDER_TYPE=local
+      - SANDRPOD_TOOLBOX_IMAGE=sandrpod-toolbox:dev
+    depends_on:
+      - server
+    restart: unless-stopped
+
+networks:
+  sandrpod:
+    name: sandrpod

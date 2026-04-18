@@ -1,0 +1,29 @@
+# Copyright 2024 SandrPod
+# Poder 镜像 - Worker 节点服务 (Proxy + Agent)
+
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /app
+
+# 安装依赖
+RUN apk add --no-cache git
+
+# 复制源码 (从父目录，因为 go.mod 在那里)
+COPY . .
+
+# 构建
+RUN CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=auto go build -o /poder ./cmd/poder
+
+# 最终镜像
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /app
+
+# 复制二进制
+COPY --from=builder /poder /app/poder
+
+# 注意: 运行时需要挂载 /var/run/docker.sock
+
+ENTRYPOINT ["/app/poder"]

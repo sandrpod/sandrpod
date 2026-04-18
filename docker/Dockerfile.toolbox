@@ -1,0 +1,30 @@
+# Copyright 2024 SandrPod
+# Toolbox 镜像 - Go 实现代码执行服务
+
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /app
+
+# 安装依赖
+RUN apk add --no-cache git
+
+# 复制源码
+COPY . .
+
+# 构建
+RUN CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=auto go build -o /toolbox ./cmd/toolbox
+
+# 最终镜像
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates tzdata python3 nodejs npm bash git curl
+
+WORKDIR /workspace
+
+# 复制二进制
+COPY --from=builder /toolbox /app/toolbox
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/toolbox"]
+CMD ["-port=8080"]

@@ -1,0 +1,35 @@
+# Copyright 2024 SandrPod
+# API Server 镜像 - 控制面服务
+
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /app
+
+# 安装依赖
+RUN apk add --no-cache git
+
+# 复制源码
+COPY . .
+
+# 构建
+RUN CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=auto go build -o /server ./cmd/server
+
+# 最终镜像
+FROM alpine:3.19
+
+RUN apk add --no-cache ca-certificates tzdata
+
+WORKDIR /app
+
+# 复制二进制
+COPY --from=builder /server /app/server
+
+# 环境变量
+# PORT: 服务端口 (默认 8080)
+# TOKEN: API 认证 token (可选)
+# OFFLINE_TIMEOUT: Poder 离线超时 (默认 30s)
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/server"]
+CMD ["-port=8080"]

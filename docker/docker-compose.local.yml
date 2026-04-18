@@ -1,0 +1,51 @@
+# Copyright 2024 SandrPod
+# 本地开发部署 - 从源码构建所有镜像
+
+services:
+  server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.server
+    image: sandrpod/server:dev
+    platform: linux/amd64
+    container_name: sandrpod-server
+    ports:
+      - "8080:8080"
+    networks:
+      - sandrpod
+    environment:
+      - PORT=8080
+      - OFFLINE_TIMEOUT=60s
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  poder:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.poder
+    image: sandrpod/poder:dev
+    platform: linux/amd64
+    container_name: sandrpod-poder
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - sandrpod
+    environment:
+      - API_URL=http://server:8080
+      - REGION=local
+      - PROVIDER_TYPE=local
+      - SANDRPOD_TOOLBOX_IMAGE=sandrpod/toolbox:dev
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  sandrpod:
+    name: sandrpod
+    external: true
