@@ -427,6 +427,51 @@ def fs_info(ctx, name, path):
         sys.exit(1)
 
 
+@fs_group.command(name="upload")
+@click.argument("name")
+@click.argument("local_path", type=click.Path(exists=True))
+@click.argument("remote_path")
+@click.pass_context
+def fs_upload(ctx, name, local_path, remote_path):
+    """Upload a local file to sandbox. Usage: fs upload SANDBOX LOCAL_PATH REMOTE_PATH"""
+    import os
+    client = ctx.parent.parent.obj["client"]
+    try:
+        local_path = os.path.expanduser(local_path)
+        filename = os.path.basename(local_path)
+        with open(local_path, "rb") as f:
+            content = f.read()
+        size = len(content)
+        result = client.upload_files(name, [(filename, content)], remote_path)
+        click.echo(f"Uploaded: {local_path} → {remote_path}/{filename} ({size} bytes)")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@fs_group.command(name="download")
+@click.argument("name")
+@click.argument("remote_path")
+@click.argument("local_path", required=False)
+@click.pass_context
+def fs_download(ctx, name, remote_path, local_path):
+    """Download a file from sandbox. Usage: fs download SANDBOX REMOTE_PATH [LOCAL_PATH]"""
+    import os
+    client = ctx.parent.parent.obj["client"]
+    try:
+        content = client.read_file(name, remote_path)
+        # Default local path: current dir + remote filename
+        if not local_path:
+            local_path = os.path.basename(remote_path)
+        local_path = os.path.expanduser(local_path)
+        with open(local_path, "wb") as f:
+            f.write(content)
+        click.echo(f"Downloaded: {remote_path} → {local_path} ({len(content)} bytes)")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 # Register file group
 cli.add_command(fs_group)
 

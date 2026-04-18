@@ -115,7 +115,7 @@ func (m *SessionManager) waitForCommand(sessionCommand *SessionCommand) (*Sessio
 		var output string
 		outputBytes, err := os.ReadFile(sessionCommand.LogFile)
 		if err == nil {
-			output = string(outputBytes)
+			output = string(stripBOM(outputBytes))
 		}
 
 		sessionCommand.ExitCode = &exitCode
@@ -330,4 +330,14 @@ func ParseLogOutput(output string) (stdout, stderr string) {
 		}
 	}
 	return strings.TrimRight(stdout, "\n"), strings.TrimRight(stderr, "\n")
+}
+
+// stripBOM removes a leading UTF-8 BOM (EF BB BF) if present.
+// PowerShell 5.x Out-File -Encoding UTF8 prepends a BOM; Go strings are
+// BOM-unaware, so we strip it before returning to callers.
+func stripBOM(b []byte) []byte {
+	if len(b) >= 3 && b[0] == 0xEF && b[1] == 0xBB && b[2] == 0xBF {
+		return b[3:]
+	}
+	return b
 }

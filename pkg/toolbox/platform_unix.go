@@ -27,6 +27,12 @@ func defaultWorkDir() string {
 // nativeShell returns the path to the system shell.
 func nativeShell() string { return "/bin/bash" }
 
+// nativePython returns the Python interpreter command on this platform.
+func nativePython() string { return "python3" }
+
+// prepareExecuteCode returns the code unchanged on Unix.
+func prepareExecuteCode(code string) string { return code }
+
 // nativeShellRunArgs returns flags for one-shot command execution.
 func nativeShellRunArgs() []string { return []string{"-c"} }
 

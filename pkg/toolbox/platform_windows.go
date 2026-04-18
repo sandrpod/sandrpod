@@ -23,15 +23,33 @@ func defaultWorkDir() string {
 // nativeShell returns the PowerShell executable.
 func nativeShell() string { return "powershell.exe" }
 
+// nativePython returns the Python interpreter command on Windows.
+// Windows typically ships "python" (not "python3") in PATH.
+func nativePython() string { return "python" }
+
+// prepareExecuteCode prepends UTF-8 console encoding setup so that one-shot
+// PowerShell executions emit UTF-8 bytes on stdout (captured via pipe by Go).
+// chcp 65001 changes the OEM code page so native executables also output UTF-8.
+func prepareExecuteCode(code string) string {
+	const setup = `chcp 65001 | Out-Null; [Console]::OutputEncoding=$OutputEncoding=[System.Text.Encoding]::UTF8; `
+	return setup + code
+}
+
 // nativeShellRunArgs returns flags for one-shot command execution via PowerShell.
 func nativeShellRunArgs() []string {
 	return []string{"-NoProfile", "-NonInteractive", "-Command"}
 }
 
 // nativeShellSessionArgs returns flags for launching a persistent PowerShell session.
+// The -Command block runs once at startup and sets UTF-8 for all three encoding
+// surfaces so that both stdin (commands we send) and stdout/file output are
+// correctly handled as UTF-8, even on Chinese-locale Windows (CP936/GBK).
 func nativeShellSessionArgs() []string {
-	// -NoExit keeps the session alive after each command.
-	return []string{"-NoLogo", "-NoExit", "-NonInteractive"}
+	return []string{
+		"-NoLogo", "-NoExit", "-NonInteractive",
+		"-Command",
+		`chcp 65001 | Out-Null; [Console]::InputEncoding=[Console]::OutputEncoding=$OutputEncoding=[System.Text.Encoding]::UTF8`,
+	}
 }
 
 // setSysProcAttr is a no-op on Windows; Setpgid is not supported.
@@ -53,6 +71,8 @@ func toNativePath(p string) string {
 // a persistent PowerShell session, captures all streams to logFile, and writes
 // the numeric exit code to exitFile.
 //
+// Sets UTF-8 as the output encoding before running the command so the captured
+// log file always contains valid UTF-8 (PowerShell 5.x defaults to UTF-16 LE).
 // Uses *> to redirect all output streams (stdout, stderr, warning, etc.).
 // Falls back gracefully: $LASTEXITCODE is set by native executables;
 // for PowerShell cmdlets we use $? (bool → 0/1).
@@ -60,18 +80,27 @@ func buildCommandWrapper(command, logFile, exitFile string) string {
 	logFileW := toNativePath(logFile)
 	exitFileW := toNativePath(exitFile)
 
+	// Force UTF-8 for stdin, stdout, and file output before every command.
+	// chcp 65001 sets the Windows console code page to UTF-8 so that both
+	// native-exe output and PowerShell cmdlet output are encoded correctly.
+	encodingSetup := `chcp 65001 | Out-Null; [Console]::InputEncoding=[Console]::OutputEncoding=$OutputEncoding=[System.Text.Encoding]::UTF8; `
+
 	// Exit-code expression: prefer $LASTEXITCODE (native exes), fall back to $?
 	exitExpr := `$(if($LASTEXITCODE -ne $null -and $LASTEXITCODE -ne 0){$LASTEXITCODE}elseif($?){0}else{1})`
 
 	if strings.Contains(command, ">") {
 		// User already has output redirection — just capture the exit code.
 		return fmt.Sprintf(
-			"%s; [System.IO.File]::WriteAllText('%s', \"%s\")\n",
-			command, exitFileW, exitExpr,
+			"%s%s; [System.IO.File]::WriteAllText('%s', \"%s\")\n",
+			encodingSetup, command, exitFileW, exitExpr,
 		)
 	}
+	// Use Out-File -Encoding UTF8 instead of *> so the log file is always
+	// UTF-8 encoded. PowerShell 5.x *> writes UTF-16 LE regardless of
+	// $OutputEncoding; Out-File -Encoding UTF8 writes UTF-8 with BOM which
+	// Go reads correctly.
 	return fmt.Sprintf(
-		"& { %s } *> '%s'; [System.IO.File]::WriteAllText('%s', \"%s\")\n",
-		command, logFileW, exitFileW, exitExpr,
+		"%s& { %s } 2>&1 | Out-File -Encoding UTF8 -FilePath '%s'; [System.IO.File]::WriteAllText('%s', \"%s\")\n",
+		encodingSetup, command, logFileW, exitFileW, exitExpr,
 	)
 }

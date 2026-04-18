@@ -195,7 +195,7 @@ func getEnvInfo() EnvironmentInfo {
 
 	shell := os.Getenv("SHELL")
 	if shell == "" {
-		shell = "/bin/sh"
+		shell = nativeShell()
 	}
 
 	workDir, _ := os.Getwd()

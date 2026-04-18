@@ -58,13 +58,13 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 	var cmd *exec.Cmd
 	switch strings.ToLower(language) {
 	case "python", "python3":
-		cmd = exec.Command("python3", "-c", code)
+		cmd = exec.Command(nativePython(), "-c", code)
 	case "node", "nodejs":
 		cmd = exec.Command("node", "-e", code)
 	case "bash", "sh", "shell":
 		// On Windows, use PowerShell; on Unix, use /bin/bash.
 		shell := nativeShell()
-		args := append(nativeShellRunArgs(), code)
+		args := append(nativeShellRunArgs(), prepareExecuteCode(code))
 		cmd = exec.Command(shell, args...)
 	case "powershell", "pwsh":
 		cmd = exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", code)
