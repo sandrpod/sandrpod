@@ -65,6 +65,7 @@ func main() {
 	sandboxStore := podpkg.NewSandboxStore()
 	poderStore := podpkg.NewPoderStore()
 	tunnelStore := tunnel.NewTunnelStore()
+	directStore := tunnel.NewDirectTunnelStore() // direct sandbox agent tunnels (toC)
 	scheduler := podpkg.NewScheduler(poderStore, fmt.Sprintf("http://localhost:%d", *port))
 
 	mux := http.NewServeMux()
@@ -161,6 +162,75 @@ func main() {
 		}()
 
 		// 用 yamux keepalive 检测断线：每 5s ping 一次，失败即退出
+		for !t.Closed() {
+			time.Sleep(5 * time.Second)
+		}
+	})
+
+	// === 本地 Agent 直连入口（toC 场景）===
+	// sandrpod-agent 启动时拨入此端点，把本机注册为一个直连 Sandbox
+	mux.HandleFunc("/ws/sandbox/connect", func(w http.ResponseWriter, r *http.Request) {
+		sandboxName := r.Header.Get("X-Sandbox-Name")
+		if sandboxName == "" {
+			http.Error(w, "X-Sandbox-Name header required", http.StatusBadRequest)
+			return
+		}
+
+		ws, err := wsUpgrader.Upgrade(w, r, nil)
+		if err != nil {
+			log.Printf("Agent %s WebSocket upgrade failed: %v", sandboxName, err)
+			return
+		}
+
+		// 建立 yamux 隧道（API Server 作为 yamux client，Agent 作为 server）
+		t, err := tunnel.NewPoderTunnel(sandboxName, ws)
+		if err != nil {
+			log.Printf("Agent %s tunnel creation failed: %v", sandboxName, err)
+			ws.Close()
+			return
+		}
+		directStore.Set(sandboxName, t)
+
+		// 注册/更新 Sandbox 元数据
+		now := time.Now()
+		sb := &podpkg.SandboxInfo{
+			ID:           sandboxName,
+			Name:         sandboxName,
+			Region:       r.Header.Get("X-Sandbox-Region"),
+			ProviderType: "local-agent",
+			State:        podpkg.StateRunning,
+			ProxyURL:     "direct://" + sandboxName,
+			Arch:         r.Header.Get("X-Sandbox-Arch"),
+			OS:           r.Header.Get("X-Sandbox-OS"),
+			OSVersion:    r.Header.Get("X-Sandbox-OS-Version"),
+			CreatedAt:    now,
+			LastActivity: now,
+		}
+		// 已存在则更新（agent 重连场景），不存在则新增
+		if existing, ok := sandboxStore.Get(sandboxName); ok {
+			sandboxStore.Update(sandboxName, func(s *podpkg.SandboxInfo) {
+				s.State = podpkg.StateRunning
+				s.ProxyURL = "direct://" + sandboxName
+				s.Arch = sb.Arch
+				s.OS = sb.OS
+				s.OSVersion = sb.OSVersion
+				s.LastActivity = now
+			})
+			_ = existing
+		} else {
+			sandboxStore.Add(sb)
+		}
+		log.Printf("Agent %s connected as direct sandbox", sandboxName)
+
+		defer func() {
+			directStore.Remove(sandboxName)
+			sandboxStore.Update(sandboxName, func(s *podpkg.SandboxInfo) {
+				s.State = podpkg.StateError
+			})
+			t.Close()
+			log.Printf("Agent %s disconnected", sandboxName)
+		}()
+
 		for !t.Closed() {
 			time.Sleep(5 * time.Second)
 		}
@@ -487,7 +557,7 @@ func main() {
 				http.Error(w, "sandbox name is required", http.StatusBadRequest)
 				return
 			}
-			sb, t, ok := sandboxTunnel(sandboxName, sandboxStore, tunnelStore, w)
+			sb, t, ok := sandboxTunnel(sandboxName, sandboxStore, tunnelStore, directStore, w)
 			if !ok {
 				return
 			}
@@ -507,7 +577,7 @@ func main() {
 				http.Error(w, "sandbox name is required", http.StatusBadRequest)
 				return
 			}
-			_, t, ok := sandboxTunnel(sandboxName, sandboxStore, tunnelStore, w)
+			_, t, ok := sandboxTunnel(sandboxName, sandboxStore, tunnelStore, directStore, w)
 			if !ok {
 				return
 			}
@@ -559,7 +629,7 @@ func main() {
 		switch r.Method {
 		case http.MethodGet:
 			if sessionPath != "" {
-				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, w)
+				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
 					return
 				}
@@ -578,7 +648,7 @@ func main() {
 			}
 
 			if action == "logs" {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, w)
+				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
 					return
 				}
@@ -592,7 +662,7 @@ func main() {
 			}
 
 			if action == "toolbox" || strings.HasPrefix(action, "toolbox/") {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, w)
+				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
 					return
 				}
@@ -605,7 +675,7 @@ func main() {
 			}
 
 			if strings.HasPrefix(action, "session/") {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, w)
+				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
 					return
 				}
@@ -628,7 +698,7 @@ func main() {
 
 		case http.MethodPost:
 			if sessionPath != "" {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, w)
+				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
 					return
 				}
@@ -657,7 +727,7 @@ func main() {
 			}
 
 			if action == "toolbox" || strings.HasPrefix(action, "toolbox/") {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, w)
+				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
 					return
 				}
@@ -671,7 +741,7 @@ func main() {
 			}
 
 			if action == "pty" {
-				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, w)
+				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
 					return
 				}
@@ -749,7 +819,7 @@ func main() {
 
 		case http.MethodDelete:
 			if strings.HasPrefix(action, "session/") {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, w)
+				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
 					return
 				}
@@ -759,7 +829,7 @@ func main() {
 			}
 
 			if action == "toolbox" || strings.HasPrefix(action, "toolbox/") {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, w)
+				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
 					return
 				}
@@ -907,13 +977,23 @@ func main() {
 
 // sandboxTunnel looks up a sandbox and its Poder tunnel together.
 // Writes an appropriate HTTP error and returns false if either is missing.
-func sandboxTunnel(name string, ss *podpkg.SandboxStore, ts *tunnel.TunnelStore, w http.ResponseWriter) (*podpkg.SandboxInfo, *tunnel.PoderTunnel, bool) {
+func sandboxTunnel(name string, ss *podpkg.SandboxStore, ts *tunnel.TunnelStore, ds *tunnel.TunnelStore, w http.ResponseWriter) (*podpkg.SandboxInfo, *tunnel.PoderTunnel, bool) {
 	sb, ok := ss.Get(name)
 	if !ok {
-		http.NotFound(w, nil) // nil request is fine for error response
+		http.NotFound(w, nil)
 		w.WriteHeader(http.StatusNotFound)
 		return nil, nil, false
 	}
+	// 直连 Agent 路径（toC）：sandbox 由本机 sandrpod-agent 直接注册
+	if strings.HasPrefix(sb.ProxyURL, "direct://") {
+		t, ok := ds.Get(name)
+		if !ok {
+			http.Error(w, "sandbox agent not connected", http.StatusServiceUnavailable)
+			return nil, nil, false
+		}
+		return sb, t, true
+	}
+	// Poder 路径（toB）：sandbox 跑在 Poder 管理的容器里
 	t, ok := ts.Get(sb.PoderID)
 	if !ok {
 		http.Error(w, "poder tunnel not available", http.StatusServiceUnavailable)

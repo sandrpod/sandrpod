@@ -127,7 +127,9 @@ func (t *PoderTunnel) Close() error {
 	return t.session.Close()
 }
 
-// TunnelStore is a thread-safe map of active Poder tunnels keyed by Poder ID.
+// TunnelStore is a thread-safe map of active tunnels keyed by an arbitrary string.
+// Used for Poder tunnels (keyed by Poder ID) and for direct sandbox agent tunnels
+// (keyed by sandbox name).
 type TunnelStore struct {
 	mu      sync.RWMutex
 	tunnels map[string]*PoderTunnel
@@ -137,10 +139,24 @@ func NewTunnelStore() *TunnelStore {
 	return &TunnelStore{tunnels: make(map[string]*PoderTunnel)}
 }
 
+// NewDirectTunnelStore creates a TunnelStore for direct sandbox agent tunnels.
+// Semantically distinct from Poder tunnels: keyed by sandbox name, not Poder ID.
+func NewDirectTunnelStore() *TunnelStore {
+	return &TunnelStore{tunnels: make(map[string]*PoderTunnel)}
+}
+
 func (s *TunnelStore) Add(t *PoderTunnel) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tunnels[t.ID] = t
+}
+
+// Set stores a tunnel under an explicit key (used by direct sandbox tunnels,
+// where the key is the sandbox name rather than t.ID).
+func (s *TunnelStore) Set(key string, t *PoderTunnel) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tunnels[key] = t
 }
 
 func (s *TunnelStore) Get(id string) (*PoderTunnel, bool) {

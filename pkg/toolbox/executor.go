@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -76,8 +77,15 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 		return nil, fmt.Errorf("unsupported language: %s", language)
 	}
 
-	// 设置执行环境 - 使用 /workspace 作为默认工作目录
-	cmd.Dir = "/workspace"
+	// 设置执行环境 - 使用 /workspace 作为默认工作目录（容器内）
+	// 如果该路径不存在（本地 agent 场景），回退到当前工作目录
+	workDir := "/workspace"
+	if _, err := os.Stat(workDir); os.IsNotExist(err) {
+		workDir, _ = os.Getwd()
+	}
+	cmd.Dir = workDir
+	// 继承父进程的环境变量，确保 PATH 可以找到 python3/node 等命令
+	cmd.Env = os.Environ()
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true, // 进程组隔离
 	}

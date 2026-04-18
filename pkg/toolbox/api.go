@@ -85,8 +85,9 @@ func NewServer(addr string) *Server {
 	}
 }
 
-// Start 启动服务器
-func (s *Server) Start() error {
+// Handler 返回 Toolbox 的 HTTP handler，可挂载到任意 net.Listener（如 yamux session）。
+// 同时启动 session 清理 goroutine（幂等，多次调用安全）。
+func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
 	// 启动 session 清理 goroutine
@@ -124,6 +125,13 @@ func (s *Server) Start() error {
 	// Session 路由
 	mux.HandleFunc("/process/session", s.sessionHandler)
 	mux.HandleFunc("/process/session/", s.sessionHandler)
+
+	return mux
+}
+
+// Start 启动服务器（TCP 监听）
+func (s *Server) Start() error {
+	mux := s.Handler()
 
 	s.server = &http.Server{
 		Addr:         s.addr,
