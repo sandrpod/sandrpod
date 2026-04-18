@@ -185,67 +185,6 @@ class SandrPodClient:
         resp = self._request("GET", f"/api/v1/providers/{provider}/regions/{region}/instance-types")
         return resp.json().get("instance_types", [])
 
-    # ========== Local Agent (toC) ==========
-
-    def connect_local(
-        self,
-        name: str,
-        token: str = "",
-        work_dir: str = "",
-        agent_bin: str = "",
-        reconnect: int = 5,
-        blocking: bool = True,
-    ) -> Optional["subprocess.Popen"]:
-        """
-        将当前机器注册为本地沙箱代理（toC 场景）。
-
-        启动 sandrpod-agent 进程，通过 WebSocket tunnel 把本机接入 API Server，
-        无需 Docker 或 Poder 层。
-
-        Args:
-            name:       沙箱名称（全局唯一）
-            token:      API 鉴权 token（可选）
-            work_dir:   代码执行工作目录（默认当前目录）
-            agent_bin:  sandrpod-agent 二进制路径（不设则从 PATH 查找）
-            reconnect:  断线重连间隔（秒）
-            blocking:   True = 阻塞直到进程退出；False = 返回 Popen 对象
-
-        Returns:
-            blocking=False 时返回 subprocess.Popen，否则返回 None
-
-        Raises:
-            FileNotFoundError: sandrpod-agent 未找到
-        """
-        import shutil
-        import subprocess as _sp
-
-        bin_path = agent_bin or (
-            __import__("os").environ.get("SANDRPOD_AGENT_BIN")
-            or shutil.which("sandrpod-agent")
-        )
-        if not bin_path:
-            raise FileNotFoundError(
-                "sandrpod-agent not found. "
-                "Build it with: go build -o sandrpod-agent ./cmd/agent"
-            )
-
-        cmd = [
-            bin_path,
-            f"-api-url={self.api_url}",
-            f"-name={name}",
-            f"-reconnect={reconnect}s",
-        ]
-        if token or self.api_key:
-            cmd.append(f"-token={token or self.api_key}")
-        if work_dir:
-            cmd.append(f"-work-dir={work_dir}")
-
-        proc = _sp.Popen(cmd)
-        if blocking:
-            proc.wait()
-            return None
-        return proc
-
     def close(self):
         """关闭客户端"""
         self.session.close()
