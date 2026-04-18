@@ -1,9 +1,9 @@
-# Binaries
-server
-server-old
-server-new
-poder
-toolbox
+# Binaries (root-level build outputs only)
+/server
+/server-old
+/server-new
+/poder
+/toolbox
 /bin/
 
 # Cross-compiled artifacts
