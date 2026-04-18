@@ -768,54 +768,30 @@ func main() {
 			}
 
 			if action == "start" {
-				sb, ok := sandboxStore.Get(name)
+				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
-					http.NotFound(w, r)
-					return
-				}
-				job := &podpkg.Job{
-					ID:          podpkg.GenerateJobID(),
-					Type:        podpkg.JobTypeStartSandbox,
-					Status:      podpkg.JobStatusPending,
-					SandboxName: name,
-					SandboxID:   sb.ID,
-					Region:      sb.Region,
-					CreatedAt:   time.Now(),
-					UpdatedAt:   time.Now(),
-				}
-				if err := jobStore.AddJob(job); err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
 				sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStarting })
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]interface{}{"job_id": job.ID, "status": "pending"})
+				if err := proxyHTTPErr(t, r, "http://poder/sandboxes/"+name+"/start", w); err != nil {
+					sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateError })
+					return
+				}
+				sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateRunning })
 				return
 			}
 
 			if action == "stop" {
-				sb, ok := sandboxStore.Get(name)
+				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
-					http.NotFound(w, r)
-					return
-				}
-				job := &podpkg.Job{
-					ID:          podpkg.GenerateJobID(),
-					Type:        podpkg.JobTypeStopSandbox,
-					Status:      podpkg.JobStatusPending,
-					SandboxName: name,
-					SandboxID:   sb.ID,
-					Region:      sb.Region,
-					CreatedAt:   time.Now(),
-					UpdatedAt:   time.Now(),
-				}
-				if err := jobStore.AddJob(job); err != nil {
-					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
 				sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopping })
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]interface{}{"job_id": job.ID, "status": "pending"})
+				if err := proxyHTTPErr(t, r, "http://poder/sandboxes/"+name+"/stop", w); err != nil {
+					sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateError })
+					return
+				}
+				sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopped })
 				return
 			}
 
@@ -857,26 +833,27 @@ func main() {
 				return
 			}
 
-			sb, ok := sandboxStore.Get(name)
+			sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 			if !ok {
-				http.NotFound(w, r)
 				return
 			}
-			job := &podpkg.Job{
-				ID:          podpkg.GenerateJobID(),
-				Type:        podpkg.JobTypeDeleteSandbox,
-				Status:      podpkg.JobStatusPending,
-				SandboxName: name,
-				SandboxID:   sb.ID,
-				CreatedAt:   time.Now(),
-				UpdatedAt:   time.Now(),
-			}
-			if err := jobStore.AddJob(job); err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+			if strings.HasPrefix(sb.ProxyURL, "direct://") {
+				// 本地 Agent 直连沙箱：仅从 store 中移除记录
+				sandboxStore.Delete(name)
+				directStore.Remove(name)
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted"})
 				return
 			}
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{"job_id": job.ID, "status": "pending"})
+			if err := proxyHTTPErr(t, r, "http://poder/sandboxes/"+name, w); err == nil {
+				pID := sb.PoderID
+				sandboxStore.Delete(name)
+				poderStore.UpdateUsage(pID, func(u *podpkg.PoderUsage) {
+					if u.Containers > 0 {
+						u.Containers--
+					}
+				})
+			}
 		}
 	}))
 
