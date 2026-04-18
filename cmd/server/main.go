@@ -153,10 +153,12 @@ func main() {
 		tunnelStore.Add(t)
 		log.Printf("Poder %s connected via tunnel", poderID)
 
-		// 断线清理
+		// 断线清理：仅当 store 中存的还是本次 tunnel（未被新连接覆盖）时才清理
 		defer func() {
-			tunnelStore.Remove(poderID)
-			poderStore.SetOffline(poderID)
+			if cur, ok := tunnelStore.Get(poderID); ok && cur == t {
+				tunnelStore.Remove(poderID)
+				poderStore.SetOffline(poderID)
+			}
 			t.Close()
 			log.Printf("Poder %s tunnel disconnected", poderID)
 		}()
@@ -768,8 +770,15 @@ func main() {
 			}
 
 			if action == "start" {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
+					return
+				}
+				if strings.HasPrefix(sb.ProxyURL, "direct://") {
+					// 本地 Agent 始终运行中，start 为 no-op
+					sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateRunning })
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]interface{}{"status": "running"})
 					return
 				}
 				sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStarting })
@@ -782,8 +791,15 @@ func main() {
 			}
 
 			if action == "stop" {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
+					return
+				}
+				if strings.HasPrefix(sb.ProxyURL, "direct://") {
+					// 本地 Agent 无法暂停，stop 为 no-op
+					sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopped })
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]interface{}{"status": "stopped"})
 					return
 				}
 				sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopping })
