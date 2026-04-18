@@ -223,10 +223,14 @@ func main() {
 		log.Printf("Agent %s connected as direct sandbox", sandboxName)
 
 		defer func() {
-			directStore.Remove(sandboxName)
-			sandboxStore.Update(sandboxName, func(s *podpkg.SandboxInfo) {
-				s.State = podpkg.StateError
-			})
+			// Only mark offline if we are still the active tunnel (guards against
+			// a reconnect that registered a new tunnel before this one closed).
+			if current, ok := directStore.Get(sandboxName); ok && current == t {
+				directStore.Remove(sandboxName)
+				sandboxStore.Update(sandboxName, func(s *podpkg.SandboxInfo) {
+					s.State = podpkg.StateError
+				})
+			}
 			t.Close()
 			log.Printf("Agent %s disconnected", sandboxName)
 		}()
@@ -818,6 +822,17 @@ func main() {
 			http.Error(w, "Action not allowed", http.StatusMethodNotAllowed)
 
 		case http.MethodDelete:
+			if sessionPath != "" {
+				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				if !ok {
+					return
+				}
+				cleanPath := strings.TrimPrefix(sessionPath, "/")
+				targetURL := "http://poder/process/session/" + name + "/" + cleanPath
+				proxyHTTP(t, r, targetURL, w)
+				return
+			}
+
 			if strings.HasPrefix(action, "session/") {
 				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {

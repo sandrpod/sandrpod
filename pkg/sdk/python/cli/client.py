@@ -140,10 +140,6 @@ class CLIClient:
 
     def get_sandbox_logs(self, name: str, tail: str = "100") -> str:
         """获取 Sandbox 日志"""
-        sandbox = self.get_sandbox(name)
-        poder_id = sandbox.get("poder_id")
-        if not poder_id:
-            raise RuntimeError("Poder ID not found for sandbox")
         resp = self._request("GET", f"/api/v1/sandboxes/{name}/logs?tail={tail}")
         return resp.text
 

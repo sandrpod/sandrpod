@@ -116,7 +116,11 @@ func (m *SessionManager) Create(sessionId string) (*Session, error) {
 
 	// 创建持久 shell 进程
 	cmd := exec.Command("/bin/bash", "-i")
-	cmd.Dir = "/workspace"
+	workDir := "/workspace"
+	if _, err := os.Stat(workDir); os.IsNotExist(err) {
+		workDir, _ = os.Getwd()
+	}
+	cmd.Dir = workDir
 	cmd.Env = os.Environ()
 
 	// 获取 stdin pipe

@@ -89,17 +89,19 @@ func main() {
 
 // newAgentMux wraps the Toolbox handler with poder-protocol translation.
 //
-// The API Server always talks to agents using poder's URL schema:
-//   - POST /execute?sandbox=<name>        → toolbox POST /process
-//   - GET|POST /stream?...               → toolbox /stream  (same)
-//   - * /process/session/...             → toolbox /process/session/... (same)
-//   - * /toolbox/<name>/<subPath>        → toolbox /<subPath>
-//   - WS /pty/<name>/connect             → toolbox /pty/<name>/connect (same)
-//   - GET /logs?sandbox=<name>           → empty log response
+// The API Server always uses poder's URL schema when proxying to workers.
+// This mux translates those paths to the toolbox-native paths:
+//
+//	POST /execute?sandbox=<name>              → POST /process
+//	*    /toolbox/<name>/<subPath>            → * /<subPath>
+//	*    /process/session/<name>              → * /process/session
+//	*    /process/session/<name>/<rest>       → * /process/session/<rest>
+//	GET  /logs?sandbox=<name>                → empty log response
+//	*    everything else (/stream, /pty/, …) → toolbox directly (same paths)
 func newAgentMux(tb http.Handler, sandboxName string) http.Handler {
 	mux := http.NewServeMux()
 
-	// /execute → /process (same body schema, same response schema)
+	// /execute → /process
 	mux.HandleFunc("/execute", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -110,21 +112,21 @@ func newAgentMux(tb http.Handler, sandboxName string) http.Handler {
 		tb.ServeHTTP(w, r2)
 	})
 
-	// /logs → return empty log (agent is a local process, no container logs)
+	// /logs → empty (agent is a local process, no container logs)
 	mux.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]string{"logs": ""})
 	})
 
-	// /toolbox/<sandboxName>/<subPath> → /<subPath>
+	// /toolbox/<name>/<subPath> → /<subPath>
 	toolboxPrefix := "/toolbox/" + sandboxName + "/"
 	mux.HandleFunc("/toolbox/", func(w http.ResponseWriter, r *http.Request) {
-		sub := strings.TrimPrefix(r.URL.Path, toolboxPrefix)
-		if sub == r.URL.Path {
-			// path didn't start with expected prefix; try stripping up to first subpath
-			idx := strings.Index(r.URL.Path[len("/toolbox/"):], "/")
-			if idx >= 0 {
-				sub = r.URL.Path[len("/toolbox/")+idx+1:]
+		sub, found := strings.CutPrefix(r.URL.Path, toolboxPrefix)
+		if !found {
+			// fallback: strip /toolbox/<anything>/
+			rest := strings.TrimPrefix(r.URL.Path, "/toolbox/")
+			if idx := strings.Index(rest, "/"); idx >= 0 {
+				sub = rest[idx+1:]
 			} else {
 				http.Error(w, "invalid toolbox path", http.StatusBadRequest)
 				return
@@ -135,8 +137,32 @@ func newAgentMux(tb http.Handler, sandboxName string) http.Handler {
 		tb.ServeHTTP(w, r2)
 	})
 
-	// Everything else (/stream, /process/session/, /pty/, /health, /info, …)
-	// is served by toolbox directly.
+	// /process/session/<name>          → /process/session
+	// /process/session/<name>/<rest>   → /process/session/<rest>
+	//
+	// The API Server prefixes the sandbox name into session paths so that
+	// Poder nodes (which serve multiple sandboxes) can route correctly.
+	// The agent serves exactly one sandbox, so strip the name prefix.
+	sessionWithName := "/process/session/" + sandboxName
+	mux.HandleFunc("/process/session/", func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		var toolboxPath string
+		switch {
+		case path == sessionWithName || path == sessionWithName+"/":
+			toolboxPath = "/process/session"
+		case strings.HasPrefix(path, sessionWithName+"/"):
+			// /process/session/<name>/<rest> → /process/session/<rest>
+			toolboxPath = "/process/session/" + strings.TrimPrefix(path, sessionWithName+"/")
+		default:
+			// path doesn't carry our sandbox name — pass through unchanged
+			toolboxPath = path
+		}
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = toolboxPath
+		tb.ServeHTTP(w, r2)
+	})
+
+	// Everything else (/stream, /pty/, /health, /info, …) → toolbox directly.
 	mux.Handle("/", tb)
 
 	return mux
