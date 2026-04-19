@@ -1,5 +1,28 @@
 # SandrPod 技术架构设计 v1.0
 
+> ⚠️ **历史文档**：本文档为 v1.0 初期设计规划（2024-03），描述的是**目标架构蓝图**，部分内容尚未实现或已在实现过程中调整。  
+> 当前实际运行架构请参阅 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)。  
+> 横向扩展（多实例 + PostgreSQL）方案请参阅 [`horizontal-scaling.md`](horizontal-scaling.md)。
+
+---
+
+### 与当前实现的主要差异
+
+| 设计文档描述 | 实际实现 | 状态 |
+|-------------|---------|------|
+| Proxy+Agent 暴露 `:8081` HTTP 端口 | Poder 通过 WebSocket 反向隧道连接，**不暴露任何端口** | ✅ 已实现（方式变更） |
+| Toolbox 使用 Flask/Python | Toolbox 使用 Go 重写 | ✅ 已实现（语言变更） |
+| `internal/` 多租户、计费、租户服务 | 尚未实现 | 🔲 未实现 |
+| `internal/console/` Web 控制台 | 尚未实现 | 🔲 未实现 |
+| `cmd/daemon/` SandPod Daemon | 已合并进 Toolbox | ✅ 已实现（合并） |
+| `cmd/proxy/` 独立 Proxy 进程 | 已合并进 API Server 的隧道代理层 | ✅ 已实现（合并） |
+| `SnapshotService`、`VolumeService` | 尚未实现 | 🔲 未实现 |
+| JWT Auth + Rate Limit + Tenant Quota | 仅实现 Bearer Token 鉴权 | 🔲 部分实现 |
+| 存储层（无描述） | 新增 Repository 模式 + SQLite 持久化 | ✅ 已实现（新增） |
+| `sandrpod-agent` 单机直连 | 不在 v1 设计中 | ✅ 已实现（新增） |
+
+---
+
 > SandrPod - AI 代码执行基础设施平台
 
 ## 1. 产品定位
