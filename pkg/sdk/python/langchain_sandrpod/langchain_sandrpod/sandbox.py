@@ -245,7 +245,10 @@ class SandrPodSandbox(BaseSandbox):
                     params={"path": path},
                     timeout=120.0,
                 )
-                if resp.status_code == 404:
+                if resp.status_code == 404 or (
+                    not resp.is_success
+                    and "no such file" in resp.text.lower()
+                ):
                     results.append(
                         FileDownloadResponse(
                             path=path, content=None, error="file_not_found"
