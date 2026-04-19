@@ -6,19 +6,26 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build all binaries
-go build -o server ./cmd/server
-go build -o poder ./cmd/poder
+go build -o server  ./cmd/server
+go build -o poder   ./cmd/poder
+go build -o agent   ./cmd/agent
 go build -o toolbox ./cmd/toolbox
 
 # Build Docker images
-docker build -f docker/Dockerfile.poder -t sandrpod/poder:test .
+docker build -f docker/Dockerfile.poder   -t sandrpod/poder:test .
 docker build -f docker/Dockerfile.toolbox -t sandrpod/toolbox:test .
 
-# Run API Server (port 8080)
+# Run API Server (port 8080, in-memory store by default)
 go run ./cmd/server -port 8080
+
+# Run API Server with SQLite persistence
+go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
 
 # Run Poder/Proxy+Agent (requires Docker socket, no external port needed)
 go run ./cmd/poder -api-url=http://localhost:8080 -region=local
+
+# Run sandrpod-agent (registers local machine directly as a sandbox)
+go run ./cmd/agent -api-url=http://localhost:8080 -name=my-agent
 
 # Run Toolbox (inside sandbox container, port 8080)
 go run ./cmd/toolbox -port 8080
@@ -35,12 +42,19 @@ SandrPod is an AI code execution infrastructure platform providing fast, secure,
 ### Core Components
 
 ```
-Client → API Server (Control Plane) → Proxy+Agent (Worker) → Toolbox (Sandbox)
+Client → API Server (Control Plane)
+              ↕ WebSocket + yamux 反向隧道
+         Poder (Worker)  ──→ Toolbox (Sandbox 容器)
+
+         sandrpod-agent  ──→ (直连模式，本机即沙箱)
+              ↑ 直接 WebSocket 注册到 API Server
 ```
 
-**API Server** (`cmd/server`): REST API control plane. Handles CRUD operations, job management, and acts as central proxy for code execution requests. Does not directly connect to cloud providers.
+**API Server** (`cmd/server`): REST API control plane. Handles CRUD operations, job management, and acts as central proxy for code execution requests. Routes requests via `tunnelStore` (Poder nodes) or `directStore` (Agent nodes) depending on `proxy_url` prefix.
 
-**Proxy+Agent** (`cmd/poder`): Combined worker node service. Agent polls API Server for CREATE/DELETE sandbox jobs. Worker Proxy forwards code execution requests to Toolbox containers.
+**Proxy+Agent** (`cmd/poder`): Combined worker node service. Dials API Server via WebSocket reverse tunnel (`/ws/poder/connect`). Polls for CREATE/DELETE sandbox jobs. Manages Docker container lifecycle.
+
+**sandrpod-agent** (`cmd/agent`): Registers the local machine directly as a sandbox via `/ws/sandbox/connect`. Embeds Toolbox — no Docker required. Useful for local development and single-machine setups.
 
 **Toolbox** (`cmd/toolbox`): Code execution service running inside each sandbox container. Provides HTTP API for code execution with PTY support.
 
@@ -48,7 +62,9 @@ Client → API Server (Control Plane) → Proxy+Agent (Worker) → Toolbox (Sand
 
 - `pkg/provider/`: Cloud provider abstraction layer (AWS, Aliyun). Factory pattern for dynamic provider registration.
 - `pkg/poder/`: Pod executor implementations. Docker implementation for local development.
-- `pkg/sandpod/`: SandPod core with state machine, job store, sandbox store, and poder store.
+- `pkg/sandpod/`: SandPod core types, state machine, Repository interfaces (`repo.go`), memory-backed store implementations, Scheduler.
+- `pkg/store/`: Repository implementations — in-memory adapter (`memory.go`) and SQLite backend (`sqlite/`). Plug-in via `store.Stores` aggregate.
+- `pkg/tunnel/`: WebSocket + yamux reverse tunnel (`PoderTunnel`, `TunnelStore`). Used by both Poder and sandrpod-agent.
 - `pkg/toolbox/`: Code execution engine with PTY, file operations, and process management.
 
 ### State Machine
@@ -59,10 +75,16 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 
 - `POST /api/v1/sandboxes` - Create sandbox (returns job)
 - `GET /api/v1/sandboxes` - List sandboxes
-- `POST /api/v1/sandboxes/execute` - Execute code (proxied to worker)
+- `GET /api/v1/sandboxes/{name}` - Get sandbox details
+- `POST /api/v1/sandboxes/{name}/start` - Start sandbox
+- `POST /api/v1/sandboxes/{name}/stop` - Stop sandbox
+- `DELETE /api/v1/sandboxes/{name}` - Delete sandbox
+- `POST /api/v1/sandboxes/execute` - Execute code (proxied to worker via tunnel)
 - `GET /api/v1/sandboxes/stream` - Stream execution output
-- `GET /ws/poder/connect` - Poder registers via WebSocket tunnel (replaces HTTP register+heartbeat)
-- `GET /api/v1/jobs/poll` - Agent polls for pending jobs
+- `GET /api/v1/poders` - List Poder nodes
+- `GET /ws/poder/connect` - Poder registers via WebSocket tunnel (`tunnelStore`)
+- `GET /ws/sandbox/connect` - sandrpod-agent registers local machine as sandbox (`directStore`)
+- `GET /api/v1/jobs/poll` - Poder polls for pending CREATE/DELETE jobs
 
 ### Network Architecture
 
