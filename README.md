@@ -87,6 +87,7 @@ docker network create sandrpod
 
 # Linux：使用标准 Docker socket
 docker run -d --name sandrpod-poder \
+    --restart=unless-stopped \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -e API_URL=http://10.0.0.17:18080 \
     -e REGION=local \
