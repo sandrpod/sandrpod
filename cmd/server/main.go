@@ -282,6 +282,26 @@ func main() {
 	mux.HandleFunc("/api/v1/poders/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path[len("/api/v1/poders/"):]
 
+		// DELETE /api/v1/poders/{id} — 删除 Poder 记录
+		if !strings.Contains(path, "/") && r.Method == http.MethodDelete {
+			pID := path
+			if _, ok := poderStore.Get(pID); !ok {
+				http.Error(w, "poder not found", http.StatusNotFound)
+				return
+			}
+			// 强制断开 tunnel（若仍在线）
+			if t, ok := tunnelStore.Get(pID); ok {
+				t.Close()
+			}
+			if err := poderStore.Delete(pID); err != nil {
+				http.Error(w, fmt.Sprintf("failed to delete poder: %v", err), http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+			return
+		}
+
 		// POST /api/v1/poders/{id}/heartbeat（向后兼容，tunnel 模式下仍可用）
 		if strings.HasSuffix(path, "/heartbeat") && r.Method == http.MethodPost {
 			pID := strings.TrimSuffix(path, "/heartbeat")

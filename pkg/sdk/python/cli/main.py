@@ -583,10 +583,17 @@ cli.add_command(session_group)
 
 # ========== Poder Commands ==========
 
-@cli.command()
+@cli.group()
 @click.pass_context
-def poders(ctx):
-    """List all poders"""
+def poder(ctx):
+    """Manage Poder worker nodes"""
+    pass
+
+
+@poder.command("list")
+@click.pass_context
+def poder_list(ctx):
+    """List all poder worker nodes"""
     client = ctx.obj["client"]
     try:
         poders = client.list_poders()
@@ -604,6 +611,23 @@ def poders(ctx):
                 f"{p.get('provider_type', 'N/A'):<10} {arch:<8} {os_ver:<30} "
                 f"{p.get('url', 'N/A')}"
             )
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@poder.command("delete")
+@click.argument("poder_id")
+@click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+@click.pass_context
+def poder_delete(ctx, poder_id, yes):
+    """Delete a poder worker node by ID"""
+    client = ctx.obj["client"]
+    if not yes:
+        click.confirm(f"Delete poder '{poder_id}'?", abort=True)
+    try:
+        client.delete_poder(poder_id)
+        click.echo(f"Poder '{poder_id}' deleted.")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

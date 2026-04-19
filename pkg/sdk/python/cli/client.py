@@ -304,6 +304,10 @@ class CLIClient:
         resp = self._request("GET", "/api/v1/poders")
         return resp.json().get("poders", [])
 
+    def delete_poder(self, poder_id: str) -> None:
+        """删除 Poder 记录（若在线则同时断开 tunnel）"""
+        self._request("DELETE", f"/api/v1/poders/{poder_id}")
+
     # ========== Session 操作 ==========
 
     def create_session(self, name: str, session_id: str = None) -> Dict[str, Any]:

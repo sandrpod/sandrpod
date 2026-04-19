@@ -24,6 +24,7 @@ type PoderRepository interface {
 	SelectBest(region, providerType string) (*PoderInfo, error)
 	UpdateUsage(id string, fn func(*PoderUsage)) error
 	SetOffline(id string)
+	Delete(id string) error
 }
 
 // JobRepository is the read/write contract for async job records.

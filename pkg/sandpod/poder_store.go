@@ -234,3 +234,15 @@ func (s *PoderStore) SetOffline(id string) {
 		poder.State = PoderStateOffline
 	}
 }
+
+// Delete 从存储中删除 Poder 记录
+func (s *PoderStore) Delete(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.poders[id]; !ok {
+		return fmt.Errorf("poder %s not found", id)
+	}
+	delete(s.poders, id)
+	return nil
+}

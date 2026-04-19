@@ -156,6 +156,18 @@ func (r *poderRepo) SetOffline(id string) {
 	r.db.Exec(`UPDATE poders SET state='OFFLINE' WHERE id=?`, id)
 }
 
+func (r *poderRepo) Delete(id string) error {
+	res, err := r.db.Exec(`DELETE FROM poders WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("delete poder: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	if n == 0 {
+		return fmt.Errorf("poder %s not found", id)
+	}
+	return nil
+}
+
 // ─── helpers ────────────────────────────────────────────────────────────────
 
 const poderColumns = `id, name, url, region, provider_type, state,
