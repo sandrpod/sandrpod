@@ -87,21 +87,21 @@ docker network create sandrpod
 
 # Linux：使用标准 Docker socket
 docker run -d --name sandrpod-poder \
-    --network sandrpod \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -e API_URL=http://host.docker.internal:8080 \
+    -e API_URL=http://10.0.0.17:18080 \
     -e REGION=local \
     -e PROVIDER_TYPE=local \
-    sandrpod/poder:dev
+    -e SANDRPOD_TOOLBOX_IMAGE=sandrpod/toolbox:latest \
+    sandrpod/poder:latest
 
 # macOS Docker Desktop：socket 路径不同
 docker run -d --name sandrpod-poder \
-    --network sandrpod \
     -v $HOME/.docker/run/docker.sock:/var/run/docker.sock \
-    -e API_URL=http://host.docker.internal:8080 \
+    -e API_URL=http://10.0.0.17:18080 \
     -e REGION=local \
     -e PROVIDER_TYPE=local \
-    sandrpod/poder:dev
+    -e SANDRPOD_TOOLBOX_IMAGE=sandrpod/toolbox:latest \
+    sandrpod/poder:latest
 ```
 
 > **注意**：Poder 不需要暴露任何外部端口，它主动向 API Server 建立 WebSocket 反向隧道。
