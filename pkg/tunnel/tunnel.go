@@ -82,7 +82,8 @@ type PoderTunnel struct {
 // The caller (API Server) becomes the yamux client; Poder serves HTTP over yamux.
 func NewPoderTunnel(id string, ws *websocket.Conn) (*PoderTunnel, error) {
 	cfg := yamux.DefaultConfig()
-	cfg.KeepAliveInterval = 30 * time.Second
+	cfg.KeepAliveInterval = 5 * time.Second  // 快速检测死连接（原 30s）
+	cfg.ConnectionWriteTimeout = 5 * time.Second
 	session, err := yamux.Client(newWSConn(ws), cfg)
 	if err != nil {
 		return nil, fmt.Errorf("yamux client: %w", err)
@@ -120,6 +121,22 @@ func NewPoderTunnel(id string, ws *websocket.Conn) (*PoderTunnel, error) {
 // Closed reports whether the yamux session has been closed.
 func (t *PoderTunnel) Closed() bool {
 	return t.session.IsClosed()
+}
+
+// Wait blocks until the yamux session is detected as closed.
+// It uses periodic Ping to actively probe the connection; Ping returns
+// immediately with an error when the session is already dead, so the
+// worst-case detection latency equals the ping interval (~3s).
+func (t *PoderTunnel) Wait() {
+	for {
+		if t.session.IsClosed() {
+			return
+		}
+		if _, err := t.session.Ping(); err != nil {
+			return
+		}
+		time.Sleep(3 * time.Second)
+	}
 }
 
 // Close shuts down the yamux session and underlying WebSocket.

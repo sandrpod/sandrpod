@@ -61,3 +61,6 @@ build/
 *.key
 *.crt
 credentials.json
+
+# Runtime data (SQLite DB, etc.)
+/data/

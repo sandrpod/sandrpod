@@ -26,6 +26,8 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/provider/aliyun"
 	"github.com/sandrpod/sandrpod/pkg/provider/aws"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
+	"github.com/sandrpod/sandrpod/pkg/store"
+	sqlitestore "github.com/sandrpod/sandrpod/pkg/store/sqlite"
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
 
@@ -34,6 +36,7 @@ var (
 	help           = flag.Bool("help", false, "Show help")
 	token          = flag.String("token", "", "API token for authentication")
 	offlineTimeout = flag.Duration("offline-timeout", 30*time.Second, "Poder offline timeout")
+	dbDSN          = flag.String("db", "", `persistence backend: empty=in-memory (default), sqlite:<path>=SQLite file (e.g. sqlite:./data/sandrpod.db)`)
 )
 
 func main() {
@@ -61,9 +64,32 @@ func main() {
 	factory := provider.GetFactory()
 	log.Printf("Registered providers: %v", factory.Names())
 
-	jobStore := podpkg.NewJobStore()
-	sandboxStore := podpkg.NewSandboxStore()
-	poderStore := podpkg.NewPoderStore()
+	// ── Store construction ────────────────────────────────────────────────────
+	var stores podpkg.Stores
+	switch {
+	case *dbDSN == "":
+		stores = store.NewMemoryStores()
+		log.Printf("Using in-memory store (data will be lost on restart)")
+	case strings.HasPrefix(*dbDSN, "sqlite:"):
+		dsn := strings.TrimPrefix(*dbDSN, "sqlite:")
+		db, err := sqlitestore.Open(dsn)
+		if err != nil {
+			log.Fatalf("Failed to open SQLite DB %q: %v", dsn, err)
+		}
+		defer db.Close()
+		stores = podpkg.Stores{
+			Sandboxes: sqlitestore.NewSandboxRepo(db),
+			Poders:    sqlitestore.NewPoderRepo(db),
+			Jobs:      sqlitestore.NewJobRepo(db),
+		}
+		log.Printf("Using SQLite store at %q", dsn)
+	default:
+		log.Fatalf("Unknown -db value %q (supported: sqlite:<path>)", *dbDSN)
+	}
+
+	jobStore := stores.Jobs
+	sandboxStore := stores.Sandboxes
+	poderStore := stores.Poders
 	tunnelStore := tunnel.NewTunnelStore()
 	directStore := tunnel.NewDirectTunnelStore() // direct sandbox agent tunnels (toC)
 	scheduler := podpkg.NewScheduler(poderStore, fmt.Sprintf("http://localhost:%d", *port))
@@ -163,10 +189,8 @@ func main() {
 			log.Printf("Poder %s tunnel disconnected", poderID)
 		}()
 
-		// 用 yamux keepalive 检测断线：每 5s ping 一次，失败即退出
-		for !t.Closed() {
-			time.Sleep(5 * time.Second)
-		}
+		// 阻塞直到 yamux 连接断开（内部每 3s Ping 一次，失败即返回）
+		t.Wait()
 	})
 
 	// === 本地 Agent 直连入口（toC 场景）===
@@ -985,7 +1009,7 @@ func main() {
 
 // sandboxTunnel looks up a sandbox and its Poder tunnel together.
 // Writes an appropriate HTTP error and returns false if either is missing.
-func sandboxTunnel(name string, ss *podpkg.SandboxStore, ts *tunnel.TunnelStore, ds *tunnel.TunnelStore, w http.ResponseWriter) (*podpkg.SandboxInfo, *tunnel.PoderTunnel, bool) {
+func sandboxTunnel(name string, ss podpkg.SandboxRepository, ts *tunnel.TunnelStore, ds *tunnel.TunnelStore, w http.ResponseWriter) (*podpkg.SandboxInfo, *tunnel.PoderTunnel, bool) {
 	sb, ok := ss.Get(name)
 	if !ok {
 		http.NotFound(w, nil)
@@ -1106,15 +1130,15 @@ func splitPath(path string) []string {
 
 // cleanupOfflinePoders marks Poder nodes as offline when heartbeats stop.
 // Serves as a safety net alongside the tunnel disconnect handler.
-func cleanupOfflinePoders(store *podpkg.PoderStore, timeout time.Duration) {
+func cleanupOfflinePoders(ps podpkg.PoderRepository, timeout time.Duration) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
 		<-ticker.C
 		now := time.Now()
-		for _, p := range store.List() {
+		for _, p := range ps.List() {
 			if p.State == podpkg.PoderStateOnline && now.Sub(p.LastHeartbeat) > timeout {
-				store.SetOffline(p.ID)
+				ps.SetOffline(p.ID)
 				log.Printf("Poder %s marked OFFLINE (no heartbeat for %v)", p.ID, now.Sub(p.LastHeartbeat))
 			}
 		}

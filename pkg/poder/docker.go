@@ -25,8 +25,10 @@ type DockerPoder struct {
 	networkName  string
 }
 
-// NewDockerPoder 创建 Docker Poder
-func NewDockerPoder(region string) (*DockerPoder, error) {
+// NewDockerPoder 创建 Docker Poder。
+// networkName 指定沙箱容器加入的 Docker 网络；空字符串则从环境变量
+// SANDRPOD_NETWORK 读取；仍为空时不指定网络，容器使用 Docker 默认网络（bridge）。
+func NewDockerPoder(region, networkName string) (*DockerPoder, error) {
 	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker client: %w", err)
@@ -34,10 +36,15 @@ func NewDockerPoder(region string) (*DockerPoder, error) {
 
 	base := NewBasePoder("docker", "Docker Provider", region)
 
+	if networkName == "" {
+		networkName = os.Getenv("SANDRPOD_NETWORK")
+	}
+	// networkName 仍为空 → 使用 Docker 默认网络，不强制指定
+
 	return &DockerPoder{
 		BasePoder:    base,
 		dockerClient: dockerClient,
-		networkName:  "sandrpod",
+		networkName:  networkName,
 	}, nil
 }
 
@@ -74,8 +81,11 @@ func generateSandboxPassword() string {
 
 // CreatePod 创建 Pod
 func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*PodInfo, error) {
-	if err := p.EnsureNetwork(ctx); err != nil {
-		return nil, fmt.Errorf("failed to ensure network: %w", err)
+	// 只有指定了自定义网络才需要确保网络存在
+	if p.networkName != "" {
+		if err := p.EnsureNetwork(ctx); err != nil {
+			return nil, fmt.Errorf("failed to ensure network: %w", err)
+		}
 	}
 
 	// 生成 Pod ID
@@ -89,8 +99,6 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 			imageName = "sandrpod/toolbox:test"
 		}
 	}
-
-	// 镜像已存在，直接使用
 
 	// 创建容器
 	labels := req.Labels
@@ -109,8 +117,9 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 		Labels: labels,
 	}
 
-	hostConfig := &container.HostConfig{
-		NetworkMode: container.NetworkMode(p.networkName),
+	hostConfig := &container.HostConfig{}
+	if p.networkName != "" {
+		hostConfig.NetworkMode = container.NetworkMode(p.networkName)
 	}
 
 	resp, err := p.dockerClient.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, podID)
@@ -129,10 +138,19 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 		return nil, fmt.Errorf("failed to inspect container: %w", err)
 	}
 
-	// 获取 sandrpod 网络的 IP
+	// 获取容器 IP：优先从指定网络取，未指定时取第一个可用网络的 IP
 	ip := ""
-	if netSettings, ok := containerInfo.NetworkSettings.Networks[p.networkName]; ok {
-		ip = netSettings.IPAddress
+	if p.networkName != "" {
+		if netSettings, ok := containerInfo.NetworkSettings.Networks[p.networkName]; ok {
+			ip = netSettings.IPAddress
+		}
+	} else {
+		for _, netSettings := range containerInfo.NetworkSettings.Networks {
+			if netSettings.IPAddress != "" {
+				ip = netSettings.IPAddress
+				break
+			}
+		}
 	}
 
 	// 创建 PodInfo
@@ -200,8 +218,17 @@ func (p *DockerPoder) GetPod(ctx context.Context, podID string) (*PodInfo, error
 			State:     PodStateStopped,
 		}
 		// 从网络设置获取 IP
-		if net, ok := info.NetworkSettings.Networks[p.networkName]; ok {
-			pod.IP = net.IPAddress
+		if p.networkName != "" {
+			if net, ok := info.NetworkSettings.Networks[p.networkName]; ok {
+				pod.IP = net.IPAddress
+			}
+		} else {
+			for _, net := range info.NetworkSettings.Networks {
+				if net.IPAddress != "" {
+					pod.IP = net.IPAddress
+					break
+				}
+			}
 		}
 	}
 

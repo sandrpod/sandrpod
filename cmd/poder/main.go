@@ -42,6 +42,7 @@ var (
 	region            = flag.String("region", env("REGION", "local"), "Region")
 	providerType      = flag.String("provider-type", env("PROVIDER_TYPE", "local"), "Provider type: aws, aliyun, local, docker")
 	poderIDFlag       = flag.String("poder-id", env("PODER_ID", ""), "Poder ID (auto-generated if not set)")
+	networkName       = flag.String("network", env("SANDRPOD_NETWORK", ""), "Docker network name for sandbox containers (empty = Docker default bridge)")
 	heartbeatInterval = flag.Duration("heartbeat-interval", 10*time.Second, "Heartbeat interval")
 	help              = flag.Bool("help", false, "Show help")
 )
@@ -60,7 +61,7 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	p, err := poder.NewDockerPoder(*region)
+	p, err := poder.NewDockerPoder(*region, *networkName)
 	if err != nil {
 		log.Fatalf("Failed to create Docker Poder: %v", err)
 	}
