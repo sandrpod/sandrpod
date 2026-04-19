@@ -18,12 +18,12 @@ var DefaultAPIURL = "http://localhost:8080"
 
 // Scheduler 调度器
 type Scheduler struct {
-	poderStore *PoderStore
+	poderStore PoderRepository
 	apiURL     string
 }
 
 // NewScheduler 创建调度器
-func NewScheduler(poderStore *PoderStore, apiURL string) *Scheduler {
+func NewScheduler(poderStore PoderRepository, apiURL string) *Scheduler {
 	if apiURL == "" {
 		apiURL = DefaultAPIURL
 	}
