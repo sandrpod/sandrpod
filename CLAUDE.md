@@ -5,15 +5,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Run Commands
 
 ```bash
-# Build all binaries
+# Build all binaries (dev, native arch)
 go build -o server  ./cmd/server
 go build -o poder   ./cmd/poder
 go build -o agent   ./cmd/agent
 go build -o toolbox ./cmd/toolbox
 
-# Build Docker images
-docker build -f docker/Dockerfile.poder   -t sandrpod/poder:test .
-docker build -f docker/Dockerfile.toolbox -t sandrpod/toolbox:test .
+# Cross-compile release binaries → dist/
+CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/server-linux-amd64          ./cmd/server
+CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrpod-agent-linux-amd64  ./cmd/agent
+CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o dist/sandrpod-agent-linux-arm64  ./cmd/agent
+CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrpod-agent-darwin-amd64 ./cmd/agent
+CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/sandrpod-agent-darwin-arm64 ./cmd/agent
+CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrpod-agent-windows-amd64.exe ./cmd/agent
+
+# Build Docker images (amd64)
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.poder   -t sandrpod/poder:latest   --load .
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t sandrpod/toolbox:latest --load .
 
 # Run API Server (port 8080, in-memory store by default)
 go run ./cmd/server -port 8080
@@ -21,8 +29,16 @@ go run ./cmd/server -port 8080
 # Run API Server with SQLite persistence
 go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
 
-# Run Poder/Proxy+Agent (requires Docker socket, no external port needed)
+# Run Poder (requires Docker socket; -network 指定容器网络，默认 bridge)
 go run ./cmd/poder -api-url=http://localhost:8080 -region=local
+go run ./cmd/poder -api-url=http://localhost:8080 -region=local -network=sandrpod
+
+# Run Poder via Docker (recommended for production)
+docker run -d --name sandrpod-poder --restart=unless-stopped \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e API_URL=http://host.docker.internal:8080 \
+  -e SANDRPOD_TOOLBOX_IMAGE=sandrpod/toolbox:latest \
+  sandrpod/poder:latest
 
 # Run sandrpod-agent (registers local machine directly as a sandbox)
 go run ./cmd/agent -api-url=http://localhost:8080 -name=my-agent
@@ -73,6 +89,7 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 
 ### API Endpoints
 
+**Sandboxes**
 - `POST /api/v1/sandboxes` - Create sandbox (returns job)
 - `GET /api/v1/sandboxes` - List sandboxes
 - `GET /api/v1/sandboxes/{name}` - Get sandbox details
@@ -81,7 +98,13 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 - `DELETE /api/v1/sandboxes/{name}` - Delete sandbox
 - `POST /api/v1/sandboxes/execute` - Execute code (proxied to worker via tunnel)
 - `GET /api/v1/sandboxes/stream` - Stream execution output
+- `GET /api/v1/sandboxes/{name}/toolbox/*` - Proxy to Toolbox (files upload/download etc.)
+
+**Poder Nodes**
 - `GET /api/v1/poders` - List Poder nodes
+- `DELETE /api/v1/poders/{id}` - Delete Poder record（若在线则同时断开 tunnel）
+
+**WebSocket / Internal**
 - `GET /ws/poder/connect` - Poder registers via WebSocket tunnel (`tunnelStore`)
 - `GET /ws/sandbox/connect` - sandrpod-agent registers local machine as sandbox (`directStore`)
 - `GET /api/v1/jobs/poll` - Poder polls for pending CREATE/DELETE jobs
@@ -104,10 +127,40 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 
 ## SDK & CLI
 
-- **Python SDK / CLI 源码**：`pkg/sdk/python/`
-  - CLI 入口：`pkg/sdk/python/cli/main.py`
-  - API 客户端：`pkg/sdk/python/cli/client.py`
-  - 已安装到本机：`/opt/miniconda3/bin/sandrpod-cli`（开发模式，修改源码即时生效）
+### sandrpod-cli（Python）
+
+源码：`pkg/sdk/python/cli/`，已安装到本机（开发模式，改源码即时生效）：
+
+```bash
+# Sandbox 操作
+sandrpod-cli list
+sandrpod-cli create <name> --provider local --image sandrpod/toolbox:latest
+sandrpod-cli delete <name>
+sandrpod-cli exec <name> "ls /workspace"
+
+# Poder 管理（新）
+sandrpod-cli poder list
+sandrpod-cli poder delete <poder-id> [-y]
+```
+
+### langchain-sandrpod（Python SDK for deepagents）
+
+源码：`pkg/sdk/python/langchain_sandrpod/`
+
+```python
+from langchain_sandrpod import SandrPodClient
+from deepagents import create_deep_agent
+
+client = SandrPodClient(api_url="http://localhost:8080")
+sb = client.get_sandbox("my-sandbox")
+agent = create_deep_agent(model=model, backend=sb)
+
+# 或用上下文管理器自动创建/删除
+with client.sandbox("temp-sb") as sb:
+    result = agent.invoke({"messages": [...]})
+```
+
+环境变量：`SANDRPOD_API_URL`、`SANDRPOD_API_TOKEN`。示例见 `pkg/sdk/python/langchain_sandrpod/examples/`。
 
 ## 参考项目
 
