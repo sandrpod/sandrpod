@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="podGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3B82F6"/>
+      <stop offset="100%" style="stop-color:#06B6D4"/>
+    </linearGradient>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0F172A"/>
+      <stop offset="100%" style="stop-color:#1E2D45"/>
+    </linearGradient>
+    <linearGradient id="glowGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1E3A5F"/>
+      <stop offset="100%" style="stop-color:#0F2040"/>
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <filter id="softglow">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="200" height="200" fill="url(#bgGrad)"/>
+
+  <!-- Subtle background grid -->
+  <g stroke="#1E3A5F" stroke-width="0.8" opacity="0.5">
+    <line x1="0" y1="50"  x2="200" y2="50"/>
+    <line x1="0" y1="100" x2="200" y2="100"/>
+    <line x1="0" y1="150" x2="200" y2="150"/>
+    <line x1="50"  y1="0" x2="50"  y2="200"/>
+    <line x1="100" y1="0" x2="100" y2="200"/>
+    <line x1="150" y1="0" x2="150" y2="200"/>
+  </g>
+
+  <!-- Pod hexagon - centered, large -->
+  <g transform="translate(100, 92)">
+    <!-- Glow halo -->
+    <path d="M0 -58 L50 -29 L50 29 L0 58 L-50 29 L-50 -29 Z"
+          fill="none" stroke="#3B82F6" stroke-width="8" opacity="0.12" filter="url(#softglow)"/>
+
+    <!-- Pod shell -->
+    <path d="M0 -54 L46 -27 L46 27 L0 54 L-46 27 L-46 -27 Z"
+          fill="url(#glowGrad)"
+          stroke="url(#podGrad)"
+          stroke-width="1.8"/>
+
+    <!-- Inner grid -->
+    <line x1="-46" y1="-14" x2="46" y2="-14" stroke="#3B82F6" stroke-width="0.7" stroke-opacity="0.35"/>
+    <line x1="-46" y1="0"   x2="46" y2="0"   stroke="#3B82F6" stroke-width="0.7" stroke-opacity="0.35"/>
+    <line x1="-46" y1="14"  x2="46" y2="14"  stroke="#3B82F6" stroke-width="0.7" stroke-opacity="0.35"/>
+    <line x1="-15" y1="-54" x2="-15" y2="54" stroke="#3B82F6" stroke-width="0.7" stroke-opacity="0.35"/>
+    <line x1="0"   y1="-54" x2="0"   y2="54" stroke="#3B82F6" stroke-width="0.7" stroke-opacity="0.35"/>
+    <line x1="15"  y1="-54" x2="15"  y2="54" stroke="#3B82F6" stroke-width="0.7" stroke-opacity="0.35"/>
+
+    <!-- Terminal prompt -->
+    <text x="-18" y="10" font-family="'SF Mono','Fira Code',monospace"
+          font-size="22" font-weight="bold"
+          fill="url(#podGrad)" filter="url(#glow)">&#x3E;_</text>
+
+    <!-- Corner accent dots -->
+    <circle cx="0"   cy="-54" r="3"   fill="#06B6D4" opacity="0.95"/>
+    <circle cx="0"   cy="54"  r="3"   fill="#3B82F6" opacity="0.95"/>
+    <circle cx="-46" cy="-27" r="2.2" fill="#06B6D4" opacity="0.7"/>
+    <circle cx="46"  cy="-27" r="2.2" fill="#06B6D4" opacity="0.7"/>
+    <circle cx="-46" cy="27"  r="2.2" fill="#3B82F6" opacity="0.7"/>
+    <circle cx="46"  cy="27"  r="2.2" fill="#3B82F6" opacity="0.7"/>
+  </g>
+
+  <!-- Wordmark at bottom -->
+  <text x="100" y="170" font-family="-apple-system,'SF Pro Display','Helvetica Neue',sans-serif"
+        font-size="22" font-weight="700" letter-spacing="-0.3"
+        text-anchor="middle">
+    <tspan fill="#F1F5F9">Sandr</tspan><tspan fill="url(#podGrad)">Pod</tspan>
+  </text>
+
+  <!-- Tagline -->
+  <text x="100" y="187" font-family="-apple-system,'SF Pro Text',sans-serif"
+        font-size="8" font-weight="400" letter-spacing="2"
+        fill="#475569" text-anchor="middle">AI SANDBOX</text>
+</svg>
