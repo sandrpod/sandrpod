@@ -39,9 +39,6 @@ test = [
     "respx>=0.21.0",      # httpx mock library
 ]
 
-[tool.uv.sources]
-deepagents = { path = "../../../../pworkspace/deepagents/libs/deepagents", editable = true }
-
 [tool.pytest.ini_options]
 addopts = "--strict-markers --strict-config"
 testpaths = ["tests"]
