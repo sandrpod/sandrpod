@@ -1,9 +1,13 @@
-# Binaries (root-level build outputs only)
+# Binaries (root-level build outputs from `make build`)
 /server
 /server-old
 /server-new
 /poder
 /toolbox
+/agent
+/agent.exe
+/sandrpod-tray
+/sandrpod-tray.exe
 /bin/
 
 # Cross-compiled artifacts
