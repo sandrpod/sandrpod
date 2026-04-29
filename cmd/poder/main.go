@@ -1,6 +1,6 @@
 // Copyright 2024 SandrPod
-// Proxy + Poder Agent 合并服务
-// 部署在每台 Worker 节点，加入 sandrpod 网络
+// Combined Proxy + Poder Agent service.
+// Deployed on every worker node to join the sandrpod network.
 
 package main
 
@@ -39,6 +39,7 @@ func env(key, defaultVal string) string {
 
 var (
 	apiURL            = flag.String("api-url", env("API_URL", "http://localhost:8080"), "API Server URL")
+	apiToken          = flag.String("token", env("SANDRPOD_TOKEN", ""), "API Server bearer token")
 	region            = flag.String("region", env("REGION", "local"), "Region")
 	providerType      = flag.String("provider-type", env("PROVIDER_TYPE", "local"), "Provider type: aws, aliyun, local, docker")
 	poderIDFlag       = flag.String("poder-id", env("PODER_ID", ""), "Poder ID (auto-generated if not set)")
@@ -608,6 +609,9 @@ func connectTunnel(ctx context.Context, poderID string, mux http.Handler, p *pod
 		}
 
 		headers := http.Header{}
+		if *apiToken != "" {
+			headers.Set("Authorization", "Bearer "+*apiToken)
+		}
 		headers.Set("X-Poder-ID", poderID)
 		headers.Set("X-Poder-Name", p.Name())
 		headers.Set("X-Poder-Region", *region)
@@ -694,6 +698,9 @@ func heartbeatLoop(ctx context.Context, poderID string, p *poder.DockerPoder) {
 				continue
 			}
 			req.Header.Set("Content-Type", "application/json")
+			if *apiToken != "" {
+				req.Header.Set("Authorization", "Bearer "+*apiToken)
+			}
 			client := &http.Client{Timeout: 5 * time.Second}
 			resp, err := client.Do(req)
 			if err != nil {

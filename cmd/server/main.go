@@ -1,6 +1,6 @@
 // Copyright 2024 SandrPod
-// API Server - REST API 控制面服务
-// 只负责接收请求、创建任务，不直接连接云厂商
+// API Server - REST API control plane
+// Handles incoming requests and creates jobs; does not connect to cloud providers directly
 
 package main
 
@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -34,9 +35,10 @@ import (
 var (
 	port           = flag.Int("port", 8080, "API server port")
 	help           = flag.Bool("help", false, "Show help")
-	token          = flag.String("token", "", "API token for authentication")
+	token          = flag.String("token", os.Getenv("SANDRPOD_TOKEN"), "API token for authentication (env: SANDRPOD_TOKEN)")
 	offlineTimeout = flag.Duration("offline-timeout", 30*time.Second, "Poder offline timeout")
 	dbDSN          = flag.String("db", "", `persistence backend: empty=in-memory (default), sqlite:<path>=SQLite file (e.g. sqlite:./data/sandrpod.db)`)
+	publicURL      = flag.String("public-url", os.Getenv("SANDRPOD_PUBLIC_URL"), "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
 )
 
 func main() {
@@ -49,7 +51,7 @@ func main() {
 
 	log.Printf("Starting SandrPod API Server v0.3.0 (Control Plane)")
 
-	// 注册云 Provider
+	// Register cloud providers
 	if err := aws.Register(); err != nil {
 		log.Printf("Warning: Failed to register AWS provider: %v", err)
 	} else {
@@ -71,7 +73,7 @@ func main() {
 		stores = store.NewMemoryStores()
 		log.Printf("Using in-memory store (data will be lost on restart)")
 	case strings.HasPrefix(*dbDSN, "sqlite:"):
-		dsn := strings.TrimPrefix(*dbDSN, "sqlite:")
+		dsn, _ := strings.CutPrefix(*dbDSN, "sqlite:")
 		db, err := sqlitestore.Open(dsn)
 		if err != nil {
 			log.Fatalf("Failed to open SQLite DB %q: %v", dsn, err)
@@ -92,7 +94,11 @@ func main() {
 	poderStore := stores.Poders
 	tunnelStore := tunnel.NewTunnelStore()
 	directStore := tunnel.NewDirectTunnelStore() // direct sandbox agent tunnels (toC)
-	scheduler := podpkg.NewScheduler(poderStore, fmt.Sprintf("http://localhost:%d", *port))
+	apiURL := *publicURL
+	if apiURL == "" {
+		apiURL = fmt.Sprintf("http://localhost:%d", *port)
+	}
+	scheduler := podpkg.NewScheduler(poderStore, apiURL)
 
 	mux := http.NewServeMux()
 
@@ -100,7 +106,7 @@ func main() {
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
 
-	// 认证中间件
+	// Authentication middleware
 	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			if *token != "" {
@@ -113,10 +119,10 @@ func main() {
 		}
 	}
 
-	// 健康检查
+	// Health check endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		json.NewEncoder(w).Encode(map[string]any{
 			"status":    "ok",
 			"version":   "0.3.0",
 			"timestamp": time.Now().Unix(),
@@ -124,9 +130,9 @@ func main() {
 		})
 	})
 
-	// === Poder 隧道入口 ===
-	// Poder 启动时拨入此端点，完成注册并建立 yamux 反向隧道
-	mux.HandleFunc("/ws/poder/connect", func(w http.ResponseWriter, r *http.Request) {
+	// === Poder tunnel entry point ===
+	// Poder dials this endpoint on startup to register and establish a yamux reverse tunnel
+	mux.HandleFunc("/ws/poder/connect", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		poderID := r.Header.Get("X-Poder-ID")
 		if poderID == "" {
 			http.Error(w, "X-Poder-ID header required", http.StatusBadRequest)
@@ -139,7 +145,7 @@ func main() {
 			return
 		}
 
-		// 从 headers 解析注册信息
+		// Parse registration info from headers
 		cpuCores, _ := strconv.Atoi(r.Header.Get("X-Poder-CPU-Cores"))
 		memBytes, _ := strconv.ParseInt(r.Header.Get("X-Poder-Memory-Bytes"), 10, 64)
 		maxContainers, _ := strconv.Atoi(r.Header.Get("X-Poder-Max-Containers"))
@@ -156,7 +162,7 @@ func main() {
 		poderStore.Register(&podpkg.RegisterPoderRequest{
 			ID:           poderID,
 			Name:         r.Header.Get("X-Poder-Name"),
-			URL:          "tunnel://" + poderID, // 标记为 tunnel 模式，不用于直接 HTTP
+			URL:          "tunnel://" + poderID, // Marks this as tunnel mode; not used for direct HTTP
 			Region:       r.Header.Get("X-Poder-Region"),
 			ProviderType: r.Header.Get("X-Poder-Provider-Type"),
 			Resources: podpkg.PoderResources{
@@ -179,7 +185,7 @@ func main() {
 		tunnelStore.Add(t)
 		log.Printf("Poder %s connected via tunnel", poderID)
 
-		// 断线清理：仅当 store 中存的还是本次 tunnel（未被新连接覆盖）时才清理
+		// Disconnect cleanup: only remove from store if it is still this tunnel (not overwritten by a reconnect)
 		defer func() {
 			if cur, ok := tunnelStore.Get(poderID); ok && cur == t {
 				tunnelStore.Remove(poderID)
@@ -189,13 +195,13 @@ func main() {
 			log.Printf("Poder %s tunnel disconnected", poderID)
 		}()
 
-		// 阻塞直到 yamux 连接断开（内部每 3s Ping 一次，失败即返回）
+		// Block until the yamux session closes (internal ping every 3s; returns on failure)
 		t.Wait()
-	})
+	}))
 
-	// === 本地 Agent 直连入口（toC 场景）===
-	// sandrpod-agent 启动时拨入此端点，把本机注册为一个直连 Sandbox
-	mux.HandleFunc("/ws/sandbox/connect", func(w http.ResponseWriter, r *http.Request) {
+	// === Local agent direct-connect entry point (end-user scenario) ===
+	// sandrpod-agent dials this endpoint on startup to register the local machine as a direct sandbox
+	mux.HandleFunc("/ws/sandbox/connect", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		sandboxName := r.Header.Get("X-Sandbox-Name")
 		if sandboxName == "" {
 			http.Error(w, "X-Sandbox-Name header required", http.StatusBadRequest)
@@ -208,7 +214,7 @@ func main() {
 			return
 		}
 
-		// 建立 yamux 隧道（API Server 作为 yamux client，Agent 作为 server）
+		// Establish a yamux tunnel (API Server acts as yamux client; Agent acts as server)
 		t, err := tunnel.NewPoderTunnel(sandboxName, ws)
 		if err != nil {
 			log.Printf("Agent %s tunnel creation failed: %v", sandboxName, err)
@@ -217,7 +223,7 @@ func main() {
 		}
 		directStore.Set(sandboxName, t)
 
-		// 注册/更新 Sandbox 元数据
+		// Register or update sandbox metadata
 		now := time.Now()
 		sb := &podpkg.SandboxInfo{
 			ID:           sandboxName,
@@ -232,7 +238,7 @@ func main() {
 			CreatedAt:    now,
 			LastActivity: now,
 		}
-		// 已存在则更新（agent 重连场景），不存在则新增
+		// Update if it already exists (agent reconnect), otherwise add
 		if existing, ok := sandboxStore.Get(sandboxName); ok {
 			sandboxStore.Update(sandboxName, func(s *podpkg.SandboxInfo) {
 				s.State = podpkg.StateRunning
@@ -264,10 +270,10 @@ func main() {
 		for !t.Closed() {
 			time.Sleep(5 * time.Second)
 		}
-	})
+	}))
 
 	// === Poder API ===
-	// GET /api/v1/poders - 列出所有 Poder
+	// GET /api/v1/poders - list all Poder nodes
 	mux.HandleFunc("/api/v1/poders", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -275,21 +281,21 @@ func main() {
 		}
 		poders := poderStore.List()
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"poders": poders})
+		json.NewEncoder(w).Encode(map[string]any{"poders": poders})
 	}))
 
-	// /api/v1/poders/* - Poder 详情 + heartbeat + 直接 sandbox 操作
+	// /api/v1/poders/* - Poder details, heartbeat, and direct sandbox operations
 	mux.HandleFunc("/api/v1/poders/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path[len("/api/v1/poders/"):]
 
-		// DELETE /api/v1/poders/{id} — 删除 Poder 记录
+		// DELETE /api/v1/poders/{id} — delete a Poder record
 		if !strings.Contains(path, "/") && r.Method == http.MethodDelete {
 			pID := path
 			if _, ok := poderStore.Get(pID); !ok {
 				http.Error(w, "poder not found", http.StatusNotFound)
 				return
 			}
-			// 强制断开 tunnel（若仍在线）
+			// Force-close the tunnel if still connected
 			if t, ok := tunnelStore.Get(pID); ok {
 				t.Close()
 			}
@@ -298,13 +304,12 @@ func main() {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+			json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 			return
 		}
 
-		// POST /api/v1/poders/{id}/heartbeat（向后兼容，tunnel 模式下仍可用）
-		if strings.HasSuffix(path, "/heartbeat") && r.Method == http.MethodPost {
-			pID := strings.TrimSuffix(path, "/heartbeat")
+		// POST /api/v1/poders/{id}/heartbeat (kept for backward compatibility; still usable in tunnel mode)
+		if pID, ok := strings.CutSuffix(path, "/heartbeat"); ok && r.Method == http.MethodPost {
 			var req podpkg.HeartbeatRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -315,11 +320,11 @@ func main() {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+			json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 			return
 		}
 
-		// /api/v1/poders/{id}/sandboxes 系列
+		// /api/v1/poders/{id}/sandboxes routes
 		if strings.Contains(path, "/sandboxes") {
 			parts := strings.SplitN(path, "/", 2)
 			if len(parts) < 2 {
@@ -341,7 +346,7 @@ func main() {
 				return
 			}
 
-			// POST /api/v1/poders/{id}/sandboxes - 创建 sandbox（直接指定 Poder）
+			// POST /api/v1/poders/{id}/sandboxes - create a sandbox on a specific Poder
 			if len(sbParts) == 1 && r.Method == http.MethodPost {
 				var req podpkg.CreateSandboxRequest
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -397,7 +402,7 @@ func main() {
 				return
 			}
 
-			// 解析 sandbox name 和 action
+			// Parse sandbox name and action
 			if len(sbParts) < 2 {
 				http.NotFound(w, r)
 				return
@@ -448,7 +453,7 @@ func main() {
 			return
 		}
 
-		// GET /api/v1/poders/{id}
+		// GET /api/v1/poders/{id} - get a single Poder
 		if r.Method == http.MethodGet {
 			poder, ok := poderStore.Get(path)
 			if !ok {
@@ -469,9 +474,10 @@ func main() {
 		case http.MethodGet:
 			sandboxes := sandboxStore.List()
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]interface{}{"sandboxes": sandboxes})
+			json.NewEncoder(w).Encode(map[string]any{"sandboxes": sandboxes})
 
 		case http.MethodPost:
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB
 			var req podpkg.CreateSandboxRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -513,7 +519,7 @@ func main() {
 			}
 			sandboxStore.Add(sandbox)
 
-			// 通过隧道直接调用 Poder 创建 sandbox
+			// Create the sandbox by calling Poder directly through the tunnel
 			t, ok := tunnelStore.Get(job.PoderID)
 			if !ok {
 				jobStore.UpdateJob(job.ID, func(j *podpkg.Job) {
@@ -552,7 +558,7 @@ func main() {
 				return
 			}
 
-			var poderResp map[string]interface{}
+			var poderResp map[string]any
 			json.Unmarshal(respBody, &poderResp)
 
 			jobStore.UpdateJob(job.ID, func(j *podpkg.Job) {
@@ -577,7 +583,7 @@ func main() {
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
-			json.NewEncoder(w).Encode(map[string]interface{}{
+			json.NewEncoder(w).Encode(map[string]any{
 				"job_id":  job.ID,
 				"status":  "created",
 				"sandbox": sandbox,
@@ -588,7 +594,7 @@ func main() {
 		}
 	}))
 
-	// /api/v1/sandboxes/* - 单个 sandbox 操作 + 代理
+	// /api/v1/sandboxes/* - per-sandbox operations and proxy
 	mux.HandleFunc("/api/v1/sandboxes/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path[len("/api/v1/sandboxes/"):]
 		if path == "" {
@@ -596,7 +602,7 @@ func main() {
 			return
 		}
 
-		// POST /api/v1/sandboxes/execute
+		// POST /api/v1/sandboxes/execute - execute code in a sandbox
 		if path == "execute" {
 			if r.Method != http.MethodPost {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -616,7 +622,7 @@ func main() {
 			return
 		}
 
-		// GET|POST /api/v1/sandboxes/stream
+		// GET|POST /api/v1/sandboxes/stream - stream execution output
 		if path == "stream" {
 			if r.Method != http.MethodGet && r.Method != http.MethodPost {
 				http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -648,15 +654,13 @@ func main() {
 				return
 			}
 			defer resp.Body.Close()
-			for k, v := range resp.Header {
-				w.Header()[k] = v
-			}
+			maps.Copy(w.Header(), resp.Header)
 			w.WriteHeader(resp.StatusCode)
 			io.Copy(w, resp.Body)
 			return
 		}
 
-		// 解析 {name} 和 action
+		// Parse {name} and action from the path
 		parts := splitPath(path)
 		name := parts[0]
 		action := ""
@@ -664,17 +668,15 @@ func main() {
 			action = parts[1]
 		}
 
-		// session 路由检测
+		// Detect session sub-path
 		sessionPath := ""
 		sessionPrefix := name + "/session"
-		if strings.HasPrefix(path, sessionPrefix) {
-			sessionPath = strings.TrimPrefix(path, sessionPrefix)
-			if sessionPath == "" && path == sessionPrefix {
+		if trimmed, ok := strings.CutPrefix(path, sessionPrefix); ok {
+			sessionPath = trimmed
+			if sessionPath == "" {
 				sessionPath = "/"
 			}
 		}
-
-		log.Printf("[DEBUG] path=%q name=%q action=%q sessionPath=%q", path, name, action, sessionPath)
 
 		switch r.Method {
 		case http.MethodGet:
@@ -737,7 +739,59 @@ func main() {
 				return
 			}
 
-			// 返回 sandbox 信息
+			// PTY WebSocket: must be GET (WebSocket upgrade starts with HTTP GET)
+			if action == "pty" {
+				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				if !ok {
+					return
+				}
+				conn, err := wsUpgrader.Upgrade(w, r, nil)
+				if err != nil {
+					log.Printf("WebSocket upgrade failed: %v", err)
+					return
+				}
+				defer conn.Close()
+
+				var workerConn *websocket.Conn
+				if strings.HasPrefix(sb.ProxyURL, "direct://") {
+					// Direct agent: toolbox has no /pty/{name}/connect.
+					// Do the two-step manually: POST /pty/create → WS /pty/{sessionId}
+					createResp, err := t.Client.Post("http://agent/pty/create?width=80&height=24", "", nil)
+					if err != nil || createResp.StatusCode != http.StatusOK {
+						log.Printf("PTY create failed for direct agent %s: %v", name, err)
+						conn.WriteMessage(websocket.TextMessage, []byte("Failed to create PTY session"))
+						return
+					}
+					defer createResp.Body.Close()
+					var ptyResp struct {
+						SessionID string `json:"session_id"`
+					}
+					if err := json.NewDecoder(createResp.Body).Decode(&ptyResp); err != nil || ptyResp.SessionID == "" {
+						log.Printf("PTY create bad response for %s: %v", name, err)
+						conn.WriteMessage(websocket.TextMessage, []byte("Failed to create PTY session"))
+						return
+					}
+					workerConn, _, err = t.WSDialer.Dial("ws://agent/pty/"+ptyResp.SessionID, nil)
+					if err != nil {
+						log.Printf("Failed to connect to direct agent PTY session %s: %v", ptyResp.SessionID, err)
+						conn.WriteMessage(websocket.TextMessage, []byte("Failed to connect to PTY session"))
+						return
+					}
+				} else {
+					// Poder tunnel: Poder handles the two-step internally via /pty/{name}/connect
+					workerConn, _, err = t.WSDialer.Dial("ws://poder/pty/"+name+"/connect", nil)
+					if err != nil {
+						log.Printf("Failed to connect to worker PTY: %v", err)
+						conn.WriteMessage(websocket.TextMessage, []byte("Failed to connect to PTY session"))
+						return
+					}
+				}
+				defer workerConn.Close()
+				proxyWS(conn, workerConn)
+				return
+			}
+
+			// Return sandbox info
 			sb, ok := sandboxStore.Get(name)
 			if !ok {
 				http.NotFound(w, r)
@@ -768,9 +822,7 @@ func main() {
 					return
 				}
 				defer resp.Body.Close()
-				for k, v := range resp.Header {
-					w.Header()[k] = v
-				}
+				maps.Copy(w.Header(), resp.Header)
 				w.WriteHeader(resp.StatusCode)
 				io.Copy(w, resp.Body)
 				return
@@ -790,39 +842,16 @@ func main() {
 				return
 			}
 
-			if action == "pty" {
-				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
-				if !ok {
-					return
-				}
-				_ = sb
-				conn, err := wsUpgrader.Upgrade(w, r, nil)
-				if err != nil {
-					log.Printf("WebSocket upgrade failed: %v", err)
-					return
-				}
-				defer conn.Close()
-				workerConn, _, err := t.WSDialer.Dial("ws://poder/pty/"+name+"/connect", nil)
-				if err != nil {
-					log.Printf("Failed to connect to worker PTY: %v", err)
-					conn.WriteMessage(websocket.TextMessage, []byte("Failed to connect to PTY session"))
-					return
-				}
-				defer workerConn.Close()
-				proxyWS(conn, workerConn)
-				return
-			}
-
 			if action == "start" {
 				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
 				if !ok {
 					return
 				}
 				if strings.HasPrefix(sb.ProxyURL, "direct://") {
-					// 本地 Agent 始终运行中，start 为 no-op
+					// Local agent is always running; start is a no-op
 					sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateRunning })
 					w.Header().Set("Content-Type", "application/json")
-					json.NewEncoder(w).Encode(map[string]interface{}{"status": "running"})
+					json.NewEncoder(w).Encode(map[string]any{"status": "running"})
 					return
 				}
 				sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStarting })
@@ -840,10 +869,10 @@ func main() {
 					return
 				}
 				if strings.HasPrefix(sb.ProxyURL, "direct://") {
-					// 本地 Agent 无法暂停，stop 为 no-op
+					// Local agent cannot be paused; stop is a no-op
 					sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopped })
 					w.Header().Set("Content-Type", "application/json")
-					json.NewEncoder(w).Encode(map[string]interface{}{"status": "stopped"})
+					json.NewEncoder(w).Encode(map[string]any{"status": "stopped"})
 					return
 				}
 				sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopping })
@@ -893,31 +922,52 @@ func main() {
 				return
 			}
 
-			sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+			// Look up sandbox record first; 404 if not found.
+			sb, ok := sandboxStore.Get(name)
 			if !ok {
+				http.Error(w, "sandbox not found", http.StatusNotFound)
 				return
 			}
+
 			if strings.HasPrefix(sb.ProxyURL, "direct://") {
-				// 本地 Agent 直连沙箱：仅从 store 中移除记录
+				// Direct-agent sandbox: remove record and disconnect agent tunnel.
 				sandboxStore.Delete(name)
 				directStore.Remove(name)
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]interface{}{"status": "deleted"})
+				json.NewEncoder(w).Encode(map[string]any{"status": "deleted"})
 				return
 			}
-			if err := proxyHTTPErr(t, r, "http://poder/sandboxes/"+name, w); err == nil {
-				pID := sb.PoderID
-				sandboxStore.Delete(name)
-				poderStore.UpdateUsage(pID, func(u *podpkg.PoderUsage) {
-					if u.Containers > 0 {
-						u.Containers--
-					}
-				})
+
+			// Best-effort: delete the DB record unconditionally so the name is
+			// freed even when the poder tunnel is gone (e.g. after a restart).
+			pID := sb.PoderID
+			sandboxStore.Delete(name)
+			poderStore.UpdateUsage(pID, func(u *podpkg.PoderUsage) {
+				if u.Containers > 0 {
+					u.Containers--
+				}
+			})
+
+			// Attempt to tear down the container via the poder tunnel.
+			// Log but do not fail the HTTP response if the tunnel is unavailable.
+			t, tunnelOK := tunnelStore.Get(pID)
+			if tunnelOK {
+				req, _ := http.NewRequestWithContext(r.Context(), http.MethodDelete, "http://poder/sandboxes/"+name, nil)
+				if resp, err := t.Client.Do(req); err != nil {
+					log.Printf("sandbox delete: poder cleanup error for %s: %v", name, err)
+				} else {
+					resp.Body.Close()
+				}
+			} else {
+				log.Printf("sandbox delete: poder tunnel %s unavailable, skipping container cleanup for %s", pID, name)
 			}
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"status": "deleted"})
 		}
 	}))
 
-	// === Job API (供 Poder Agent 调用) ===
+	// === Job API (called by Poder Agent) ===
 	mux.HandleFunc("/api/v1/jobs/poll", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -929,7 +979,7 @@ func main() {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"jobs": jobs})
+		json.NewEncoder(w).Encode(map[string]any{"jobs": jobs})
 	}))
 
 	mux.HandleFunc("/api/v1/jobs/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -943,12 +993,17 @@ func main() {
 			return
 		}
 
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB
 		var req podpkg.UpdateJobStatusRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
+		// Phase 1: update the job under the job store's lock.
+		// Do NOT touch sandboxStore here to avoid cross-store lock ordering.
+		var sandboxName string
+		var jobType podpkg.JobType
 		err := jobStore.UpdateJob(jobID, func(job *podpkg.Job) {
 			job.Status = req.Status
 			if req.ErrorMessage != "" {
@@ -957,69 +1012,82 @@ func main() {
 			if req.Result != nil {
 				job.Result = req.Result
 			}
-			if req.Status == podpkg.JobStatusCompleted || req.Status == podpkg.JobStatusFailed {
-				if sb, ok := sandboxStore.Get(job.SandboxName); ok {
-					switch job.Type {
-					case podpkg.JobTypeCreateSandbox:
-						if req.Status == podpkg.JobStatusCompleted {
-							sb.State = podpkg.StateRunning
-							if req.Result != nil {
-								sb.IP = req.Result.IP
-								if req.Result.SandboxID != "" {
-									sb.ID = req.Result.SandboxID
-								}
-							}
-						} else {
-							sb.State = podpkg.StateError
-						}
-					case podpkg.JobTypeDeleteSandbox:
-						if req.Status == podpkg.JobStatusCompleted {
-							sb.State = podpkg.StateTerminated
-						} else {
-							sb.State = podpkg.StateError
-						}
-					case podpkg.JobTypeStartSandbox:
-						if req.Status == podpkg.JobStatusCompleted {
-							sb.State = podpkg.StateRunning
-							if req.Result != nil && req.Result.IP != "" {
-								sb.IP = req.Result.IP
-							}
-						} else {
-							sb.State = podpkg.StateError
-						}
-					case podpkg.JobTypeStopSandbox:
-						if req.Status == podpkg.JobStatusCompleted {
-							sb.State = podpkg.StateStopped
-						} else {
-							sb.State = podpkg.StateError
-						}
-					}
-				}
-			}
+			sandboxName = job.SandboxName
+			jobType = job.Type
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		}
+
+		// Phase 2: update sandbox state under the sandbox store's own lock.
+		if req.Status == podpkg.JobStatusCompleted || req.Status == podpkg.JobStatusFailed {
+			sandboxStore.Update(sandboxName, func(sb *podpkg.SandboxInfo) {
+				switch jobType {
+				case podpkg.JobTypeCreateSandbox:
+					if req.Status == podpkg.JobStatusCompleted {
+						sb.State = podpkg.StateRunning
+						if req.Result != nil {
+							sb.IP = req.Result.IP
+							if req.Result.SandboxID != "" {
+								sb.ID = req.Result.SandboxID
+							}
+						}
+					} else {
+						sb.State = podpkg.StateError
+					}
+				case podpkg.JobTypeDeleteSandbox:
+					if req.Status == podpkg.JobStatusCompleted {
+						sb.State = podpkg.StateTerminated
+					} else {
+						sb.State = podpkg.StateError
+					}
+				case podpkg.JobTypeStartSandbox:
+					if req.Status == podpkg.JobStatusCompleted {
+						sb.State = podpkg.StateRunning
+						if req.Result != nil && req.Result.IP != "" {
+							sb.IP = req.Result.IP
+						}
+					} else {
+						sb.State = podpkg.StateError
+					}
+				case podpkg.JobTypeStopSandbox:
+					if req.Status == podpkg.JobStatusCompleted {
+						sb.State = podpkg.StateStopped
+					} else {
+						sb.State = podpkg.StateError
+					}
+				}
+			})
+		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok"})
+		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 	}))
 
-	// 启动服务器
+	// Start the HTTP server
 	addr := fmt.Sprintf(":%d", *port)
-	server := &http.Server{Addr: addr, Handler: mux}
+	server := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       60 * time.Second,
+		WriteTimeout:      120 * time.Second,
+	}
+
+	rootCtx, rootCancel := context.WithCancel(context.Background())
 
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 		<-sigChan
 		log.Println("Shutting down...")
+		rootCancel()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		server.Shutdown(ctx)
 	}()
 
-	go cleanupOfflinePoders(poderStore, *offlineTimeout)
+	go cleanupOfflinePoders(rootCtx, poderStore, *offlineTimeout)
 
 	log.Printf("API server listening on %s (Control Plane + Tunnel Mode)", addr)
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
@@ -1032,11 +1100,10 @@ func main() {
 func sandboxTunnel(name string, ss podpkg.SandboxRepository, ts *tunnel.TunnelStore, ds *tunnel.TunnelStore, w http.ResponseWriter) (*podpkg.SandboxInfo, *tunnel.PoderTunnel, bool) {
 	sb, ok := ss.Get(name)
 	if !ok {
-		http.NotFound(w, nil)
-		w.WriteHeader(http.StatusNotFound)
+		http.Error(w, "sandbox not found", http.StatusNotFound)
 		return nil, nil, false
 	}
-	// 直连 Agent 路径（toC）：sandbox 由本机 sandrpod-agent 直接注册
+	// Direct-agent path (end-user): sandbox is registered directly by the local sandrpod-agent
 	if strings.HasPrefix(sb.ProxyURL, "direct://") {
 		t, ok := ds.Get(name)
 		if !ok {
@@ -1045,7 +1112,7 @@ func sandboxTunnel(name string, ss podpkg.SandboxRepository, ts *tunnel.TunnelSt
 		}
 		return sb, t, true
 	}
-	// Poder 路径（toB）：sandbox 跑在 Poder 管理的容器里
+	// Poder path (business): sandbox runs in a container managed by Poder
 	t, ok := ts.Get(sb.PoderID)
 	if !ok {
 		http.Error(w, "poder tunnel not available", http.StatusServiceUnavailable)
@@ -1073,9 +1140,7 @@ func proxyHTTP(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w http.
 		return
 	}
 	defer resp.Body.Close()
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
+	maps.Copy(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 }
@@ -1098,9 +1163,7 @@ func proxyHTTPErr(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w ht
 		http.Error(w, string(body), resp.StatusCode)
 		return fmt.Errorf("upstream %d", resp.StatusCode)
 	}
-	for k, v := range resp.Header {
-		w.Header()[k] = v
-	}
+	maps.Copy(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
 	return nil
@@ -1150,16 +1213,21 @@ func splitPath(path string) []string {
 
 // cleanupOfflinePoders marks Poder nodes as offline when heartbeats stop.
 // Serves as a safety net alongside the tunnel disconnect handler.
-func cleanupOfflinePoders(ps podpkg.PoderRepository, timeout time.Duration) {
+// Exits when ctx is cancelled.
+func cleanupOfflinePoders(ctx context.Context, ps podpkg.PoderRepository, timeout time.Duration) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
-		<-ticker.C
-		now := time.Now()
-		for _, p := range ps.List() {
-			if p.State == podpkg.PoderStateOnline && now.Sub(p.LastHeartbeat) > timeout {
-				ps.SetOffline(p.ID)
-				log.Printf("Poder %s marked OFFLINE (no heartbeat for %v)", p.ID, now.Sub(p.LastHeartbeat))
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			for _, p := range ps.List() {
+				if p.State == podpkg.PoderStateOnline && now.Sub(p.LastHeartbeat) > timeout {
+					ps.SetOffline(p.ID)
+					log.Printf("Poder %s marked OFFLINE (no heartbeat for %v)", p.ID, now.Sub(p.LastHeartbeat))
+				}
 			}
 		}
 	}

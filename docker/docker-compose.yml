@@ -11,8 +11,9 @@ services:
       - sandrpod
     environment:
       - PORT=8080
-      - TOKEN=
-      - OFFLINE_TIMEOUT=30s
+      - TOKEN=${SANDRPOD_TOKEN:-}
+      - OFFLINE_TIMEOUT=${OFFLINE_TIMEOUT:-30s}
+      - PUBLIC_URL=${SANDRPOD_PUBLIC_URL:-}
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
@@ -29,9 +30,10 @@ services:
       - sandrpod
     environment:
       - API_URL=http://server:8080
-      - REGION=local
-      - PROVIDER_TYPE=local
-      - SANDRPOD_TOOLBOX_IMAGE=sandrpod-toolbox:dev
+      - REGION=${REGION:-local}
+      - PROVIDER_TYPE=${PROVIDER_TYPE:-local}
+      - SANDRPOD_TOKEN=${SANDRPOD_TOKEN:-}
+      - SANDRPOD_TOOLBOX_IMAGE=${SANDRPOD_TOOLBOX_IMAGE:-sandrpod/toolbox:latest}
     depends_on:
       - server
     restart: unless-stopped

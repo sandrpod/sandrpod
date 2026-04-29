@@ -13,10 +13,11 @@ services:
     networks:
       - sandrpod
     environment:
-      - API_URL=http://api:8080
-      - REGION=local
-      - PROVIDER_TYPE=local
-      - POLL_INTERVAL=5s
+      - API_URL=${SANDRPOD_API_URL:-http://api:8080}
+      - REGION=${REGION:-local}
+      - PROVIDER_TYPE=${PROVIDER_TYPE:-local}
+      - SANDRPOD_TOKEN=${SANDRPOD_TOKEN:-}
+      - POLL_INTERVAL=${POLL_INTERVAL:-5s}
     restart: unless-stopped
 
 networks:
