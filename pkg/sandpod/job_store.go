@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// Job Store - 内存中的任务存储
+// Job Store - in-memory job storage
 
 package sandpod
 
@@ -10,31 +10,31 @@ import (
 	"time"
 )
 
-// JobStore 任务存储
+// JobStore is the in-memory job store.
 type JobStore struct {
 	mu          sync.RWMutex
 	jobs        map[string]*Job
-	queue       []*Job // 按创建时间排序的任务队列
-	jobTimeout  time.Duration // Job 超时时间，默认 5 分钟
+	queue       []*Job        // job queue ordered by creation time
+	jobTimeout  time.Duration // job timeout duration, default 5 minutes
 }
 
-// NewJobStore 创建任务存储
+// NewJobStore creates a new JobStore.
 func NewJobStore() *JobStore {
 	return &JobStore{
 		jobs:       make(map[string]*Job),
 		queue:      make([]*Job, 0),
-		jobTimeout: 5 * time.Minute, // 默认 5 分钟超时
+		jobTimeout: 5 * time.Minute, // default 5-minute timeout
 	}
 }
 
-// SetJobTimeout 设置 Job 超时时间
+// SetJobTimeout sets the job timeout duration.
 func (s *JobStore) SetJobTimeout(timeout time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.jobTimeout = timeout
 }
 
-// AddJob 添加任务
+// AddJob adds a job to the store.
 func (s *JobStore) AddJob(job *Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -50,7 +50,7 @@ func (s *JobStore) AddJob(job *Job) error {
 	return nil
 }
 
-// GetJob 获取任务
+// GetJob retrieves a job by ID.
 func (s *JobStore) GetJob(id string) (*Job, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -59,7 +59,7 @@ func (s *JobStore) GetJob(id string) (*Job, bool) {
 	return job, ok
 }
 
-// UpdateJob 更新任务
+// UpdateJob applies an update function to a job.
 func (s *JobStore) UpdateJob(id string, updateFn func(*Job)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -74,11 +74,11 @@ func (s *JobStore) UpdateJob(id string, updateFn func(*Job)) error {
 	return nil
 }
 
-// PollJobs 轮询待处理的任务 (长轮询)
+// PollJobs returns pending jobs (long-poll style).
 func (s *JobStore) PollJobs(timeout time.Duration, limit int) ([]*Job, error) {
 	s.mu.Lock()
 
-	// 先检查超时的 IN_PROGRESS 任务，恢复为 PENDING
+	// First, reset any IN_PROGRESS jobs that have timed out back to PENDING.
 	for _, job := range s.jobs {
 		if job.Status == JobStatusInProgress {
 			if time.Since(job.UpdatedAt) > s.jobTimeout {
@@ -89,7 +89,7 @@ func (s *JobStore) PollJobs(timeout time.Duration, limit int) ([]*Job, error) {
 		}
 	}
 
-	// 找出所有 PENDING 状态的任务
+	// Collect all PENDING jobs up to the requested limit.
 	pending := make([]*Job, 0)
 	for _, job := range s.queue {
 		if job.Status == JobStatusPending {
@@ -100,7 +100,7 @@ func (s *JobStore) PollJobs(timeout time.Duration, limit int) ([]*Job, error) {
 		}
 	}
 
-	// 将这些任务标记为 IN_PROGRESS
+	// Mark the collected jobs as IN_PROGRESS.
 	for _, job := range pending {
 		job.Status = JobStatusInProgress
 		job.UpdatedAt = time.Now()
@@ -111,7 +111,7 @@ func (s *JobStore) PollJobs(timeout time.Duration, limit int) ([]*Job, error) {
 	return pending, nil
 }
 
-// ListJobs 列出所有任务
+// ListJobs returns all jobs in the store.
 func (s *JobStore) ListJobs() []*Job {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -123,9 +123,9 @@ func (s *JobStore) ListJobs() []*Job {
 	return jobs
 }
 
-// sortQueue 按创建时间排序
+// sortQueue sorts the queue by creation time.
 func (s *JobStore) sortQueue() {
-	// 简单插入排序
+	// Simple insertion sort.
 	for i := 1; i < len(s.queue); i++ {
 		for j := i; j > 0 && s.queue[j].CreatedAt.Before(s.queue[j-1].CreatedAt); j-- {
 			s.queue[j], s.queue[j-1] = s.queue[j-1], s.queue[j]
@@ -133,12 +133,12 @@ func (s *JobStore) sortQueue() {
 	}
 }
 
-// GenerateJobID 生成任务ID
+// GenerateJobID generates a unique job ID.
 func GenerateJobID() string {
 	return fmt.Sprintf("job-%d-%s", time.Now().UnixNano(), randomString(8))
 }
 
-// randomString 生成随机字符串
+// randomString generates a random alphanumeric string of length n.
 func randomString(n int) string {
 	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, n)

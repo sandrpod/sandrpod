@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// Provider interface - 抽象层接口定义
+// Provider interface - abstract layer interface definitions
 
 package provider
 
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// VMState VM 状态
+// VMState represents the state of a VM.
 type VMState string
 
 const (
@@ -20,113 +20,113 @@ const (
 	VMStateError      VMState = "ERROR"
 )
 
-// Resources 资源配置
+// Resources defines compute resource requirements.
 type Resources struct {
-	CPU       float64 // CPU 核心数
-	MemoryGiB float64 // 内存 GB
-	DiskGiB   float64 // 磁盘 GB
-	GPU       int      // GPU 数量
-	GPUType   string   // GPU 类型，如 "NVIDIA T4"
+	CPU       float64 // Number of CPU cores
+	MemoryGiB float64 // Memory in GiB
+	DiskGiB   float64 // Disk in GiB
+	GPU       int      // Number of GPUs
+	GPUType   string   // GPU model, e.g. "NVIDIA T4"
 }
 
-// NetworkConfig 网络配置
+// NetworkConfig holds network configuration for a VM.
 type NetworkConfig struct {
 	VpcID         string // VPC ID
-	SubnetID      string // 子网 ID
-	SecurityGroup string // 安全组
-	PublicIP      bool   // 是否分配公网 IP
+	SubnetID      string // Subnet ID
+	SecurityGroup string // Security group
+	PublicIP      bool   // Whether to assign a public IP
 }
 
-// DiskConfig 磁盘配置
+// DiskConfig holds disk configuration for a VM.
 type DiskConfig struct {
-	SizeGiB    int    // 大小 GB
-	VolumeType string // 卷类型: gp3, io2, standard
-	Encrypted  bool   // 是否加密
+	SizeGiB    int    // Disk size in GiB
+	VolumeType string // Volume type: gp3, io2, standard
+	Encrypted  bool   // Whether to encrypt the disk
 }
 
-// InstanceType 实例类型
+// InstanceType describes a cloud instance type.
 type InstanceType struct {
-	Name         string  // 实例名: t3.medium, Standard_D2s_v3
-	CPU          float64 // CPU 核心数
-	MemoryGiB    float64 // 内存 GB
-	DiskGiB      float64 // 本地磁盘 GB (0 表示云盘)
-	GPU          int     // GPU 数量
-	GPUType      string  // GPU 类型
-	PricePerHour float64 // 按小时价格 (美元)
+	Name         string  // Instance name, e.g. t3.medium, Standard_D2s_v3
+	CPU          float64 // Number of CPU cores
+	MemoryGiB    float64 // Memory in GiB
+	DiskGiB      float64 // Local disk in GiB (0 means cloud disk)
+	GPU          int     // Number of GPUs
+	GPUType      string  // GPU model
+	PricePerHour float64 // Hourly price in USD
 }
 
-// VMInfo VM 信息
+// VMInfo holds information about a VM instance.
 type VMInfo struct {
-	ID           string    // VM ID (云厂商)
-	Name         string    // 名称
-	Region       string    // 区域
-	InstanceType string    // 实例类型
-	State        VMState   // 状态
-	PublicIP     string    // 公网 IP
-	PrivateIP    string    // 私网 IP
-	CreatedAt    time.Time // 创建时间
+	ID           string    // VM ID assigned by the cloud provider
+	Name         string    // Instance name
+	Region       string    // Region
+	InstanceType string    // Instance type
+	State        VMState   // Current state
+	PublicIP     string    // Public IP address
+	PrivateIP    string    // Private IP address
+	CreatedAt    time.Time // Creation timestamp
 }
 
-// HealthStatus 健康状态
+// HealthStatus reports the health of a VM and its services.
 type HealthStatus struct {
-	VMReady      bool // VM 运行中
-	DockerReady  bool // Docker 已安装
-	PoderReady   bool // Poder 服务已启动
-	APIReachable bool // API 可访问
+	VMReady      bool // VM is running
+	DockerReady  bool // Docker is installed and running
+	PoderReady   bool // Poder service is started
+	APIReachable bool // API endpoint is reachable
 }
 
-// CommandResult 命令执行结果
+// CommandResult holds the output of a remotely executed command.
 type CommandResult struct {
-	Output    string    // 标准输出
-	ExitCode  int      // 退出码
-	Stderr    string    // 错误输出
-	ExecutedAt time.Time // 执行时间
+	Output    string    // Standard output
+	ExitCode  int      // Exit code
+	Stderr    string    // Standard error output
+	ExecutedAt time.Time // Execution timestamp
 }
 
-// RunnerBootstrapConfig Poder 启动配置
+// RunnerBootstrapConfig holds Poder bootstrap configuration.
 type RunnerBootstrapConfig struct {
-	APIURL       string // SandrPod API 地址
-	APIKey       string // API 认证密钥
-	PoderVersion string // Poder 版本
-	LogLevel     string // 日志级别
+	APIURL       string // SandrPod API URL
+	APIKey       string // API authentication key
+	PoderVersion string // Poder version
+	LogLevel     string // Log level
 }
 
-// CreateVMRequest 创建 VM 请求
+// CreateVMRequest is the request payload for creating a VM.
 type CreateVMRequest struct {
-	Name          string            // 名称
-	Region        string            // 区域
-	InstanceType  string            // 实例类型
-	ImageID       string            // 镜像 ID (可选，使用默认)
-	NetworkConfig *NetworkConfig   // 网络配置 (可选)
-	DiskConfig    *DiskConfig      // 磁盘配置 (可选)
-	RunnerConfig  *RunnerBootstrapConfig // Poder 启动配置
-	Tags          map[string]string // 标签
+	Name          string            // Instance name
+	Region        string            // Region
+	InstanceType  string            // Instance type
+	ImageID       string            // Image ID (optional, uses default if empty)
+	NetworkConfig *NetworkConfig   // Network configuration (optional)
+	DiskConfig    *DiskConfig      // Disk configuration (optional)
+	RunnerConfig  *RunnerBootstrapConfig // Poder bootstrap configuration
+	Tags          map[string]string // Resource tags
 }
 
-// Provider 云厂商抽象接口
+// Provider is the abstract interface for a cloud provider.
 type Provider interface {
-	// 元信息
-	Name() string        // 云厂商标识: aws, azure, gcp, aliyun
-	DisplayName() string // 显示名称: Amazon Web Services
+	// Metadata
+	Name() string        // Provider identifier: aws, azure, gcp, aliyun
+	DisplayName() string // Human-readable name: Amazon Web Services
 
-	// VM 生命周期
+	// VM lifecycle
 	CreateVM(ctx context.Context, req *CreateVMRequest) (*VMInfo, error)
 	DeleteVM(ctx context.Context, vmID string) error
 	GetVM(ctx context.Context, vmID string) (*VMInfo, error)
 	ListVMs(ctx context.Context) ([]*VMInfo, error)
 
-	// 远程执行 (用于在 VM 上安装软件)
+	// Remote execution (used for bootstrapping software on the VM)
 	ExecuteCommand(ctx context.Context, vmID, command string) (*CommandResult, error)
 
-	// 健康检查
+	// Health checks
 	WaitUntilRunning(ctx context.Context, vmID string, timeout time.Duration) error
 	GetHealthStatus(ctx context.Context, vmID string) (*HealthStatus, error)
 
-	// 基础设施查询
+	// Infrastructure queries
 	ListRegions(ctx context.Context) ([]string, error)
 	ListInstanceTypes(ctx context.Context, region string) ([]*InstanceType, error)
 	GetDefaultImage(ctx context.Context, region string) (string, error)
 
-	// 清理
+	// Cleanup
 	Cleanup(ctx context.Context) error
 }

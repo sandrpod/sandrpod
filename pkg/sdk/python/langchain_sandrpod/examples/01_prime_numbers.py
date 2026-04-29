@@ -7,6 +7,7 @@
 
 用法：
     export SANDRPOD_API_URL=http://localhost:8080   # 可选，默认 localhost:8080
+    export SANDRPOD_API_TOKEN=<your-token>          # 可选，服务端启用认证时需要
     export OPENAI_API_KEY=<your-key>
     python examples/01_prime_numbers.py
 """
@@ -20,6 +21,7 @@ from langchain_sandrpod import SandrPodClient
 
 # ── 配置 ────────────────────────────────────────────────────────────────────
 API_URL = os.environ.get("SANDRPOD_API_URL", "http://localhost:8080")
+API_TOKEN = os.environ.get("SANDRPOD_API_TOKEN")
 SANDBOX_NAME = os.environ.get("SANDRPOD_SANDBOX", "my-sandbox")
 
 model = ChatOpenAI(
@@ -30,7 +32,7 @@ model = ChatOpenAI(
 )
 
 # ── 运行 ────────────────────────────────────────────────────────────────────
-client = SandrPodClient(api_url=API_URL)
+client = SandrPodClient(api_url=API_URL, api_token=API_TOKEN)
 sb = client.get_sandbox(SANDBOX_NAME)
 
 agent = create_deep_agent(model=model, backend=sb)

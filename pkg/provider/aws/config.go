@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// AWS Provider 配置
+// AWS Provider configuration
 
 package aws
 
@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-// LoadConfig 从环境变量加载配置
+// LoadConfig loads configuration from environment variables.
 func LoadConfig() *Config {
 	return &Config{
 		Region:    getEnv("AWS_REGION", "us-east-1"),

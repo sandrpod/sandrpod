@@ -1,13 +1,14 @@
 // Copyright 2024 SandrPod
-// Docker Poder 实现 - 用于本地开发和测试
+// Docker Poder implementation - for local development and testing
 
 package poder
 
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
-	"math/rand"
 	"os"
 	"time"
 
@@ -18,16 +19,17 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 )
 
-// DockerPoder Docker 实现
+// DockerPoder is the Docker-backed implementation of Poder.
 type DockerPoder struct {
 	*BasePoder
 	dockerClient *client.Client
 	networkName  string
 }
 
-// NewDockerPoder 创建 Docker Poder。
-// networkName 指定沙箱容器加入的 Docker 网络；空字符串则从环境变量
-// SANDRPOD_NETWORK 读取；仍为空时不指定网络，容器使用 Docker 默认网络（bridge）。
+// NewDockerPoder creates a Docker-backed Poder.
+// networkName specifies the Docker network that sandbox containers join. If empty,
+// it falls back to the SANDRPOD_NETWORK environment variable. If still empty,
+// no network is specified and containers use Docker's default bridge network.
 func NewDockerPoder(region, networkName string) (*DockerPoder, error) {
 	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
 	if err != nil {
@@ -39,7 +41,7 @@ func NewDockerPoder(region, networkName string) (*DockerPoder, error) {
 	if networkName == "" {
 		networkName = os.Getenv("SANDRPOD_NETWORK")
 	}
-	// networkName 仍为空 → 使用 Docker 默认网络，不强制指定
+	// networkName is still empty → use Docker's default network, no explicit override
 
 	return &DockerPoder{
 		BasePoder:    base,
@@ -48,9 +50,9 @@ func NewDockerPoder(region, networkName string) (*DockerPoder, error) {
 	}, nil
 }
 
-// EnsureNetwork 确保网络存在
+// EnsureNetwork ensures the configured Docker network exists, creating it if needed.
 func (p *DockerPoder) EnsureNetwork(ctx context.Context) error {
-	// 检查网络是否存在
+	// Check whether the network already exists
 	networks, err := p.dockerClient.NetworkList(ctx, network.ListOptions{})
 	if err != nil {
 		return err
@@ -62,36 +64,27 @@ func (p *DockerPoder) EnsureNetwork(ctx context.Context) error {
 		}
 	}
 
-	// 创建网络
+	// Create the network
 	_, err = p.dockerClient.NetworkCreate(ctx, p.networkName, network.CreateOptions{
 		Driver: "bridge",
 	})
 	return err
 }
 
-// generateSandboxPassword 生成随机密码
-func generateSandboxPassword() string {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-	b := make([]byte, 16)
-	for i := range b {
-		b[i] = charset[rand.Intn(len(charset))]
-	}
-	return string(b)
-}
 
-// CreatePod 创建 Pod
+// CreatePod creates a new sandbox container pod.
 func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*PodInfo, error) {
-	// 只有指定了自定义网络才需要确保网络存在
+	// Only ensure the network exists when a custom network is specified
 	if p.networkName != "" {
 		if err := p.EnsureNetwork(ctx); err != nil {
 			return nil, fmt.Errorf("failed to ensure network: %w", err)
 		}
 	}
 
-	// 生成 Pod ID
+	// Generate a unique Pod ID
 	podID := fmt.Sprintf("sp-%d-%s", time.Now().Unix(), randomString(8))
 
-	// 镜像
+	// Resolve image name
 	imageName := req.ImageID
 	if imageName == "" {
 		imageName = os.Getenv("SANDRPOD_TOOLBOX_IMAGE")
@@ -100,7 +93,7 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 		}
 	}
 
-	// 创建容器
+	// Build container labels
 	labels := req.Labels
 	if labels == nil {
 		labels = make(map[string]string)
@@ -127,18 +120,18 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 		return nil, fmt.Errorf("failed to create container: %w", err)
 	}
 
-	// 启动容器
+	// Start the container
 	if err := p.dockerClient.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return nil, fmt.Errorf("failed to start container: %w", err)
 	}
 
-	// 获取容器信息
+	// Inspect the container to get runtime details
 	containerInfo, err := p.dockerClient.ContainerInspect(ctx, resp.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect container: %w", err)
 	}
 
-	// 获取容器 IP：优先从指定网络取，未指定时取第一个可用网络的 IP
+	// Resolve container IP: prefer the specified network; fall back to the first available network IP
 	ip := ""
 	if p.networkName != "" {
 		if netSettings, ok := containerInfo.NetworkSettings.Networks[p.networkName]; ok {
@@ -153,7 +146,7 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 		}
 	}
 
-	// 创建 PodInfo
+	// Build PodInfo
 	pod := &PodInfo{
 		ID:           podID,
 		Name:         req.Name,
@@ -167,7 +160,7 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 
 	p.RegisterPod(pod)
 
-	// 后台等待 Running
+	// Wait for the container to reach Running state in the background
 	go func() {
 		time.Sleep(5 * time.Second)
 		p.UpdatePodState(podID, PodStateRunning)
@@ -177,12 +170,12 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 	return pod, nil
 }
 
-// DeletePod 删除 Pod
+// DeletePod stops and removes the container for the given pod.
 func (p *DockerPoder) DeletePod(ctx context.Context, podID string) error {
-	// 停止容器
+	// Stop the container gracefully
 	_ = p.dockerClient.ContainerStop(ctx, podID, container.StopOptions{Timeout: ptr(10)})
 
-	// 删除容器
+	// Remove the container
 	if err := p.dockerClient.ContainerRemove(ctx, podID, container.RemoveOptions{Force: true}); err != nil {
 		return fmt.Errorf("failed to remove container: %w", err)
 	}
@@ -191,33 +184,34 @@ func (p *DockerPoder) DeletePod(ctx context.Context, podID string) error {
 	return nil
 }
 
-// PausePod 暂停 Pod (保持容器状态)
+// PausePod pauses the container, preserving its state.
 func (p *DockerPoder) PausePod(ctx context.Context, podID string) error {
 	return p.dockerClient.ContainerPause(ctx, podID)
 }
 
-// UnpausePod 恢复 Pod
+// UnpausePod resumes a paused pod.
 func (p *DockerPoder) UnpausePod(ctx context.Context, podID string) error {
 	return p.dockerClient.ContainerUnpause(ctx, podID)
 }
 
-// GetPod 获取 Pod
+// GetPod returns information about a pod, consulting the internal registry first
+// and falling back to a direct Docker inspect if the pod is not registered.
 func (p *DockerPoder) GetPod(ctx context.Context, podID string) (*PodInfo, error) {
-	// 先尝试从内部注册表获取
+	// Try the internal registry first
 	pod, ok := p.GetPodByID(podID)
 	if !ok {
-		// 注册表中没有，尝试直接从 Docker 查询容器
+		// Not in registry, query Docker directly
 		info, err := p.dockerClient.ContainerInspect(ctx, podID)
 		if err != nil {
 			return nil, fmt.Errorf("pod %s not found", podID)
 		}
-		// 构建 PodInfo
+		// Build PodInfo from the Docker inspect response
 		pod = &PodInfo{
 			ID:        info.ID,
 			Name:      info.Name,
 			State:     PodStateStopped,
 		}
-		// 从网络设置获取 IP
+		// Resolve IP from network settings
 		if p.networkName != "" {
 			if net, ok := info.NetworkSettings.Networks[p.networkName]; ok {
 				pod.IP = net.IPAddress
@@ -232,10 +226,10 @@ func (p *DockerPoder) GetPod(ctx context.Context, podID string) (*PodInfo, error
 		}
 	}
 
-	// 查询 Docker 容器状态
+	// Query live container state from Docker
 	info, err := p.dockerClient.ContainerInspect(ctx, podID)
 	if err != nil {
-		return pod, nil // 返回缓存的状态
+		return pod, nil // Return cached state if Docker inspect fails
 	}
 
 	// Paused must be checked before Running, since paused containers have Running=true
@@ -252,7 +246,7 @@ func (p *DockerPoder) GetPod(ctx context.Context, podID string) (*PodInfo, error
 	return pod, nil
 }
 
-// FindPodByName 根据沙箱名称查找 Pod (查询 Docker 直接查找)
+// FindPodByName finds a pod by its sandbox name via a direct Docker container list query.
 func (p *DockerPoder) FindPodByName(ctx context.Context, sandboxName string) (*PodInfo, error) {
 	containers, err := p.dockerClient.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
@@ -268,7 +262,7 @@ func (p *DockerPoder) FindPodByName(ctx context.Context, sandboxName string) (*P
 	return nil, fmt.Errorf("pod with sandbox name %s not found", sandboxName)
 }
 
-// GetPodLogs 获取容器日志
+// GetPodLogs retrieves logs from a container.
 func (p *DockerPoder) GetPodLogs(ctx context.Context, podID string, tail string) (string, error) {
 	if tail == "" {
 		tail = "100"
@@ -287,14 +281,14 @@ func (p *DockerPoder) GetPodLogs(ctx context.Context, podID string, tail string)
 	}
 	defer resp.Close()
 
-	// 解码日志流 (Docker logs 使用 multiplexed 格式)
+	// Decode the log stream (Docker logs use multiplexed format)
 	var stdout, stderr bytes.Buffer
 	_, err = stdcopy.StdCopy(&stdout, &stderr, resp)
 	if err != nil {
 		return "", fmt.Errorf("failed to copy logs: %w", err)
 	}
 
-	// 组合 stdout 和 stderr
+	// Combine stdout and stderr
 	logs := stdout.String()
 	if stderr.Len() > 0 {
 		logs += stderr.String()
@@ -303,7 +297,7 @@ func (p *DockerPoder) GetPodLogs(ctx context.Context, podID string, tail string)
 	return logs, nil
 }
 
-// ExecuteCommand 执行命令
+// ExecuteCommand runs a shell command inside the container and returns the output.
 func (p *DockerPoder) ExecuteCommand(ctx context.Context, podID, command string) (*CommandResult, error) {
 	execResp, err := p.dockerClient.ContainerExecCreate(ctx, podID, container.ExecOptions{
 		Cmd:          []string{"/bin/sh", "-c", command},
@@ -326,7 +320,7 @@ func (p *DockerPoder) ExecuteCommand(ctx context.Context, podID, command string)
 		return nil, fmt.Errorf("failed to copy output: %w", err)
 	}
 
-	// 获取退出码
+	// Retrieve the exit code
 	info, err := p.dockerClient.ContainerExecInspect(ctx, execResp.ID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to inspect exec: %w", err)
@@ -340,43 +334,39 @@ func (p *DockerPoder) ExecuteCommand(ctx context.Context, podID, command string)
 	}, nil
 }
 
-// ExecWithPty 创建带 PTY 的执行会话，返回 exec ID
+// ExecWithPty creates a PTY-attached exec session and returns the exec ID.
 func (p *DockerPoder) ExecWithPty(ctx context.Context, podID string, width, height int) (string, error) {
-	fmt.Printf("ExecWithPty: starting for podID=%s\n", podID)
+	shell := "/bin/bash"
 
 	execResp, err := p.dockerClient.ContainerExecCreate(ctx, podID, container.ExecOptions{
 		AttachStdin:  true,
 		AttachStdout: true,
 		AttachStderr: true,
 		Tty:          true,
-		Cmd:          []string{"/bin/bash", "-c", "echo started && cat"},
+		Cmd:          []string{shell},
 	})
 	if err != nil {
-		fmt.Printf("ExecWithPty: create error: %v\n", err)
 		return "", fmt.Errorf("failed to create exec: %w", err)
 	}
-	fmt.Printf("ExecWithPty: created execID=%s\n", execResp.ID)
 
-	// 在后台启动 exec
+	// Start exec in the background (ContainerExecStart blocks until the session ends)
 	go func() {
-		fmt.Printf("ExecWithPty: goroutine starting for execID=%s\n", execResp.ID)
 		err := p.dockerClient.ContainerExecStart(context.Background(), execResp.ID, container.ExecStartOptions{
 			Tty: true,
 		})
 		if err != nil {
-			fmt.Printf("ExecWithPty: start error (goroutine): %v\n", err)
-		} else {
-			fmt.Printf("ExecWithPty: goroutine completed for execID=%s\n", execResp.ID)
+			// Normal error when the session ends or is aborted; log at debug level only
+			_ = err
 		}
 	}()
 
-	// 等待 exec 启动
+	// Wait briefly for the exec process to initialize
 	time.Sleep(200 * time.Millisecond)
 
 	return execResp.ID, nil
 }
 
-// AttachExec 附加到执行中的进程，返回 HijackedResponse
+// AttachExec attaches to a running exec process and returns a HijackedResponse.
 func (p *DockerPoder) AttachExec(ctx context.Context, execID string) (*types.HijackedResponse, error) {
 	resp, err := p.dockerClient.ContainerExecAttach(ctx, execID, container.ExecAttachOptions{Tty: true})
 	if err != nil {
@@ -386,7 +376,7 @@ func (p *DockerPoder) AttachExec(ctx context.Context, execID string) (*types.Hij
 	return &resp, nil
 }
 
-// InspectExec 获取执行进程信息
+// InspectExec returns status information about an exec process.
 func (p *DockerPoder) InspectExec(ctx context.Context, execID string) (*container.ExecInspect, error) {
 	info, err := p.dockerClient.ContainerExecInspect(ctx, execID)
 	if err != nil {
@@ -395,7 +385,7 @@ func (p *DockerPoder) InspectExec(ctx context.Context, execID string) (*containe
 	return &info, nil
 }
 
-// GetHealthStatus 获取健康状态
+// GetHealthStatus returns the health status of a pod.
 func (p *DockerPoder) GetHealthStatus(ctx context.Context, podID string) (*HealthStatus, error) {
 	pod, err := p.GetPod(ctx, podID)
 	if err != nil {
@@ -411,7 +401,7 @@ func (p *DockerPoder) GetHealthStatus(ctx context.Context, podID string) (*Healt
 	return status, nil
 }
 
-// WaitUntilRunning 等待 Pod 运行
+// WaitUntilRunning blocks until the pod reaches the Running state or the timeout expires.
 func (p *DockerPoder) WaitUntilRunning(ctx context.Context, podID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(1 * time.Second)
@@ -434,35 +424,15 @@ func (p *DockerPoder) WaitUntilRunning(ctx context.Context, podID string, timeou
 	}
 }
 
-// GetToolboxInfo 获取 Toolbox 信息
-func (p *DockerPoder) GetToolboxInfo(ctx context.Context, podID string) (*ToolboxInfo, error) {
-	pod, err := p.GetPod(ctx, podID)
-	if err != nil {
-		return nil, err
-	}
-
-	if pod.State != PodStateRunning {
-		return nil, fmt.Errorf("pod %s is not running", podID)
-	}
-
-	return &ToolboxInfo{
-		APIURL:      fmt.Sprintf("http://%s:8080", pod.IP),
-		APIToken:    "docker-token",
-		SSHPort:     22220,
-		SSHUser:     "daytona",
-		SSHPassword: "sandbox-ssh",
-	}, nil
-}
-
-// Cleanup 清理资源
+// Cleanup removes all SandrPod-managed containers.
 func (p *DockerPoder) Cleanup(ctx context.Context) error {
-	// 列出所有容器
+	// List all containers
 	containers, err := p.dockerClient.ContainerList(ctx, container.ListOptions{All: true})
 	if err != nil {
 		return err
 	}
 
-	// 删除所有 SandrPod 容器
+	// Remove all containers tagged as SandrPod-managed
 	for _, c := range containers {
 		if c.Labels["sandrpod"] == "true" {
 			_ = p.dockerClient.ContainerRemove(ctx, c.ID, container.RemoveOptions{Force: true})
@@ -472,17 +442,16 @@ func (p *DockerPoder) Cleanup(ctx context.Context) error {
 	return nil
 }
 
-// randomString 生成随机字符串
+// randomString generates a cryptographically random hex string from n bytes (resulting length is 2n).
 func randomString(n int) string {
-	const letters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 	b := make([]byte, n)
-	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+	if _, err := rand.Read(b); err != nil {
+		panic("crypto/rand unavailable: " + err.Error())
 	}
-	return string(b)
+	return hex.EncodeToString(b)
 }
 
-// ptr 返回指针
+// ptr returns a pointer to the given value.
 func ptr[T any](v T) *T {
 	return &v
 }

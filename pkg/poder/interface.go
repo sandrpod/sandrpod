@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// Poder 核心接口 - 对标 Daytona Runner
+// Poder core interface - modeled after the Daytona Runner
 
 package poder
 
@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// PodState Pod 状态
+// PodState represents the lifecycle state of a pod.
 type PodState string
 
 const (
@@ -20,103 +20,91 @@ const (
 	PodStateError     PodState = "ERROR"
 )
 
-// PodInfo Pod 信息
+// PodInfo holds information about a running pod.
 type PodInfo struct {
 	ID           string    // Pod ID (Sandbox ID)
-	Name         string    // 名称
-	Region       string    // 区域
-	Provider     string    // 云厂商
-	InstanceType string    // 实例类型
-	State        PodState  // 状态
-	IP           string    // 容器 IP
-	CreatedAt    time.Time // 创建时间
-	LastActivity time.Time // 最后活动时间
+	Name         string    // Pod name
+	Region       string    // Region
+	Provider     string    // Cloud provider
+	InstanceType string    // Instance type
+	State        PodState  // Current state
+	IP           string    // Container IP address
+	CreatedAt    time.Time // Creation timestamp
+	LastActivity time.Time // Last activity timestamp
 }
 
-// ToolboxInfo Toolbox 信息
-type ToolboxInfo struct {
-	APIURL      string // Toolbox API 地址
-	APIToken    string // API 认证 Token
-	SSHPort     int    // SSH 端口
-	SSHUser     string // SSH 用户
-	SSHPassword string // SSH 密码
-}
-
-// CreatePodRequest 创建 Pod 请求
+// CreatePodRequest is the request payload for creating a pod.
 type CreatePodRequest struct {
-	Name         string            // 名称
-	Region       string            // 区域
-	InstanceType string            // 实例类型
-	ImageID      string            // 镜像 ID
-	Provider     string            // 云厂商
-	NetworkConfig *NetworkConfig   // 网络配置
-	DiskConfig   *DiskConfig       // 磁盘配置
-	Labels       map[string]string // 标签
-	// 启动配置
-	APIURL       string // Toolbox API 地址
-	PoderVersion string // Poder 版本
-	LogLevel     string // 日志级别
+	Name         string            // Pod name
+	Region       string            // Region
+	InstanceType string            // Instance type
+	ImageID      string            // Image ID
+	Provider     string            // Cloud provider
+	NetworkConfig *NetworkConfig   // Network configuration
+	DiskConfig   *DiskConfig       // Disk configuration
+	Labels       map[string]string // Labels
+	// Bootstrap configuration
+	APIURL       string // Toolbox API URL
+	PoderVersion string // Poder version
+	LogLevel     string // Log level
 }
 
-// NetworkConfig 网络配置
+// NetworkConfig holds network configuration for a pod.
 type NetworkConfig struct {
 	VpcID         string // VPC ID
-	SubnetID      string // 子网 ID
-	SecurityGroup string // 安全组
+	SubnetID      string // Subnet ID
+	SecurityGroup string // Security group
 }
 
-// DiskConfig 磁盘配置
+// DiskConfig holds disk configuration for a pod.
 type DiskConfig struct {
-	SizeGiB    int    // 大小 GB
-	VolumeType string // 卷类型
+	SizeGiB    int    // Disk size in GiB
+	VolumeType string // Volume type
 }
 
-// CommandResult 命令执行结果
+// CommandResult holds the output of a remotely executed command.
 type CommandResult struct {
-	Output    string    // 标准输出
-	ExitCode  int       // 退出码
-	Stderr    string    // 错误输出
-	ExecutedAt time.Time // 执行时间
+	Output    string    // Standard output
+	ExitCode  int       // Exit code
+	Stderr    string    // Standard error output
+	ExecutedAt time.Time // Execution timestamp
 }
 
-// HealthStatus 健康状态
+// HealthStatus reports the health of a pod and its services.
 type HealthStatus struct {
-	PodReady     bool // Pod 运行中
-	DockerReady  bool // Docker 已安装
-	ToolboxReady bool // Toolbox 服务已启动
-	APIReachable bool // API 可访问
+	PodReady     bool // Pod is running
+	DockerReady  bool // Docker is installed and running
+	ToolboxReady bool // Toolbox service is started
+	APIReachable bool // API endpoint is reachable
 }
 
-// Poder Pod 执行器接口
+// Poder is the interface for a pod executor.
 type Poder interface {
-	// 元信息
-	Name() string        // Poder 标识: aws-runner, azure-runner
-	DisplayName() string // 显示名称
-	Region() string      // 所属区域
+	// Metadata
+	Name() string        // Poder identifier: aws-runner, azure-runner
+	DisplayName() string // Human-readable display name
+	Region() string      // Region this Poder manages
 
-	// Pod 生命周期
+	// Pod lifecycle
 	CreatePod(ctx context.Context, req *CreatePodRequest) (*PodInfo, error)
 	DeletePod(ctx context.Context, podID string) error
 	GetPod(ctx context.Context, podID string) (*PodInfo, error)
 	ListPods(ctx context.Context) ([]*PodInfo, error)
 
-	// Pod 暂停/恢复 (用于 Start/Stop)
+	// Pod pause/resume (used for Start/Stop)
 	PausePod(ctx context.Context, podID string) error
 	UnpausePod(ctx context.Context, podID string) error
 
-	// 远程执行
+	// Remote execution
 	ExecuteCommand(ctx context.Context, podID, command string) (*CommandResult, error)
 
-	// 健康检查
+	// Health checks
 	WaitUntilRunning(ctx context.Context, podID string, timeout time.Duration) error
 	GetHealthStatus(ctx context.Context, podID string) (*HealthStatus, error)
 
-	// Toolbox 信息
-	GetToolboxInfo(ctx context.Context, podID string) (*ToolboxInfo, error)
-
-	// 日志
+	// Logs
 	GetPodLogs(ctx context.Context, podID string, tail string) (string, error)
 
-	// 清理
+	// Cleanup
 	Cleanup(ctx context.Context) error
 }

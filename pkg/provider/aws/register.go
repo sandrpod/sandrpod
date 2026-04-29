@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// AWS Provider 注册
+// AWS Provider registration
 
 package aws
 
@@ -7,7 +7,7 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/provider"
 )
 
-// Register 注册 AWS Provider 到全局工厂
+// Register registers the AWS Provider with the global factory.
 func Register() error {
 	cfg := LoadConfig()
 

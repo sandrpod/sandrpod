@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// Provider 工厂 - 动态注册和获取 Provider
+// Provider Factory - dynamic provider registration and lookup
 
 package provider
 
@@ -10,17 +10,17 @@ import (
 	"time"
 )
 
-// Factory Provider 工厂
+// Factory manages registered providers.
 type Factory struct {
 	mu        sync.RWMutex
 	providers map[string]Provider
 }
 
-// 全局工厂实例
+// global factory singleton
 var globalFactory *Factory
 var initOnce sync.Once
 
-// GetFactory 获取全局工厂实例
+// GetFactory returns the global factory singleton.
 func GetFactory() *Factory {
 	initOnce.Do(func() {
 		globalFactory = &Factory{
@@ -30,7 +30,7 @@ func GetFactory() *Factory {
 	return globalFactory
 }
 
-// Register 注册 Provider
+// Register adds a provider to the factory.
 func (f *Factory) Register(p Provider) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -52,7 +52,7 @@ func (f *Factory) Register(p Provider) error {
 	return nil
 }
 
-// Get 获取 Provider
+// Get retrieves a registered provider by name.
 func (f *Factory) Get(name string) (Provider, error) {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -64,7 +64,7 @@ func (f *Factory) Get(name string) (Provider, error) {
 	return p, nil
 }
 
-// MustGet 获取 Provider，如果不存在 panic
+// MustGet retrieves a provider by name and panics if not found.
 func (f *Factory) MustGet(name string) Provider {
 	p, err := f.Get(name)
 	if err != nil {
@@ -73,7 +73,7 @@ func (f *Factory) MustGet(name string) Provider {
 	return p
 }
 
-// List 列出所有已注册的 Provider
+// List returns all registered providers.
 func (f *Factory) List() []Provider {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -85,7 +85,7 @@ func (f *Factory) List() []Provider {
 	return providers
 }
 
-// Names 列出所有 Provider 名称
+// Names returns the names of all registered providers.
 func (f *Factory) Names() []string {
 	f.mu.RLock()
 	defer f.mu.RUnlock()
@@ -97,7 +97,7 @@ func (f *Factory) Names() []string {
 	return names
 }
 
-// Unregister 注销 Provider
+// Unregister removes a provider from the factory.
 func (f *Factory) Unregister(name string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -109,7 +109,7 @@ func (f *Factory) Unregister(name string) error {
 	return nil
 }
 
-// RegisterFunc 便捷的注册函数
+// RegisterFunc is a convenience helper that registers a lazily-initialized provider.
 func RegisterFunc(name, displayName string, newFunc func() Provider) error {
 	return GetFactory().Register(&wrapperProvider{
 		name:        name,
@@ -118,7 +118,7 @@ func RegisterFunc(name, displayName string, newFunc func() Provider) error {
 	})
 }
 
-// wrapperProvider 包装器
+// wrapperProvider wraps a lazy-initialized Provider.
 type wrapperProvider struct {
 	name        string
 	displayName string

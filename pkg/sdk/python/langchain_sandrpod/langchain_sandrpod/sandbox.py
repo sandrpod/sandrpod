@@ -39,7 +39,7 @@ class SandrPodSandbox(BaseSandbox):
         from deepagents import create_deep_agent
         from deepagents.middleware import FilesystemMiddleware
 
-        client = SandrPodClient(api_url="http://localhost:18080")
+        client = SandrPodClient(api_url="http://localhost:8080")
         with client.sandbox("agent-sb") as sb:
             agent = create_deep_agent(
                 middleware=[FilesystemMiddleware(backend=sb)]
@@ -64,7 +64,7 @@ class SandrPodSandbox(BaseSandbox):
             sandbox_name:    Sandbox 名称（在 API Server 中唯一）。
             api_url:         API Server 地址，默认读取
                              ``SANDRPOD_API_URL`` 环境变量，
-                             再回退到 ``http://localhost:18080``。
+                             再回退到 ``http://localhost:8080``。
             api_token:       Bearer 认证 token，默认读取
                              ``SANDRPOD_API_TOKEN`` 环境变量。
             default_timeout: execute() 未指定 timeout 时的默认超时（秒）。
@@ -72,7 +72,7 @@ class SandrPodSandbox(BaseSandbox):
         """
         self._sandbox_name = sandbox_name
         self._base_url = (
-            api_url or os.environ.get("SANDRPOD_API_URL") or "http://localhost:18080"
+            api_url or os.environ.get("SANDRPOD_API_URL") or "http://localhost:8080"
         ).rstrip("/")
         self._api_token = api_token or os.environ.get("SANDRPOD_API_TOKEN")
         self._default_timeout = default_timeout

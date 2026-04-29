@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// 阿里云 Provider 配置
+// Aliyun Provider configuration
 
 package aliyun
 
@@ -7,7 +7,7 @@ import (
 	"os"
 )
 
-// LoadConfig 从环境变量加载配置
+// LoadConfig loads configuration from environment variables.
 func LoadConfig() *Config {
 	return &Config{
 		Region:    getEnv("ALIYUN_REGION", "cn-hangzhou"),

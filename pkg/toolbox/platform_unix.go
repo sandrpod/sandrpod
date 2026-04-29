@@ -52,9 +52,6 @@ func killProcess(cmd *exec.Cmd) {
 	}
 }
 
-// toNativePath is a no-op on Unix; paths already use forward slashes.
-func toNativePath(p string) string { return p }
-
 // buildCommandWrapper constructs a shell snippet that runs command inside a
 // persistent bash session, captures all output to logFile, and writes the
 // numeric exit code to exitFile.

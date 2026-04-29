@@ -1,7 +1,7 @@
 //go:build !windows
 
 // Copyright 2024 SandrPod
-// PTY Session Manager - 交互式 Shell 会话管理 (Unix/macOS)
+// PTY Session Manager - interactive shell session management (Unix/macOS)
 
 package toolbox
 
@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,7 +19,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// PtySession PTY 会话
+// PtySession holds state for an active PTY-backed terminal session.
 type PtySession struct {
 	ID           string
 	Pty          *os.File
@@ -30,31 +31,50 @@ type PtySession struct {
 	closed       atomic.Bool
 }
 
-// PtyManager PTY 会话管理器
+// PtyManager tracks all active PTY sessions.
 type PtyManager struct {
 	mu       sync.RWMutex
 	sessions map[string]*PtySession
 }
 
-// NewPtyManager 创建 PTY 管理器
+// NewPtyManager creates a new PtyManager.
 func NewPtyManager() *PtyManager {
 	return &PtyManager{
 		sessions: make(map[string]*PtySession),
 	}
 }
 
-// CreateSession 创建新的 PTY 会话
+// CreateSession starts a new PTY-backed bash session with the given terminal dimensions.
 func (m *PtyManager) CreateSession(width, height int) (*PtySession, error) {
-	// 创建 PTY
-	cmd := exec.Command("/bin/bash", "-l")
-	cmd.Env = []string{"TERM=xterm-256color"}
+	// Allocate a PTY and start the shell.
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/bash"
+	}
+	cmd := exec.Command(shell, "-l")
+	// Inherit the full process environment so login shells can load profile
+	// scripts correctly (HOME, PATH, USER, etc.). Override TERM so the
+	// terminal behaves consistently regardless of the parent's TERM setting.
+	env := os.Environ()
+	termSet := false
+	for i, e := range env {
+		if strings.HasPrefix(e, "TERM=") {
+			env[i] = "TERM=xterm-256color"
+			termSet = true
+			break
+		}
+	}
+	if !termSet {
+		env = append(env, "TERM=xterm-256color")
+	}
+	cmd.Env = env
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
 		return nil, fmt.Errorf("failed to start PTY: %w", err)
 	}
 
-	// 设置终端大小
+	// Apply the initial terminal size.
 	pty.Setsize(ptmx, &pty.Winsize{
 		Rows: uint16(height),
 		Cols: uint16(width),
@@ -78,7 +98,7 @@ func (m *PtyManager) CreateSession(width, height int) (*PtySession, error) {
 	return session, nil
 }
 
-// GetSession 获取会话
+// GetSession returns the PTY session for the given ID.
 func (m *PtyManager) GetSession(id string) (*PtySession, bool) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -86,7 +106,7 @@ func (m *PtyManager) GetSession(id string) (*PtySession, bool) {
 	return session, ok
 }
 
-// CloseSession 关闭会话
+// CloseSession closes the PTY and kills the underlying process for the given session.
 func (m *PtyManager) CloseSession(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -105,7 +125,7 @@ func (m *PtyManager) CloseSession(id string) error {
 	return nil
 }
 
-// ResizeSession 调整终端大小
+// ResizeSession updates the terminal dimensions for an existing PTY session.
 func (m *PtyManager) ResizeSession(id string, width, height int) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -121,7 +141,7 @@ func (m *PtyManager) ResizeSession(id string, width, height int) error {
 	})
 }
 
-// ListSessions 列出所有会话
+// ListSessions returns all active PTY sessions.
 func (m *PtyManager) ListSessions() []*PtySession {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -132,19 +152,19 @@ func (m *PtyManager) ListSessions() []*PtySession {
 	return sessions
 }
 
-// PtyHandler PTY WebSocket 处理器
+// PtyHandler bridges PTY sessions to WebSocket connections.
 type PtyHandler struct {
 	manager *PtyManager
 }
 
-// NewPtyHandler 创建 PTY 处理器
+// NewPtyHandler creates a new PtyHandler with its own PtyManager.
 func NewPtyHandler() *PtyHandler {
 	return &PtyHandler{
 		manager: NewPtyManager(),
 	}
 }
 
-// CreateSession 处理创建 PTY 会话请求
+// CreateSession creates a new PTY session and returns its ID.
 func (h *PtyHandler) CreateSession(width, height int) (string, error) {
 	session, err := h.manager.CreateSession(width, height)
 	if err != nil {
@@ -153,7 +173,8 @@ func (h *PtyHandler) CreateSession(width, height int) (string, error) {
 	return session.ID, nil
 }
 
-// HandleWebSocket 处理 WebSocket 连接
+// HandleWebSocket bridges a WebSocket connection to a PTY session, proxying data
+// in both directions until either side closes the connection.
 func (h *PtyHandler) HandleWebSocket(conn *websocket.Conn, sessionID string) error {
 	session, ok := h.manager.GetSession(sessionID)
 	if !ok {
@@ -162,11 +183,11 @@ func (h *PtyHandler) HandleWebSocket(conn *websocket.Conn, sessionID string) err
 
 	session.LastActivity = time.Now()
 
-	// 双向复制: WebSocket <-> PTY
+	// Bidirectional copy: WebSocket <-> PTY
 	done := make(chan struct{})
 	closeOnce := sync.Once{}
 
-	// 从 PTY 读取输出发送到 WebSocket
+	// Forward PTY output to the WebSocket client.
 	go func() {
 		buf := make([]byte, 4096)
 		for {
@@ -187,7 +208,7 @@ func (h *PtyHandler) HandleWebSocket(conn *websocket.Conn, sessionID string) err
 		}
 	}()
 
-	// 从 WebSocket 读取输入发送到 PTY
+	// Forward WebSocket input to the PTY.
 	go func() {
 		for {
 			msgType, msg, err := conn.ReadMessage()
@@ -206,7 +227,7 @@ func (h *PtyHandler) HandleWebSocket(conn *websocket.Conn, sessionID string) err
 
 			session.LastActivity = time.Now()
 
-			// 处理终端 resize 命令
+			// Handle terminal resize commands encoded as Telnet NAWS sequences.
 			if len(msg) >= 6 && msg[0] == 0xFF && msg[1] == 0xFD && msg[2] == 0x1C {
 				// IAC SB NAWS <Cols> <Rows> IAC SE
 				if len(msg) >= 8 && msg[5] == 0xFF && msg[6] == 0xFF {
@@ -217,7 +238,7 @@ func (h *PtyHandler) HandleWebSocket(conn *websocket.Conn, sessionID string) err
 				}
 			}
 
-			// 写入 PTY
+			// Write the message to the PTY stdin.
 			if _, err := session.Pty.Write(msg); err != nil {
 				fmt.Printf("PTY write error: %v\n", err)
 				closeOnce.Do(func() { close(done) })
@@ -227,12 +248,12 @@ func (h *PtyHandler) HandleWebSocket(conn *websocket.Conn, sessionID string) err
 	}()
 
 	<-done
-	// 关闭 WebSocket 连接时会关闭会话
+	// Close the session when the WebSocket connection ends.
 	h.manager.CloseSession(sessionID)
 	return nil
 }
 
-// CloseSession 关闭会话
+// CloseSession closes the PTY session with the given ID.
 func (h *PtyHandler) CloseSession(sessionID string) error {
 	return h.manager.CloseSession(sessionID)
 }

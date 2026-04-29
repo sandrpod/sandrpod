@@ -13,20 +13,25 @@ class CLIClient:
     def __init__(
         self,
         api_url: str = "http://localhost:8080",
-        timeout: int = 30
+        timeout: int = 30,
+        token: Optional[str] = None,
     ):
         self.api_url = api_url.rstrip("/")
         self.timeout = timeout
         self.session = requests.Session()
-        self.session.headers.update({
-            "Content-Type": "application/json",
-        })
+        # Only set Authorization in session headers; Content-Type is set per-request
+        # so that multipart/form-data uploads can override it automatically.
+        if token:
+            self.session.headers["Authorization"] = f"Bearer {token}"
 
     def _request(self, method: str, path: str, timeout: int = None, **kwargs) -> requests.Response:
         """发送 HTTP 请求"""
         url = f"{self.api_url}{path}"
         if timeout is None:
             timeout = self.timeout
+        # Set Content-Type: application/json for non-file requests
+        if "files" not in kwargs and "data" not in kwargs:
+            kwargs.setdefault("headers", {})["Content-Type"] = "application/json"
         resp = self.session.request(method, url, timeout=timeout, **kwargs)
         if resp.status_code >= 400:
             try:
@@ -87,7 +92,8 @@ class CLIClient:
         name: str,
         region: str = "local",
         provider_type: str = "local",
-        instance_type: str = "medium",
+        instance_type: str = "",
+        image: str = "",
     ) -> Dict[str, Any]:
         """
         创建 Sandbox
@@ -95,47 +101,37 @@ class CLIClient:
         Args:
             name: 名称
             region: 区域
-            provider_type: Provider 类型 (aws, aliyun, local, docker)
-            instance_type: 实例类型
+            provider_type: Provider 类型 (aws, aliyun, local)
+            instance_type: 实例类型 (可选)
+            image: 容器镜像 ID (可选，空则使用 Poder 默认镜像)
 
         Returns:
-            Sandbox 信息
+            {job_id, status, sandbox} 字典
         """
-        data = {
+        data: Dict[str, Any] = {
             "name": name,
             "region": region,
             "provider_type": provider_type,
-            "instance_type": instance_type,
         }
-        # 调用 /api/v1/sandboxes，让 Scheduler 处理编排逻辑
+        if instance_type:
+            data["instance_type"] = instance_type
+        if image:
+            data["image_id"] = image
         resp = self._request("POST", "/api/v1/sandboxes", json=data)
         return resp.json()
 
     def delete_sandbox(self, name: str) -> None:
-        """删除 Sandbox"""
-        # 需要先获取 sandbox 所在的 Poder
-        sandbox = self.get_sandbox(name)
-        poder_id = sandbox.get("poder_id")
-        if not poder_id:
-            raise RuntimeError("Poder ID not found for sandbox")
-        self._request("DELETE", f"/api/v1/poders/{poder_id}/sandboxes/{name}")
+        """删除 Sandbox（同时清理容器，tunnel 不可用时也会删除记录）"""
+        self._request("DELETE", f"/api/v1/sandboxes/{name}")
 
     def start_sandbox(self, name: str) -> Dict[str, Any]:
         """启动 Sandbox"""
-        sandbox = self.get_sandbox(name)
-        poder_id = sandbox.get("poder_id")
-        if not poder_id:
-            raise RuntimeError("Poder ID not found for sandbox")
-        resp = self._request("POST", f"/api/v1/poders/{poder_id}/sandboxes/{name}/start")
+        resp = self._request("POST", f"/api/v1/sandboxes/{name}/start")
         return resp.json()
 
     def stop_sandbox(self, name: str) -> Dict[str, Any]:
         """停止 Sandbox"""
-        sandbox = self.get_sandbox(name)
-        poder_id = sandbox.get("poder_id")
-        if not poder_id:
-            raise RuntimeError("Poder ID not found for sandbox")
-        resp = self._request("POST", f"/api/v1/poders/{poder_id}/sandboxes/{name}/stop")
+        resp = self._request("POST", f"/api/v1/sandboxes/{name}/stop")
         return resp.json()
 
     def get_sandbox_logs(self, name: str, tail: str = "100") -> str:
@@ -209,7 +205,7 @@ class CLIClient:
         """写入文件 (通过 upload)"""
         files = {"file": (path, content.encode(), "application/octet-stream")}
         encoded_path = urllib.parse.quote(path, safe="")
-        resp = requests.post(
+        resp = self.session.post(
             f"{self.api_url}/api/v1/sandboxes/{name}/toolbox/files/upload?path={encoded_path}",
             files=files,
             timeout=self.timeout
@@ -223,7 +219,7 @@ class CLIClient:
         for fname, fcontent in files:
             file_dict[fname] = (fname, io.BytesIO(fcontent), "application/octet-stream")
         encoded_path = urllib.parse.quote(path, safe="")
-        resp = requests.post(
+        resp = self.session.post(
             f"{self.api_url}/api/v1/sandboxes/{name}/toolbox/files/bulk-upload?path={encoded_path}",
             files=file_dict,
             timeout=self.timeout
@@ -237,13 +233,6 @@ class CLIClient:
         for path in paths:
             results.append(self.read_file(name, path))
         return results
-
-    def delete_file(self, name: str, path: str) -> Dict[str, Any]:
-        """删除文件/目录"""
-        poder_url = self._get_poder_url(name)
-        resp = requests.delete(f"{poder_url}/files/delete", params={"path": path}, timeout=self.timeout)
-        resp.raise_for_status()
-        return resp.json()
 
     def create_folder(self, name: str, path: str) -> Dict[str, Any]:
         """创建目录"""

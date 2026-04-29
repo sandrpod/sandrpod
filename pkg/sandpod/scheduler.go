@@ -1,6 +1,6 @@
 // Copyright 2024 SandrPod
-// Scheduler - Sandbox 创建调度编排逻辑
-// 根据 Provider 类型调度：优先使用已有 Poder 资源，不够时创建新 VM
+// Scheduler - sandbox creation scheduling and orchestration logic
+// Dispatches by provider type: prefers existing Poder resources and creates a new VM when none are available
 
 package sandpod
 
@@ -13,16 +13,16 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/provider"
 )
 
-// DefaultAPIURL 默认 API Server URL (本地开发用)
+// DefaultAPIURL is the default API Server URL (used for local development)
 var DefaultAPIURL = "http://localhost:8080"
 
-// Scheduler 调度器
+// Scheduler dispatches sandbox creation requests to available Poder nodes
 type Scheduler struct {
 	poderStore PoderRepository
 	apiURL     string
 }
 
-// NewScheduler 创建调度器
+// NewScheduler creates a new Scheduler
 func NewScheduler(poderStore PoderRepository, apiURL string) *Scheduler {
 	if apiURL == "" {
 		apiURL = DefaultAPIURL
@@ -33,50 +33,50 @@ func NewScheduler(poderStore PoderRepository, apiURL string) *Scheduler {
 	}
 }
 
-// ScheduleSandboxCreation 调度 Sandbox 创建
-// 流程：
-// 1. 查询指定 provider 类型的可用 Poder
-// 2. 如有资源，直接在 Poder 创建
-// 3. 如无资源，调用 Provider 创建 VM，等待 Poder 注册，再创建
+// ScheduleSandboxCreation schedules sandbox creation.
+// Flow:
+// 1. Find an available Poder of the requested provider type
+// 2. If one exists, create the sandbox on it directly
+// 3. Otherwise, provision a new VM via the provider, wait for Poder to register, then create
 func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSandboxRequest) (*Job, error) {
 	providerType := req.ProviderType
 	if providerType == "" {
 		providerType = "local"
 	}
 
-	// 1. 查询可用 Poder
+	// 1. Find an available Poder
 	poder, err := s.poderStore.SelectBest(req.Region, providerType)
 	if err == nil && poder != nil {
 		log.Printf("[Scheduler] Found available poder %s for provider %s", poder.ID, providerType)
 		return s.createJobForPoder(req, poder)
 	}
 
-	// 2. 没有可用 Poder，需要先创建 VM (仅对云 provider 有效)
+	// 2. No available Poder — must provision a VM first (cloud providers only)
 	if providerType == "local" || providerType == "docker" {
 		return nil, fmt.Errorf("no available %s poder found", providerType)
 	}
 
 	log.Printf("[Scheduler] No available poder for %s, creating new VM", providerType)
 
-	// 3. 调用 Provider 创建 VM
+	// 3. Create VM via provider
 	vm, err := s.createVMWithProvider(ctx, providerType, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create VM: %w", err)
 	}
 
-	// 4. 等待 VM 就绪
+	// 4. Wait for VM to be ready
 	log.Printf("[Scheduler] Waiting for VM %s to be ready", vm.ID)
 	if err := s.waitForVMReady(ctx, providerType, vm.ID); err != nil {
 		return nil, fmt.Errorf("VM not ready: %w", err)
 	}
 
-	// 5. 在 VM 上安装 Docker 并启动 Poder
+	// 5. Install Docker and start Poder on the VM
 	log.Printf("[Scheduler] Setting up poder on VM %s", vm.ID)
 	if err := s.setupPoderOnVM(ctx, providerType, vm); err != nil {
 		return nil, fmt.Errorf("failed to setup poder: %w", err)
 	}
 
-	// 6. 等待 Poder 注册上线
+	// 6. Wait for Poder to register and come online
 	log.Printf("[Scheduler] Waiting for poder registration for VM %s", vm.ID)
 	poder = s.waitForPoderRegistration(providerType, req.Region, 5*time.Minute)
 	if poder == nil {
@@ -85,11 +85,11 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 
 	log.Printf("[Scheduler] Poder %s registered successfully", poder.ID)
 
-	// 7. 创建 Job
+	// 7. Create the job
 	return s.createJobForPoder(req, poder)
 }
 
-// createVMWithProvider 调用 Provider 创建 VM
+// createVMWithProvider provisions a VM through the specified cloud provider
 func (s *Scheduler) createVMWithProvider(ctx context.Context, providerType string, req *CreateSandboxRequest) (*provider.VMInfo, error) {
 	p := provider.GetFactory().MustGet(providerType)
 
@@ -116,7 +116,7 @@ func (s *Scheduler) createVMWithProvider(ctx context.Context, providerType strin
 	return vm, nil
 }
 
-// waitForVMReady 等待 VM 就绪
+// waitForVMReady polls until the VM reports a healthy status or the deadline passes
 func (s *Scheduler) waitForVMReady(ctx context.Context, providerType, vmID string) error {
 	p := provider.GetFactory().MustGet(providerType)
 
@@ -142,11 +142,11 @@ func (s *Scheduler) waitForVMReady(ctx context.Context, providerType, vmID strin
 	return fmt.Errorf("timeout waiting for VM %s", vmID)
 }
 
-// setupPoderOnVM 在 VM 上安装 Docker 并启动 Poder 容器
+// setupPoderOnVM installs Docker and starts the Poder container on a VM
 func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType string, vm *provider.VMInfo) error {
 	p := provider.GetFactory().MustGet(providerType)
 
-	// 1. 安装 Docker
+	// 1. Install Docker
 	installDocker := `curl -fsSL https://get.docker.com | sh`
 	log.Printf("[Scheduler] Installing Docker on VM %s", vm.ID)
 
@@ -158,20 +158,21 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType string, vm 
 		return fmt.Errorf("docker install failed: %s", result.Stderr)
 	}
 
-	// 2. 启动 Poder 容器
-	// PROXY_HOST 应该是 VM 的公网 IP，供容器内服务访问外部使用
+	// 2. Start the Poder container.
+	// PROXY_HOST should be the VM's public IP so services inside the container can reach the outside.
+	// Single-quote all variable values to prevent shell metacharacter injection.
 	poderStartCmd := fmt.Sprintf(
-		`docker run -d \
-			--name sandrpod-poder \
-			--restart=always \
-			-e API_URL=%s \
-			-e PROXY_HOST=%s \
-			-e REGION=%s \
-			-v /var/run/docker.sock:/var/run/docker.sock \
-			sandrpod/poder:latest`,
-		s.apiURL,
-		vm.PublicIP,
-		vm.Region,
+		`docker run -d`+
+			` --name sandrpod-poder`+
+			` --restart=always`+
+			` -e API_URL='%s'`+
+			` -e PROXY_HOST='%s'`+
+			` -e REGION='%s'`+
+			` -v /var/run/docker.sock:/var/run/docker.sock`+
+			` sandrpod/poder:latest`,
+		shellQuoteSingleValue(s.apiURL),
+		shellQuoteSingleValue(vm.PublicIP),
+		shellQuoteSingleValue(vm.Region),
 	)
 
 	log.Printf("[Scheduler] Starting poder container on VM %s", vm.ID)
@@ -188,15 +189,14 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType string, vm 
 	return nil
 }
 
-// waitForPoderRegistration 等待 Poder 注册上线
-// 通过轮询 poderStore 检查是否有新的对应类型的 Poder 上线
+// waitForPoderRegistration polls poderStore until a Poder of the matching type comes online
+// or the timeout expires.
 func (s *Scheduler) waitForPoderRegistration(providerType, region string, timeout time.Duration) *PoderInfo {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		// 查找新注册的 Poder
-		// 这里简单处理：找第一个匹配 providerType 和 region 的 ONLINE Poder
-		// 更精确的做法是用 vmID 关联，但当前 RegisterPoderRequest 没有 vmID 字段
+		// Simple approach: return the first ONLINE Poder matching providerType and region.
+		// A more precise approach would correlate by vmID, but RegisterPoderRequest does not carry a vmID field.
 		poder, err := s.poderStore.SelectBest(region, providerType)
 		if err == nil && poder != nil {
 			return poder
@@ -209,7 +209,7 @@ func (s *Scheduler) waitForPoderRegistration(providerType, region string, timeou
 	return nil
 }
 
-// createJobForPoder 为指定的 Poder 创建 Job
+// createJobForPoder builds a Job targeting the specified Poder
 func (s *Scheduler) createJobForPoder(req *CreateSandboxRequest, poder *PoderInfo) (*Job, error) {
 	job := &Job{
 		ID:           GenerateJobID(),
@@ -230,4 +230,18 @@ func (s *Scheduler) createJobForPoder(req *CreateSandboxRequest, poder *PoderInf
 		job.ID, poder.ID, poder.URL, req.ProviderType)
 
 	return job, nil
+}
+
+// shellQuoteSingleValue escapes a value for safe use inside a shell single-quoted string.
+// Single quotes are replaced with the '\'' pattern so the string can be embedded without shell injection.
+func shellQuoteSingleValue(s string) string {
+	result := ""
+	for _, r := range s {
+		if r == '\'' {
+			result += "'\\''"
+		} else {
+			result += string(r)
+		}
+	}
+	return result
 }

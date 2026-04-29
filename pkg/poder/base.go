@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// Poder 抽象层实现
+// Poder abstraction layer implementation
 
 package poder
 
@@ -10,8 +10,8 @@ import (
 	"time"
 )
 
-// BasePoder Poder 抽象基类
-// 提供通用功能，子类只需实现特定云厂商的方法
+// BasePoder is the abstract base for Poder implementations.
+// It provides common functionality; concrete types only need to implement provider-specific methods.
 type BasePoder struct {
 	name        string
 	displayName string
@@ -20,7 +20,7 @@ type BasePoder struct {
 	pods        map[string]*PodInfo
 }
 
-// NewBasePoder 创建基础 Poder
+// NewBasePoder creates a new BasePoder with the given name, display name, and region.
 func NewBasePoder(name, displayName, region string) *BasePoder {
 	return &BasePoder{
 		name:        name,
@@ -42,7 +42,7 @@ func (p *BasePoder) Region() string {
 	return p.region
 }
 
-// ListPods 列出所有 Pod (通用实现)
+// ListPods returns all tracked pods (common implementation).
 func (p *BasePoder) ListPods(ctx context.Context) ([]*PodInfo, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -54,7 +54,7 @@ func (p *BasePoder) ListPods(ctx context.Context) ([]*PodInfo, error) {
 	return pods, nil
 }
 
-// UpdatePodState 更新 Pod 状态
+// UpdatePodState updates the state of a tracked pod.
 func (p *BasePoder) UpdatePodState(podID string, state PodState) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -64,7 +64,7 @@ func (p *BasePoder) UpdatePodState(podID string, state PodState) {
 	}
 }
 
-// GetPodByID 获取 Pod (通用实现)
+// GetPodByID retrieves a pod by ID (common implementation).
 func (p *BasePoder) GetPodByID(podID string) (*PodInfo, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -73,7 +73,7 @@ func (p *BasePoder) GetPodByID(podID string) (*PodInfo, bool) {
 	return pod, ok
 }
 
-// GetPodByName 根据名称获取 Pod
+// GetPodByName retrieves a pod by name.
 func (p *BasePoder) GetPodByName(name string) (*PodInfo, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -86,7 +86,7 @@ func (p *BasePoder) GetPodByName(name string) (*PodInfo, bool) {
 	return nil, false
 }
 
-// RegisterPod 注册 Pod
+// RegisterPod adds a pod to the internal map.
 func (p *BasePoder) RegisterPod(pod *PodInfo) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -94,7 +94,7 @@ func (p *BasePoder) RegisterPod(pod *PodInfo) {
 	p.pods[pod.ID] = pod
 }
 
-// UnregisterPod 注销 Pod
+// UnregisterPod removes a pod from the internal map.
 func (p *BasePoder) UnregisterPod(podID string) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -106,11 +106,11 @@ func (p *BasePoder) UnregisterPod(podID string) error {
 	return nil
 }
 
-// DefaultWaitUntilRunning 默认的等待 Running 实现
+// DefaultWaitUntilRunning polls until the pod reaches the Running state or the timeout elapses.
 func (p *BasePoder) DefaultWaitUntilRunning(ctx context.Context, podID string, timeout time.Duration) error {
 	deadline, ok := ctx.Deadline()
 	if ok {
-		timeout = deadline.Sub(time.Now())
+		timeout = time.Until(deadline)
 	}
 
 	ticker := time.NewTicker(2 * time.Second)

@@ -1,6 +1,6 @@
 // Copyright 2024 SandrPod
-// Toolbox - 代码执行服务
-// 在 Sandbox 容器内运行
+// Toolbox - code execution service
+// Runs inside sandbox containers
 
 package main
 
@@ -17,8 +17,9 @@ import (
 )
 
 var (
-	port = flag.Int("port", 8080, "Toolbox server port")
-	help = flag.Bool("help", false, "Show help")
+	port  = flag.Int("port", 8080, "Toolbox server port")
+	token = flag.String("token", os.Getenv("TOOLBOX_TOKEN"), "Bearer token for authentication (empty = no auth)")
+	help  = flag.Bool("help", false, "Show help")
 )
 
 func main() {
@@ -32,16 +33,16 @@ func main() {
 	log.Printf("Starting SandrPod Toolbox v0.2.0 on port %d", *port)
 
 	addr := fmt.Sprintf(":%d", *port)
-	server := toolbox.NewServer(addr)
+	server := toolbox.NewServer(addr, *token)
 
-	// 启动服务器
+	// Start the server
 	go func() {
 		if err := server.Start(); err != nil {
 			log.Printf("Toolbox server error: %v", err)
 		}
 	}()
 
-	// 等待退出信号
+	// Wait for shutdown signal
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan

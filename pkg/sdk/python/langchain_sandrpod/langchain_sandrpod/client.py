@@ -19,11 +19,11 @@ class SandrPodClient:
     优先级（从高到低）：
       1. 构造参数
       2. 环境变量 ``SANDRPOD_API_URL`` / ``SANDRPOD_API_TOKEN``
-      3. 默认值 ``http://localhost:18080``
+      3. 默认值 ``http://localhost:8080``
 
     Example::
 
-        client = SandrPodClient(api_url="http://localhost:18080")
+        client = SandrPodClient(api_url="http://localhost:8080")
 
         # 一次性使用：用完自动删除
         with client.sandbox("my-sb") as sb:
@@ -36,7 +36,7 @@ class SandrPodClient:
         client.delete_sandbox("long-lived")
     """
 
-    DEFAULT_API_URL = "http://localhost:18080"
+    DEFAULT_API_URL = "http://localhost:8080"
 
     def __init__(
         self,

@@ -13,7 +13,7 @@ CONFIG_DIR = Path.home() / ".sandrpod-cli"
 CONFIG_FILE = CONFIG_DIR / "config.yaml"
 
 # 默认配置
-DEFAULT_API_URL = "http://localhost:18080"
+DEFAULT_API_URL = "http://localhost:8080"
 
 
 def load_config():
@@ -50,10 +50,26 @@ def get_configured_api_url():
     return DEFAULT_API_URL
 
 
+def get_configured_token():
+    """获取 API token，优先级：CLI参数 > 环境变量 > 配置文件"""
+    env_token = os.environ.get("SANDRPOD_API_TOKEN")
+    if env_token:
+        return env_token
+    config = load_config()
+    return config.get("api_token")
+
+
 def save_config_api_url(url):
     """保存 API URL 到配置文件"""
     config = load_config()
     config["api_url"] = url
+    save_config(config)
+
+
+def save_config_token(token):
+    """保存 token 到配置文件"""
+    config = load_config()
+    config["api_token"] = token
     save_config(config)
 
 
@@ -67,23 +83,56 @@ def cli(ctx, api_url, timeout):
     # 如果没有传入 --api-url，使用配置的 URL
     if api_url is None:
         api_url = get_configured_api_url()
-    ctx.obj["client"] = CLIClient(api_url=api_url, timeout=timeout)
+    token = get_configured_token()
+    ctx.obj["client"] = CLIClient(api_url=api_url, timeout=timeout, token=token)
 
 
 # ========== Config Commands ==========
 
-@cli.command()
+@cli.group()
+def config():
+    """Manage CLI configuration (~/.sandrpod-cli/config.yaml)"""
+    pass
+
+
+@config.command(name="view")
+def config_view():
+    """Show current configuration"""
+    url = get_configured_api_url()
+    token = get_configured_token()
+    click.echo(f"API URL : {url}")
+    if token:
+        masked = token[:4] + "****" + token[-4:] if len(token) > 8 else "****"
+        click.echo(f"Token   : {masked} (set)")
+    else:
+        click.echo("Token   : (not set)")
+    click.echo(f"Config  : {CONFIG_FILE}")
+
+
+@config.command(name="set-url")
 @click.argument("url")
-def set_api_url(url):
-    """Set the default API URL"""
+def config_set_url(url):
+    """Set the API server URL"""
     save_config_api_url(url)
+    click.echo(f"API URL set to: {url}")
 
 
-@cli.command()
-def get_api_url():
-    """Show the current API URL"""
-    current = get_configured_api_url()
-    click.echo(f"Current API URL: {current}")
+@config.command(name="set-token")
+@click.argument("token")
+def config_set_token(token):
+    """Set the API token"""
+    save_config_token(token)
+    masked = token[:4] + "****" + token[-4:] if len(token) > 8 else "****"
+    click.echo(f"Token set: {masked}")
+
+
+@config.command(name="unset-token")
+def config_unset_token():
+    """Remove the saved API token"""
+    cfg = load_config()
+    cfg.pop("api_token", None)
+    save_config(cfg)
+    click.echo("Token removed")
 
 
 # ========== Sandbox Commands ==========
@@ -116,17 +165,23 @@ def list(ctx):
 @cli.command()
 @click.argument("name")
 @click.option("--region", default="local", help="Region")
-@click.option("--provider-type", default="local", help="Provider type: aws, aliyun, local, docker")
-@click.option("--instance-type", default="medium", help="Instance type")
+@click.option("--provider", "--provider-type", "provider_type", default="local",
+              help="Provider type: aws, aliyun, local")
+@click.option("--instance-type", default="", help="Instance type (optional)")
+@click.option("--image", default="", help="Container image ID (optional, uses Poder default if omitted)")
 @click.pass_context
-def create(ctx, name, region, provider_type, instance_type):
+def create(ctx, name, region, provider_type, instance_type, image):
     """Create a sandbox"""
     client = ctx.obj["client"]
     try:
-        sandbox = client.create_sandbox(name, region, provider_type, instance_type)
-        click.echo(f"Sandbox created: {sandbox.get('name')}")
-        click.echo(f"State: {sandbox.get('state')}")
-        click.echo(f"Provider: {sandbox.get('provider_type')}")
+        resp = client.create_sandbox(name, region, provider_type, instance_type, image)
+        job_id = resp.get("job_id", "N/A")
+        status = resp.get("status", "N/A")
+        sb_name = resp.get("sandbox", {}).get("name", name)
+        click.echo(f"Sandbox:  {sb_name}")
+        click.echo(f"Job ID:   {job_id}")
+        click.echo(f"Status:   {status}")
+        click.echo(f"Tip: run `sandrpod-cli get {sb_name}` to check state")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -198,8 +253,8 @@ def start(ctx, name):
     """Start a sandbox"""
     client = ctx.obj["client"]
     try:
-        sandbox = client.start_sandbox(name)
-        click.echo(f"Sandbox started: {sandbox.get('name')}")
+        client.start_sandbox(name)
+        click.echo(f"Sandbox '{name}' started")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -212,8 +267,8 @@ def stop(ctx, name):
     """Stop a sandbox"""
     client = ctx.obj["client"]
     try:
-        sandbox = client.stop_sandbox(name)
-        click.echo(f"Sandbox stopped: {sandbox.get('name')}")
+        client.stop_sandbox(name)
+        click.echo(f"Sandbox '{name}' stopped")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -442,8 +497,19 @@ def fs_upload(ctx, name, local_path, remote_path):
         with open(local_path, "rb") as f:
             content = f.read()
         size = len(content)
-        result = client.upload_files(name, [(filename, content)], remote_path)
-        click.echo(f"Uploaded: {local_path} → {remote_path}/{filename} ({size} bytes)")
+        # If remote_path ends with '/', treat as directory and append filename.
+        # Otherwise use remote_path as the exact destination file path.
+        if remote_path.endswith("/"):
+            dest_dir = remote_path.rstrip("/")
+            dest_file = f"{dest_dir}/{filename}"
+            result = client.upload_files(name, [(filename, content)], dest_dir)
+        else:
+            # remote_path is the exact file path; use its directory as upload dest
+            dest_dir = os.path.dirname(remote_path)
+            dest_filename = os.path.basename(remote_path)
+            result = client.upload_files(name, [(dest_filename, content)], dest_dir)
+            dest_file = remote_path
+        click.echo(f"Uploaded: {local_path} → {dest_file} ({size} bytes)")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

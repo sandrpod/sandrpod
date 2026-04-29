@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// 阿里云 Provider 实现
+// Alibaba Cloud provider implementation
 
 package aliyun
 
@@ -15,7 +15,7 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/provider"
 )
 
-// AliyunProvider 阿里云 Provider
+// AliyunProvider is the Alibaba Cloud implementation of the Provider interface.
 type AliyunProvider struct {
 	region      string
 	accessKey   string
@@ -27,14 +27,14 @@ type AliyunProvider struct {
 	instanceCache map[string]string // instance type -> id mapping
 }
 
-// Config 阿里云配置
+// Config holds Alibaba Cloud credentials and region settings.
 type Config struct {
-	Region    string // 区域，如 "cn-hangzhou"
+	Region    string // Region, e.g. "cn-hangzhou"
 	AccessKey string // Access Key ID
 	SecretKey string // Access Key Secret
 }
 
-// NewAliyunProvider 创建阿里云 Provider
+// NewAliyunProvider creates an Alibaba Cloud provider from the given configuration.
 func NewAliyunProvider(cfg *Config) (*AliyunProvider, error) {
 	client, err := ecs.NewClientWithAccessKey(cfg.Region, cfg.AccessKey, cfg.SecretKey)
 	if err != nil {
@@ -57,10 +57,10 @@ func (p *AliyunProvider) Name() string {
 }
 
 func (p *AliyunProvider) DisplayName() string {
-	return "阿里云"
+	return "Alibaba Cloud"
 }
 
-// mapInstanceState 映射阿里云实例状态到 VMState
+// mapInstanceState maps an Alibaba Cloud ECS instance status string to VMState.
 func mapInstanceState(ecsState string) provider.VMState {
 	switch ecsState {
 	case "Running":
@@ -76,7 +76,7 @@ func mapInstanceState(ecsState string) provider.VMState {
 	}
 }
 
-// mapEcsInstanceToVM 映射 ECS 实例到 VMInfo
+// mapEcsInstanceToVM maps an ECS instance to a VMInfo struct.
 func mapEcsInstanceToVM(instance ecs.Instance) *provider.VMInfo {
 	publicIP := ""
 	if len(instance.PublicIpAddress.IpAddress) > 0 {
@@ -100,43 +100,43 @@ func mapEcsInstanceToVM(instance ecs.Instance) *provider.VMInfo {
 	}
 }
 
-// CreateVM 创建 VM
+// CreateVM creates an ECS instance on Alibaba Cloud.
 func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMRequest) (*provider.VMInfo, error) {
-	// 获取镜像 ID
+	// Resolve image ID
 	imageID := req.ImageID
 	if imageID == "" {
 		var err error
 		imageID, err = p.GetDefaultImage(ctx, req.Region)
 		if err != nil {
-			imageID = "ubuntu_22_04_64_20G_alibase_20230920.vhd" // 默认 Ubuntu
+			imageID = "ubuntu_22_04_64_20G_alibase_20230920.vhd" // default Ubuntu image
 		}
 	}
 
-	// 创建实例请求
+	// Build the create instance request
 	createReq := ecs.CreateCreateInstanceRequest()
 	createReq.RegionId = req.Region
 	createReq.ImageId = imageID
 	createReq.InstanceType = req.InstanceType
 	createReq.InstanceName = req.Name
 
-	// 安全组
+	// Security group
 	if req.NetworkConfig != nil && req.NetworkConfig.SecurityGroup != "" {
 		createReq.SecurityGroupId = req.NetworkConfig.SecurityGroup
 	}
 
-	// VPC 配置 - 使用 VSwitchId 方式
+	// VPC configuration - using VSwitchId
 	if req.NetworkConfig != nil && req.NetworkConfig.VpcID != "" {
 		if req.NetworkConfig.SubnetID != "" {
 			createReq.VSwitchId = req.NetworkConfig.SubnetID
 		}
 	}
 
-	// 公网 IP
+	// Public IP
 	if req.NetworkConfig != nil && req.NetworkConfig.PublicIP {
-		createReq.InternetMaxBandwidthOut = requests.NewInteger(10) // 10Mbps
+		createReq.InternetMaxBandwidthOut = requests.NewInteger(10) // 10 Mbps
 	}
 
-	// 磁盘配置
+	// Disk configuration
 	if req.DiskConfig != nil {
 		if req.DiskConfig.SizeGiB > 0 {
 			createReq.SystemDiskSize = requests.NewInteger(req.DiskConfig.SizeGiB)
@@ -144,7 +144,7 @@ func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMReq
 		}
 	}
 
-	// 创建实例
+	// Create the instance
 	resp, err := p.ecsClient.CreateInstance(createReq)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create instance: %w", err)
@@ -152,12 +152,12 @@ func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMReq
 
 	instanceID := resp.InstanceId
 
-	// 启动实例
+	// Start the instance
 	startReq := ecs.CreateStartInstanceRequest()
 	startReq.InstanceId = instanceID
 	_, err = p.ecsClient.StartInstance(startReq)
 	if err != nil {
-		// 如果启动失败，删除实例
+		// If start fails, clean up the instance
 		delReq := ecs.CreateDeleteInstanceRequest()
 		delReq.InstanceId = instanceID
 		delReq.Force = "true"
@@ -165,7 +165,7 @@ func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMReq
 		return nil, fmt.Errorf("failed to start instance: %w", err)
 	}
 
-	// 构建 VMInfo
+	// Build VMInfo
 	vmInfo := &provider.VMInfo{
 		ID:           instanceID,
 		Name:         req.Name,
@@ -181,11 +181,11 @@ func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMReq
 	return vmInfo, nil
 }
 
-// DeleteVM 删除 VM
+// DeleteVM terminates and removes the specified ECS instance.
 func (p *AliyunProvider) DeleteVM(ctx context.Context, vmID string) error {
 	req := ecs.CreateDeleteInstanceRequest()
 	req.InstanceId = vmID
-	req.Force = "true" // 强制删除
+	req.Force = "true" // Force delete even if running
 
 	_, err := p.ecsClient.DeleteInstance(req)
 	if err != nil {
@@ -199,9 +199,9 @@ func (p *AliyunProvider) DeleteVM(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// GetVM 获取 VM
+// GetVM retrieves information about a VM instance, checking the local cache first.
 func (p *AliyunProvider) GetVM(ctx context.Context, vmID string) (*provider.VMInfo, error) {
-	// 先查本地缓存
+	// Check local cache first
 	p.mu.RLock()
 	if vm, ok := p.vms[vmID]; ok {
 		p.mu.RUnlock()
@@ -209,7 +209,7 @@ func (p *AliyunProvider) GetVM(ctx context.Context, vmID string) (*provider.VMIn
 	}
 	p.mu.RUnlock()
 
-	// 查询阿里云
+	// Query Alibaba Cloud ECS
 	req := ecs.CreateDescribeInstancesRequest()
 	req.InstanceIds = fmt.Sprintf(`["%s"]`, vmID)
 
@@ -225,12 +225,12 @@ func (p *AliyunProvider) GetVM(ctx context.Context, vmID string) (*provider.VMIn
 	return mapEcsInstanceToVM(resp.Instances.Instance[0]), nil
 }
 
-// ListVMs 列出所有 VM
+// ListVMs lists all SandrPod-managed ECS instances in the configured region.
 func (p *AliyunProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error) {
 	req := ecs.CreateDescribeInstancesRequest()
 	req.RegionId = p.region
 
-	// 只查询 SandrPod 创建的实例 (通过标签筛选)
+	// Filter to only instances created by SandrPod (via tag)
 	req.Tag = &[]ecs.DescribeInstancesTag{
 		{Key: "sandrpod", Value: "true"},
 	}
@@ -248,11 +248,11 @@ func (p *AliyunProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error
 	return vms, nil
 }
 
-// ExecuteCommand 执行命令 (通过云助手)
-// 注意：阿里云云助手需要实例已安装云助手客户端
-// 这个实现简化了云助手功能，实际使用需要根据阿里云 SDK 文档调整
+// ExecuteCommand runs a shell command on the instance via the Alibaba Cloud CloudAssist service.
+// Note: CloudAssist requires the CloudAssist client to be installed on the instance.
+// This implementation simplifies the CloudAssist flow; refer to the Alibaba Cloud SDK docs for production usage.
 func (p *AliyunProvider) ExecuteCommand(ctx context.Context, vmID, command string) (*provider.CommandResult, error) {
-	// 创建云助手命令
+	// Create a CloudAssist command
 	cmdReq := ecs.CreateCreateCommandRequest()
 	cmdReq.RegionId = p.region
 	cmdReq.Type = "RunShellScript"
@@ -264,7 +264,7 @@ func (p *AliyunProvider) ExecuteCommand(ctx context.Context, vmID, command strin
 		return nil, fmt.Errorf("failed to create command: %w", err)
 	}
 
-	// 执行命令
+	// Invoke the command
 	execReq := ecs.CreateInvokeCommandRequest()
 	execReq.InstanceId = &[]string{vmID}
 	execReq.CommandId = cmdResp.CommandId
@@ -274,14 +274,14 @@ func (p *AliyunProvider) ExecuteCommand(ctx context.Context, vmID, command strin
 		return nil, fmt.Errorf("failed to invoke command: %w", err)
 	}
 
-	// 等待执行结果
+	// Poll for the execution result
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
 
-	for i := 0; i < 30; i++ { // 最多等待 60 秒
+	for range 30 { // wait up to 60 seconds
 		<-ticker.C
 
-		// 查询执行结果
+		// Query invocation results
 		outputReq := ecs.CreateDescribeInvocationResultsRequest()
 		outputReq.InstanceId = vmID
 		outputReq.InvokeId = execResp.InvokeId
@@ -291,7 +291,7 @@ func (p *AliyunProvider) ExecuteCommand(ctx context.Context, vmID, command strin
 			continue
 		}
 
-		// 检查是否有结果 - InvocationResults 在 outputResp.Invocation.InvocationResults 中
+		// Check if results are available - InvocationResults is nested under outputResp.Invocation.InvocationResults
 		if outputResp != nil && outputResp.Invocation.InvocationResults.InvocationResult != nil && len(outputResp.Invocation.InvocationResults.InvocationResult) > 0 {
 			result := outputResp.Invocation.InvocationResults.InvocationResult[0]
 			return &provider.CommandResult{
@@ -306,7 +306,7 @@ func (p *AliyunProvider) ExecuteCommand(ctx context.Context, vmID, command strin
 	return nil, fmt.Errorf("command execution timeout")
 }
 
-// WaitUntilRunning 等待 VM 运行
+// WaitUntilRunning blocks until the VM reaches the Running state or the timeout expires.
 func (p *AliyunProvider) WaitUntilRunning(ctx context.Context, vmID string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	ticker := time.NewTicker(5 * time.Second)
@@ -339,7 +339,7 @@ func (p *AliyunProvider) WaitUntilRunning(ctx context.Context, vmID string, time
 	}
 }
 
-// GetHealthStatus 获取健康状态
+// GetHealthStatus returns the health status of a VM and its services.
 func (p *AliyunProvider) GetHealthStatus(ctx context.Context, vmID string) (*provider.HealthStatus, error) {
 	vm, err := p.GetVM(ctx, vmID)
 	if err != nil {
@@ -350,7 +350,7 @@ func (p *AliyunProvider) GetHealthStatus(ctx context.Context, vmID string) (*pro
 		VMReady: vm.State == provider.VMStateRunning,
 	}
 
-	// 通过云助手检查 Docker 是否运行
+	// Use CloudAssist to verify Docker is running
 	if vm.State == provider.VMStateRunning && vm.PublicIP != "" {
 		checkCmd := "docker ps > /dev/null 2>&1 && echo 'ok' || echo 'fail'"
 		result, err := p.ExecuteCommand(ctx, vmID, checkCmd)
@@ -362,7 +362,7 @@ func (p *AliyunProvider) GetHealthStatus(ctx context.Context, vmID string) (*pro
 	return status, nil
 }
 
-// ListRegions 列出可用区域
+// ListRegions returns all available Alibaba Cloud regions.
 func (p *AliyunProvider) ListRegions(ctx context.Context) ([]string, error) {
 	req := ecs.CreateDescribeRegionsRequest()
 
@@ -379,7 +379,7 @@ func (p *AliyunProvider) ListRegions(ctx context.Context) ([]string, error) {
 	return regions, nil
 }
 
-// ListInstanceTypes 列出实例类型
+// ListInstanceTypes returns all available ECS instance types for the given region.
 func (p *AliyunProvider) ListInstanceTypes(ctx context.Context, region string) ([]*provider.InstanceType, error) {
 	req := ecs.CreateDescribeInstanceTypesRequest()
 
@@ -403,9 +403,9 @@ func (p *AliyunProvider) ListInstanceTypes(ctx context.Context, region string) (
 	return types, nil
 }
 
-// GetDefaultImage 获取默认镜像
+// GetDefaultImage returns the default system image ID for the given region.
 func (p *AliyunProvider) GetDefaultImage(ctx context.Context, region string) (string, error) {
-	// 缓存检查
+	// Check the image cache first
 	if img, ok := p.imageCache[region]; ok {
 		return img, nil
 	}
@@ -425,11 +425,11 @@ func (p *AliyunProvider) GetDefaultImage(ctx context.Context, region string) (st
 		return imageID, nil
 	}
 
-	// 返回默认 Ubuntu 镜像
+	// Fall back to a default Ubuntu image
 	return "ubuntu_22_04_64_20G_alibase_20230920.vhd", nil
 }
 
-// Cleanup 清理资源
+// Cleanup removes all SandrPod-managed VMs.
 func (p *AliyunProvider) Cleanup(ctx context.Context) error {
 	vms, err := p.ListVMs(ctx)
 	if err != nil {
@@ -438,7 +438,7 @@ func (p *AliyunProvider) Cleanup(ctx context.Context) error {
 
 	for _, vm := range vms {
 		if err := p.DeleteVM(ctx, vm.ID); err != nil {
-			// 记录错误但继续清理
+			// Log the error but continue cleaning up remaining VMs
 			fmt.Printf("failed to delete VM %s: %v\n", vm.ID, err)
 		}
 	}

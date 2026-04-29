@@ -18,7 +18,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// PtySession PTY 会话 (Windows stub)
+// PtySession represents a PTY session (Windows stub).
 type PtySession struct {
 	ID           string
 	Pty          *os.File // always nil on Windows
@@ -29,7 +29,7 @@ type PtySession struct {
 	closed       atomic.Bool
 }
 
-// PtyManager PTY 会话管理器 (Windows stub)
+// PtyManager manages PTY sessions (Windows stub).
 type PtyManager struct{}
 
 // NewPtyManager creates a no-op PTY manager on Windows.
@@ -51,7 +51,7 @@ func (m *PtyManager) ResizeSession(_ string, _, _ int) error {
 
 func (m *PtyManager) ListSessions() []*PtySession { return nil }
 
-// PtyHandler PTY WebSocket 处理器 (Windows stub)
+// PtyHandler handles PTY WebSocket connections (Windows stub).
 type PtyHandler struct {
 	manager *PtyManager
 }

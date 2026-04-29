@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// 阿里云 Provider 注册
+// Aliyun Provider registration
 
 package aliyun
 
@@ -7,11 +7,11 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/provider"
 )
 
-// Register 注册阿里云 Provider 到全局工厂
+// Register registers the Aliyun Provider with the global factory.
 func Register() error {
 	cfg := LoadConfig()
 	if cfg.AccessKey == "" || cfg.SecretKey == "" {
-		return nil // 未配置阿里云，跳过注册
+		return nil // Aliyun not configured, skipping registration
 	}
 
 	p, err := NewAliyunProvider(cfg)

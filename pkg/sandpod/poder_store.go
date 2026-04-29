@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// Poder Store - 内存中的 Poder 存储
+// Poder Store - in-memory Poder store
 
 package sandpod
 
@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// PoderInfo Poder 信息
+// PoderInfo holds metadata for a registered Poder node.
 type PoderInfo struct {
 	ID            string                 `json:"id"`
 	Name          string                 `json:"name"`
@@ -23,7 +23,7 @@ type PoderInfo struct {
 	CreatedAt     time.Time             `json:"created_at"`
 }
 
-// PoderState Poder 状态
+// PoderState represents the online/offline state of a Poder node.
 type PoderState string
 
 const (
@@ -31,7 +31,7 @@ const (
 	PoderStateOffline PoderState = "OFFLINE"
 )
 
-// PoderResources Poder 资源
+// PoderResources describes the hardware resources available on a Poder node.
 type PoderResources struct {
 	CPUCores      int    `json:"cpu_cores"`
 	MemoryBytes   int64  `json:"memory_bytes"`
@@ -42,14 +42,14 @@ type PoderResources struct {
 	KernelVersion string `json:"kernel_version,omitempty"` // e.g. 5.15.0-91-generic
 }
 
-// PoderUsage Poder 当前使用情况
+// PoderUsage holds current resource utilization for a Poder node.
 type PoderUsage struct {
-	Containers   int     `json:"containers"`    // 当前容器数
-	CPUUsage      float64 `json:"cpu_usage"`    // CPU 使用率 0-1
-	MemoryUsage   float64 `json:"memory_usage"` // 内存使用率 0-1
+	Containers   int     `json:"containers"`    // current container count
+	CPUUsage      float64 `json:"cpu_usage"`    // CPU utilization 0-1
+	MemoryUsage   float64 `json:"memory_usage"` // memory utilization 0-1
 }
 
-// RegisterPoderRequest 注册 Poder 请求
+// RegisterPoderRequest is the payload for registering a new Poder node.
 type RegisterPoderRequest struct {
 	ID           string `json:"id"`
 	Name         string `json:"name"`
@@ -59,34 +59,34 @@ type RegisterPoderRequest struct {
 	Resources    PoderResources `json:"resources"`
 }
 
-// HeartbeatRequest 心跳请求
+// HeartbeatRequest carries usage stats sent by a Poder node on each heartbeat.
 type HeartbeatRequest struct {
 	Containers int     `json:"containers"`
 	CPUUsage   float64 `json:"cpu_usage"`
 	MemoryUsage float64 `json:"memory_usage"`
 }
 
-// PoderStore Poder 存储
+// PoderStore is a thread-safe in-memory store for Poder node records.
 type PoderStore struct {
 	mu     sync.RWMutex
 	poders map[string]*PoderInfo
 }
 
-// NewPoderStore 创建 Poder 存储
+// NewPoderStore creates a new in-memory PoderStore.
 func NewPoderStore() *PoderStore {
 	return &PoderStore{
 		poders: make(map[string]*PoderInfo),
 	}
 }
 
-// Register 注册 Poder
+// Register adds a new Poder node or updates an existing one with the same ID.
 func (s *PoderStore) Register(req *RegisterPoderRequest) (*PoderInfo, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// 检查是否已存在
+	// Update the existing record if already registered.
 	if existing, ok := s.poders[req.ID]; ok {
-		// 更新现有 Poder
+		// Update the existing Poder entry.
 		existing.URL = req.URL
 		existing.Region = req.Region
 		existing.Resources = req.Resources
@@ -116,7 +116,7 @@ func (s *PoderStore) Register(req *RegisterPoderRequest) (*PoderInfo, error) {
 	return poder, nil
 }
 
-// Heartbeat 更新心跳
+// Heartbeat updates usage stats and refreshes the last-heartbeat timestamp for a Poder node.
 func (s *PoderStore) Heartbeat(id string, usage *HeartbeatRequest) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -137,7 +137,7 @@ func (s *PoderStore) Heartbeat(id string, usage *HeartbeatRequest) error {
 	return nil
 }
 
-// Get 获取 Poder
+// Get returns the PoderInfo for the given ID.
 func (s *PoderStore) Get(id string) (*PoderInfo, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -146,7 +146,7 @@ func (s *PoderStore) Get(id string) (*PoderInfo, bool) {
 	return poder, ok
 }
 
-// List 列出所有 Poder
+// List returns all registered Poder nodes.
 func (s *PoderStore) List() []*PoderInfo {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -158,44 +158,44 @@ func (s *PoderStore) List() []*PoderInfo {
 	return result
 }
 
-// SelectBest 选择负载最低的 Poder（用于创建新容器）
-// 如果 providerType 为空，则不限制类型
+// SelectBest returns the online Poder node with the lowest weighted load score,
+// suitable for scheduling a new container. An empty providerType matches any type.
 func (s *PoderStore) SelectBest(region, providerType string) (*PoderInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	var best *PoderInfo
-	var bestScore float64 = 999999 // 越低越好
+	var bestScore float64 = 999999 // lower is better
 
 	for _, poder := range s.poders {
-		// 跳过离线的 Poder
+		// Skip offline nodes.
 		if poder.State != PoderStateOnline {
 			continue
 		}
 
-		// 如果指定了 region，优先选择同区域的
+		// Filter by region when specified.
 		if region != "" && poder.Region != region {
 			continue
 		}
 
-		// 如果指定了 providerType，匹配类型
+		// Filter by provider type when specified.
 		if providerType != "" && poder.ProviderType != providerType {
 			continue
 		}
 
-		// 跳过资源已满的
+		// Skip nodes that have reached their container limit.
 		if poder.Usage.Containers >= poder.Resources.MaxContainers {
 			continue
 		}
 
-		// 计算负载分数: 容器数越少分数越低（越优先）
+		// Container ratio — lower container count means lower (better) score.
 		containerScore := float64(poder.Usage.Containers) / float64(poder.Resources.MaxContainers)
-		// CPU 使用率
+		// CPU utilization.
 		cpuScore := poder.Usage.CPUUsage
-		// 内存使用率
+		// Memory utilization.
 		memoryScore := poder.Usage.MemoryUsage
 
-		// 综合分数 (加权)
+		// Weighted composite score.
 		totalScore := containerScore*0.6 + cpuScore*0.2 + memoryScore*0.2
 
 		if totalScore < bestScore {
@@ -211,7 +211,7 @@ func (s *PoderStore) SelectBest(region, providerType string) (*PoderInfo, error)
 	return best, nil
 }
 
-// UpdateUsage 更新使用情况
+// UpdateUsage atomically updates the usage stats for a Poder node via a callback.
 func (s *PoderStore) UpdateUsage(id string, fn func(*PoderUsage)) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -225,7 +225,7 @@ func (s *PoderStore) UpdateUsage(id string, fn func(*PoderUsage)) error {
 	return nil
 }
 
-// SetOffline 设置 Poder 离线
+// SetOffline marks a Poder node as offline.
 func (s *PoderStore) SetOffline(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -235,7 +235,7 @@ func (s *PoderStore) SetOffline(id string) {
 	}
 }
 
-// Delete 从存储中删除 Poder 记录
+// Delete removes the Poder record from the store.
 func (s *PoderStore) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

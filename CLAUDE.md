@@ -29,6 +29,9 @@ go run ./cmd/server -port 8080
 # Run API Server with SQLite persistence
 go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
 
+# Run API Server for cloud providers (AWS/Aliyun) — public-url is sent to cloud VMs for callback
+go run ./cmd/server -port 8080 -public-url https://api.example.com -db sqlite:./data/sandrpod.db
+
 # Run Poder (requires Docker socket; -network 指定容器网络，默认 bridge)
 go run ./cmd/poder -api-url=http://localhost:8080 -region=local
 go run ./cmd/poder -api-url=http://localhost:8080 -region=local -network=sandrpod
@@ -164,5 +167,5 @@ with client.sandbox("temp-sb") as sb:
 
 ## 参考项目
 
-- daytona的源码：/Users/alice/goworkspace/daytona
-- langchain deepagents源码： /Users/alice/pworkspace/deepagents
+- [Daytona](https://github.com/daytonaio/daytona) — sandbox management reference
+- [LangChain DeepAgents](https://github.com/langchain-ai/deepagents) — Python SDK integration reference

@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// AWS Provider 实现
+// AWS Provider implementation
 
 package aws
 
@@ -32,27 +32,27 @@ type AWSProvider struct {
 	instanceCache map[string]string
 }
 
-// Config AWS 配置
+// Config AWS configuration
 type Config struct {
-	Region    string // 区域，如 "us-east-1"
+	Region    string // Region, e.g. "us-east-1"
 	AccessKey string // Access Key ID
 	SecretKey string // Access Key Secret
 }
 
-// NewAWSProvider 创建 AWS Provider
+// NewAWSProvider creates a new AWS Provider
 func NewAWSProvider(cfg *Config) (*AWSProvider, error) {
 	var awsCfg aws.Config
 	var err error
 
 	if cfg.AccessKey != "" && cfg.SecretKey != "" {
-		// 使用凭证
+		// Use explicit credentials
 		awsCfg, err = config.LoadDefaultConfig(context.Background(),
 			config.WithRegion(cfg.Region),
 			config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 				cfg.AccessKey, cfg.SecretKey, "")),
 		)
 	} else {
-		// 使用默认凭证链 (IAM Role, 环境变量等)
+		// Use the default credential chain (IAM Role, environment variables, etc.)
 		awsCfg, err = config.LoadDefaultConfig(context.Background(),
 			config.WithRegion(cfg.Region),
 		)
@@ -80,7 +80,7 @@ func (p *AWSProvider) DisplayName() string {
 	return "Amazon Web Services"
 }
 
-// mapInstanceState 映射 EC2 实例状态
+// mapInstanceState maps an EC2 instance state string to a VMState
 func mapInstanceState(state string) provider.VMState {
 	switch state {
 	case "running":
@@ -96,7 +96,7 @@ func mapInstanceState(state string) provider.VMState {
 	}
 }
 
-// mapEC2ToVMInfo 映射 EC2 实例到 VMInfo
+// mapEC2ToVMInfo converts an EC2 instance to a VMInfo struct
 func mapEC2ToVMInfo(instance types.Instance) *provider.VMInfo {
 	publicIP := ""
 	if instance.PublicIpAddress != nil {
@@ -130,19 +130,19 @@ func mapEC2ToVMInfo(instance types.Instance) *provider.VMInfo {
 	}
 }
 
-// CreateVM 创建 VM
+// CreateVM creates a new EC2 VM instance
 func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMRequest) (*provider.VMInfo, error) {
-	// 获取镜像 ID
+	// Resolve image ID
 	imageID := req.ImageID
 	if imageID == "" {
 		var err error
 		imageID, err = p.GetDefaultImage(ctx, req.Region)
 		if err != nil {
-			imageID = "ami-0c55b159cbfafe1f0" // 默认 Ubuntu 22.04
+			imageID = "ami-0c55b159cbfafe1f0" // Default Ubuntu 22.04
 		}
 	}
 
-	// 构建 Tag 列表
+	// Build tag list
 	tags := []types.Tag{
 		{Key: aws.String("sandrpod"), Value: aws.String("true")},
 		{Key: aws.String("Name"), Value: aws.String(req.Name)},
@@ -151,7 +151,7 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 		tags = append(tags, types.Tag{Key: aws.String(k), Value: aws.String(v)})
 	}
 
-	// 创建 EC2 实例
+	// Launch EC2 instance
 	input := &ec2.RunInstancesInput{
 		ImageId:      aws.String(imageID),
 		InstanceType: types.InstanceType(req.InstanceType),
@@ -165,7 +165,7 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 		},
 	}
 
-	// VPC 配置
+	// VPC configuration
 	if req.NetworkConfig != nil {
 		if req.NetworkConfig.VpcID != "" {
 			input.SubnetId = aws.String(req.NetworkConfig.SubnetID)
@@ -175,7 +175,7 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 		}
 	}
 
-	// 公网 IP - 通过 NetworkInterfaces 配置
+	// Public IP - configured via NetworkInterfaces
 	if req.NetworkConfig != nil && req.NetworkConfig.PublicIP {
 		input.NetworkInterfaces = []types.InstanceNetworkInterfaceSpecification{
 			{
@@ -185,7 +185,7 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 		}
 	}
 
-	// 磁盘配置
+	// Disk configuration
 	if req.DiskConfig != nil && req.DiskConfig.SizeGiB > 0 {
 		input.BlockDeviceMappings = []types.BlockDeviceMapping{
 			{
@@ -211,13 +211,13 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 	instance := resp.Instances[0]
 	instanceID := *instance.InstanceId
 
-	// 等待实例运行
+	// Wait for the instance to reach running state
 	waiter := ec2.NewInstanceRunningWaiter(p.ec2Client)
 	err = waiter.Wait(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: []string{instanceID},
 	}, 5*time.Minute)
 	if err != nil {
-		// 即使等待失败，实例可能已经创建
+		// The instance may have been created even if the waiter timed out
 		fmt.Printf("warning: instance %s may not be running yet: %v\n", instanceID, err)
 	}
 
@@ -236,7 +236,7 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 	return vmInfo, nil
 }
 
-// DeleteVM 删除 VM
+// DeleteVM terminates an EC2 instance
 func (p *AWSProvider) DeleteVM(ctx context.Context, vmID string) error {
 	_, err := p.ec2Client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
 		InstanceIds: []string{vmID},
@@ -252,9 +252,9 @@ func (p *AWSProvider) DeleteVM(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// GetVM 获取 VM
+// GetVM retrieves a VM by ID
 func (p *AWSProvider) GetVM(ctx context.Context, vmID string) (*provider.VMInfo, error) {
-	// 先查本地缓存
+	// Check local cache first
 	p.mu.RLock()
 	if vm, ok := p.vms[vmID]; ok {
 		p.mu.RUnlock()
@@ -262,7 +262,7 @@ func (p *AWSProvider) GetVM(ctx context.Context, vmID string) (*provider.VMInfo,
 	}
 	p.mu.RUnlock()
 
-	// 查询 EC2
+	// Query EC2
 	resp, err := p.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: []string{vmID},
 	})
@@ -277,7 +277,7 @@ func (p *AWSProvider) GetVM(ctx context.Context, vmID string) (*provider.VMInfo,
 	return mapEC2ToVMInfo(resp.Reservations[0].Instances[0]), nil
 }
 
-// ListVMs 列出所有 VM
+// ListVMs returns all VMs tagged with sandrpod
 func (p *AWSProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error) {
 	resp, err := p.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		Filters: []types.Filter{
@@ -298,9 +298,9 @@ func (p *AWSProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error) {
 	return vms, nil
 }
 
-// ExecuteCommand 执行命令 (通过 SSM)
+// ExecuteCommand runs a shell command on a VM via SSM
 func (p *AWSProvider) ExecuteCommand(ctx context.Context, vmID, command string) (*provider.CommandResult, error) {
-	// 使用 SSM SendCommand
+	// Use SSM SendCommand
 	input := &ssm.SendCommandInput{
 		DocumentName: aws.String("AWS-RunShellScript"),
 		InstanceIds:  []string{vmID},
@@ -316,7 +316,7 @@ func (p *AWSProvider) ExecuteCommand(ctx context.Context, vmID, command string) 
 
 	commandID := *cmdResp.Command.CommandId
 
-	// 等待命令执行
+	// Poll until the command finishes
 	describeInput := &ssm.ListCommandInvocationsInput{
 		CommandId:  aws.String(commandID),
 		InstanceId: aws.String(vmID),
@@ -325,7 +325,7 @@ func (p *AWSProvider) ExecuteCommand(ctx context.Context, vmID, command string) 
 	var output string
 	var exitCode int
 
-	for i := 0; i < 30; i++ {
+	for range 30 {
 		time.Sleep(2 * time.Second)
 
 		resp, err := p.ssmClient.ListCommandInvocations(ctx, describeInput)
@@ -336,7 +336,7 @@ func (p *AWSProvider) ExecuteCommand(ctx context.Context, vmID, command string) 
 		if len(resp.CommandInvocations) > 0 {
 			invocation := resp.CommandInvocations[0]
 			if invocation.Status != "Pending" && invocation.Status != "InProgress" {
-				// 获取输出
+				// Retrieve command output
 				outputResp, _ := p.ssmClient.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
 					CommandId: aws.String(commandID),
 					InstanceId: aws.String(vmID),
@@ -362,7 +362,7 @@ func (p *AWSProvider) ExecuteCommand(ctx context.Context, vmID, command string) 
 	}, nil
 }
 
-// WaitUntilRunning 等待 VM 运行
+// WaitUntilRunning blocks until the VM reaches the running state
 func (p *AWSProvider) WaitUntilRunning(ctx context.Context, vmID string, timeout time.Duration) error {
 	waiter := ec2.NewInstanceRunningWaiter(p.ec2Client)
 	return waiter.Wait(ctx, &ec2.DescribeInstancesInput{
@@ -370,7 +370,7 @@ func (p *AWSProvider) WaitUntilRunning(ctx context.Context, vmID string, timeout
 	}, timeout)
 }
 
-// GetHealthStatus 获取健康状态
+// GetHealthStatus returns the health status of a VM
 func (p *AWSProvider) GetHealthStatus(ctx context.Context, vmID string) (*provider.HealthStatus, error) {
 	vm, err := p.GetVM(ctx, vmID)
 	if err != nil {
@@ -381,7 +381,7 @@ func (p *AWSProvider) GetHealthStatus(ctx context.Context, vmID string) (*provid
 		VMReady: vm.State == provider.VMStateRunning,
 	}
 
-	// 通过 SSM 检查 Docker 是否运行
+	// Check whether Docker is running via SSM
 	if vm.State == provider.VMStateRunning {
 		checkCmd := "docker ps > /dev/null 2>&1 && echo 'ok' || echo 'fail'"
 		result, err := p.ExecuteCommand(ctx, vmID, checkCmd)
@@ -393,7 +393,7 @@ func (p *AWSProvider) GetHealthStatus(ctx context.Context, vmID string) (*provid
 	return status, nil
 }
 
-// ListRegions 列出可用区域
+// ListRegions returns all available AWS regions
 func (p *AWSProvider) ListRegions(ctx context.Context) ([]string, error) {
 	resp, err := p.ec2Client.DescribeRegions(ctx, &ec2.DescribeRegionsInput{})
 	if err != nil {
@@ -408,9 +408,9 @@ func (p *AWSProvider) ListRegions(ctx context.Context) ([]string, error) {
 	return regions, nil
 }
 
-// ListInstanceTypes 列出实例类型
+// ListInstanceTypes returns commonly used EC2 instance types
 func (p *AWSProvider) ListInstanceTypes(ctx context.Context, region string) ([]*provider.InstanceType, error) {
-	// 常用的实例类型
+	// Commonly used instance types
 	commonTypes := []*provider.InstanceType{
 		{Name: "t3.micro", CPU: 2, MemoryGiB: 1, GPU: 0},
 		{Name: "t3.small", CPU: 2, MemoryGiB: 2, GPU: 0},
@@ -431,9 +431,9 @@ func (p *AWSProvider) ListInstanceTypes(ctx context.Context, region string) ([]*
 	return commonTypes, nil
 }
 
-// GetDefaultImage 获取默认镜像
+// GetDefaultImage returns the latest Ubuntu 22.04 LTS AMI ID for the region
 func (p *AWSProvider) GetDefaultImage(ctx context.Context, region string) (string, error) {
-	// 查询最新的 Ubuntu 22.04 LTS AMI
+	// Look up the latest Ubuntu 22.04 LTS AMI
 	resp, err := p.ec2Client.DescribeImages(ctx, &ec2.DescribeImagesInput{
 		Filters: []types.Filter{
 			{Name: aws.String("name"), Values: []string{"ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-*"}},
@@ -448,15 +448,15 @@ func (p *AWSProvider) GetDefaultImage(ctx context.Context, region string) (strin
 	}
 
 	if len(resp.Images) > 0 {
-		// 返回最新的镜像
+		// Return the most recent image
 		return *resp.Images[0].ImageId, nil
 	}
 
-	// 返回默认镜像
+	// Fall back to a known default image
 	return "ami-0c55b159cbfafe1f0", nil
 }
 
-// Cleanup 清理资源
+// Cleanup removes all VMs managed by this provider
 func (p *AWSProvider) Cleanup(ctx context.Context) error {
 	vms, err := p.ListVMs(ctx)
 	if err != nil {

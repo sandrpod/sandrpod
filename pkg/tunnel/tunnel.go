@@ -82,7 +82,7 @@ type PoderTunnel struct {
 // The caller (API Server) becomes the yamux client; Poder serves HTTP over yamux.
 func NewPoderTunnel(id string, ws *websocket.Conn) (*PoderTunnel, error) {
 	cfg := yamux.DefaultConfig()
-	cfg.KeepAliveInterval = 5 * time.Second  // 快速检测死连接（原 30s）
+	cfg.KeepAliveInterval = 5 * time.Second  // faster dead-connection detection (was 30s)
 	cfg.ConnectionWriteTimeout = 5 * time.Second
 	session, err := yamux.Client(newWSConn(ws), cfg)
 	if err != nil {
