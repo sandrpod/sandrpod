@@ -1,15 +1,27 @@
 // Copyright 2024 SandrPod
-// 文件操作接口
+// File operation interface.
+//
+// Each method takes a context.Context as its first argument so the permission
+// manager (installed via Executor.SetPermissionManager) can:
+//   1. Attach a per-request deadline to its consent prompt.
+//   2. Read the sandbox-session id stored on the context (see WithSandboxSession).
+//
+// HTTP handlers in api.go must pass r.Context() through. Tests and tools that
+// don't care about cancellation can pass context.Background().
 
 package toolbox
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
+
+	"github.com/sandrpod/sandrpod/pkg/permission"
 )
 
-// FileInfo 文件信息
+// FileInfo describes a file or directory entry.
 type FileInfo struct {
 	Name  string `json:"name"`
 	Path  string `json:"path"`
@@ -17,16 +29,12 @@ type FileInfo struct {
 	Size  int64  `json:"size"`
 }
 
-// GetProjectDir 获取项目目录 (当前工作目录)
+// GetProjectDir returns the project directory (the executor's working directory).
 func (e *Executor) GetProjectDir() string {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "/workspace"
-	}
-	return cwd
+	return e.workDir
 }
 
-// GetUserHomeDir 获取用户 home 目录
+// GetUserHomeDir returns the current user's home directory, defaulting to /root.
 func (e *Executor) GetUserHomeDir() string {
 	home := os.Getenv("HOME")
 	if home == "" {
@@ -35,23 +43,19 @@ func (e *Executor) GetUserHomeDir() string {
 	return home
 }
 
-// GetWorkDir 获取工作目录 (等同于项目目录)
+// GetWorkDir returns the working directory (equivalent to the project directory).
 func (e *Executor) GetWorkDir() string {
-	return e.GetProjectDir()
+	return e.workDir
 }
 
-// ListFiles 列出目录内容
-func (e *Executor) ListFiles(path string) ([]*FileInfo, error) {
-	if path == "" {
-		path = e.GetProjectDir()
+// ListFiles returns the entries in the given directory.
+func (e *Executor) ListFiles(ctx context.Context, path string) ([]*FileInfo, error) {
+	safe, err := e.resolveAndAuthorize(ctx, path, permission.ModeRead, "files.list")
+	if err != nil {
+		return nil, err
 	}
 
-	// 安全检查：不允许访问 / 根目录
-	if path == "/" {
-		return nil, fmt.Errorf("access to root denied")
-	}
-
-	entries, err := os.ReadDir(path)
+	entries, err := os.ReadDir(safe)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read directory: %w", err)
 	}
@@ -65,7 +69,7 @@ func (e *Executor) ListFiles(path string) ([]*FileInfo, error) {
 		}
 		files = append(files, &FileInfo{
 			Name:  entry.Name(),
-			Path:  filepath.Join(path, entry.Name()),
+			Path:  filepath.Join(safe, entry.Name()),
 			IsDir: entry.IsDir(),
 			Size:  size,
 		})
@@ -73,126 +77,144 @@ func (e *Executor) ListFiles(path string) ([]*FileInfo, error) {
 	return files, nil
 }
 
-// DeleteFile 删除文件或目录
-func (e *Executor) DeleteFile(path string) error {
+// DeleteFile removes a file or directory (recursively).
+func (e *Executor) DeleteFile(ctx context.Context, path string) error {
 	if path == "" {
 		return fmt.Errorf("path is required")
 	}
-
-	// 安全检查：不允许删除系统目录
-	if path == "/" || path == "/app" || path == "/root" || path == "/home" {
-		return fmt.Errorf("cannot delete system directory")
+	safe, err := e.resolveAndAuthorize(ctx, path, permission.ModeWrite, "files.delete")
+	if err != nil {
+		return err
 	}
-
-	if err := os.RemoveAll(path); err != nil {
+	if err := os.RemoveAll(safe); err != nil {
 		return fmt.Errorf("failed to delete: %w", err)
 	}
 	return nil
 }
 
-// MoveFile 移动或重命名文件/目录
-func (e *Executor) MoveFile(src, dst string) error {
+// MoveFile moves or renames a file or directory.
+func (e *Executor) MoveFile(ctx context.Context, src, dst string) error {
 	if src == "" || dst == "" {
 		return fmt.Errorf("source and destination are required")
 	}
-	if err := os.Rename(src, dst); err != nil {
+	safeSrc, err := e.resolveAndAuthorize(ctx, src, permission.ModeWrite, "files.move.src")
+	if err != nil {
+		return err
+	}
+	safeDst, err := e.resolveAndAuthorize(ctx, dst, permission.ModeWrite, "files.move.dst")
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(safeSrc, safeDst); err != nil {
 		return fmt.Errorf("failed to move: %w", err)
 	}
 	return nil
 }
 
-// CreateFolder 创建目录
-func (e *Executor) CreateFolder(path string) error {
+// CreateFolder creates a directory (and any missing parents).
+func (e *Executor) CreateFolder(ctx context.Context, path string) error {
 	if path == "" {
 		return fmt.Errorf("path is required")
 	}
-	if err := os.MkdirAll(path, 0755); err != nil {
+	safe, err := e.resolveAndAuthorize(ctx, path, permission.ModeWrite, "files.mkdir")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(safe, 0755); err != nil {
 		return fmt.Errorf("failed to create folder: %w", err)
 	}
 	return nil
 }
 
-// GetFileInfo 获取文件信息
-func (e *Executor) GetFileInfo(path string) (*FileInfo, error) {
-	info, err := os.Stat(path)
+// GetFileInfo returns metadata for the file or directory at path.
+func (e *Executor) GetFileInfo(ctx context.Context, path string) (*FileInfo, error) {
+	safe, err := e.resolveAndAuthorize(ctx, path, permission.ModeRead, "files.info")
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(safe)
 	if err != nil {
 		return nil, fmt.Errorf("failed to stat: %w", err)
 	}
 	return &FileInfo{
-		Name:  filepath.Base(path),
-		Path:  path,
+		Name:  filepath.Base(safe),
+		Path:  safe,
 		IsDir: info.IsDir(),
 		Size:  info.Size(),
 	}, nil
 }
 
-// DownloadFile 下载文件内容
-func (e *Executor) DownloadFile(path string) ([]byte, error) {
+// DownloadFile reads and returns the contents of a file.
+func (e *Executor) DownloadFile(ctx context.Context, path string) ([]byte, error) {
 	if path == "" {
 		return nil, fmt.Errorf("path is required")
 	}
-	data, err := os.ReadFile(path)
+	safe, err := e.resolveAndAuthorize(ctx, path, permission.ModeRead, "files.download")
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(safe)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 	return data, nil
 }
 
-// SearchFilesResult 搜索文件结果
+// SearchFilesResult holds the list of files matched by a glob search.
 type SearchFilesResult struct {
 	Files []string `json:"files"`
 }
 
-// FindMatch 搜索匹配结果
+// FindMatch represents a single line match from a content search.
 type FindMatch struct {
 	File    string `json:"file"`
 	Line    int    `json:"line"`
 	Content string `json:"content"`
 }
 
-// SearchFiles 搜索文件 (glob模式)
-func (e *Executor) SearchFiles(path, pattern string) (*SearchFilesResult, error) {
-	if path == "" {
-		path = e.GetProjectDir()
+// SearchFiles finds files matching a glob pattern within a directory.
+func (e *Executor) SearchFiles(ctx context.Context, path, pattern string) (*SearchFilesResult, error) {
+	safe, err := e.resolveAndAuthorize(ctx, path, permission.ModeRead, "files.search")
+	if err != nil {
+		return nil, err
 	}
 	if pattern == "" {
 		return nil, fmt.Errorf("pattern is required")
 	}
 
-	matches, err := filepath.Glob(filepath.Join(path, pattern))
+	matches, err := filepath.Glob(filepath.Join(safe, pattern))
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
 	return &SearchFilesResult{Files: matches}, nil
 }
 
-// FindInFiles 文件内容搜索
-func (e *Executor) FindInFiles(path, pattern string) ([]*FindMatch, error) {
-	if path == "" {
-		path = e.GetProjectDir()
+// FindInFiles searches file contents for lines containing pattern, walking the directory tree.
+func (e *Executor) FindInFiles(ctx context.Context, path, pattern string) ([]*FindMatch, error) {
+	safe, err := e.resolveAndAuthorize(ctx, path, permission.ModeRead, "files.find")
+	if err != nil {
+		return nil, err
 	}
 	if pattern == "" {
 		return nil, fmt.Errorf("pattern is required")
 	}
 
 	var results []*FindMatch
-	err := filepath.Walk(path, func(filePath string, info os.FileInfo, err error) error {
+	err = filepath.Walk(safe, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil // 跳过无法访问的文件
+			return nil // skip files that cannot be accessed
 		}
 		if info.IsDir() {
 			return nil
 		}
 
-		// 读取文件内容
 		content, err := os.ReadFile(filePath)
 		if err != nil {
 			return nil
 		}
 
-		lines := filepath.SplitList(string(content))
-		for i, line := range lines {
-			if contains(line, pattern) {
+		for i, line := range strings.Split(string(content), "\n") {
+			if strings.Contains(line, pattern) {
 				results = append(results, &FindMatch{
 					File:    filePath,
 					Line:    i + 1,
@@ -209,29 +231,15 @@ func (e *Executor) FindInFiles(path, pattern string) ([]*FindMatch, error) {
 	return results, nil
 }
 
-// contains 检查字符串是否包含子串
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
-
-// ReplaceResult 替换结果
+// ReplaceResult reports the outcome of a text replacement operation on a single file.
 type ReplaceResult struct {
 	File    string `json:"file"`
 	Success bool   `json:"success"`
 	Error   string `json:"error,omitempty"`
 }
 
-// ReplaceInFiles 文本替换
-func (e *Executor) ReplaceInFiles(files []string, pattern, newValue string) ([]*ReplaceResult, error) {
+// ReplaceInFiles replaces all occurrences of pattern with newValue across the given files.
+func (e *Executor) ReplaceInFiles(ctx context.Context, files []string, pattern, newValue string) ([]*ReplaceResult, error) {
 	if len(files) == 0 {
 		return nil, fmt.Errorf("files is required")
 	}
@@ -241,84 +249,54 @@ func (e *Executor) ReplaceInFiles(files []string, pattern, newValue string) ([]*
 
 	var results []*ReplaceResult
 	for _, file := range files {
-		content, err := os.ReadFile(file)
+		// Validate that each file path is within an allowed write location.
+		safe, err := e.resolveAndAuthorize(ctx, file, permission.ModeWrite, "files.replace")
 		if err != nil {
-			results = append(results, &ReplaceResult{
-				File:    file,
-				Success: false,
-				Error:   err.Error(),
-			})
+			results = append(results, &ReplaceResult{File: file, Success: false, Error: err.Error()})
 			continue
 		}
 
-		newContent := replaceAll(string(content), pattern, newValue)
-		if err := os.WriteFile(file, []byte(newContent), 0644); err != nil {
-			results = append(results, &ReplaceResult{
-				File:    file,
-				Success: false,
-				Error:   err.Error(),
-			})
+		content, err := os.ReadFile(safe)
+		if err != nil {
+			results = append(results, &ReplaceResult{File: safe, Success: false, Error: err.Error()})
 			continue
 		}
 
-		results = append(results, &ReplaceResult{
-			File:    file,
-			Success: true,
-		})
+		newContent := strings.ReplaceAll(string(content), pattern, newValue)
+		if err := os.WriteFile(safe, []byte(newContent), 0644); err != nil {
+			results = append(results, &ReplaceResult{File: safe, Success: false, Error: err.Error()})
+			continue
+		}
+
+		results = append(results, &ReplaceResult{File: safe, Success: true})
 	}
 	return results, nil
 }
 
-// replaceAll 替换所有匹配
-func replaceAll(s, old, new string) string {
-	result := ""
-	for {
-		idx := indexOf(s, old)
-		if idx == -1 {
-			result += s
-			break
-		}
-		result += s[:idx] + new
-		s = s[idx+len(old):]
-	}
-	return result
-}
-
-func indexOf(s, substr string) int {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return i
-		}
-	}
-	return -1
-}
-
-// SetFilePermissions 设置文件权限
-func (e *Executor) SetFilePermissions(path, owner, group string, mode os.FileMode) error {
+// SetFilePermissions sets the mode bits and optionally the owner/group of a file.
+func (e *Executor) SetFilePermissions(ctx context.Context, path, owner, group string, mode os.FileMode) error {
 	if path == "" {
 		return fmt.Errorf("path is required")
 	}
+	safe, err := e.resolveAndAuthorize(ctx, path, permission.ModeWrite, "files.chmod")
+	if err != nil {
+		return err
+	}
 
-	// 设置权限
-	if err := os.Chmod(path, mode); err != nil {
+	if err := os.Chmod(safe, mode); err != nil {
 		return fmt.Errorf("failed to set permissions: %w", err)
 	}
 
-	// 如果提供了 owner/group，尝试更改所有权 (需要 root 权限)
 	if owner != "" || group != "" {
-		// 解析 uid/gid
 		var uid, gid int = -1, -1
 		if owner != "" {
-			// 简化处理：假设 owner 是数字 uid
 			fmt.Sscanf(owner, "%d", &uid)
 		}
 		if group != "" {
 			fmt.Sscanf(group, "%d", &gid)
 		}
 		if uid >= 0 || gid >= 0 {
-			if err := os.Chown(path, uid, gid); err != nil {
-				// 忽略 chown 错误 (可能没有权限)
-			}
+			os.Chown(safe, uid, gid) //nolint:errcheck — chown may fail without root; non-fatal
 		}
 	}
 

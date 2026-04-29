@@ -1,11 +1,12 @@
 // Copyright 2024 SandrPod
-// Toolbox API - 代码执行服务
+// Toolbox API - code execution service
 
 package toolbox
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -18,23 +19,34 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/sandrpod/sandrpod/pkg/permission"
 )
 
-// StreamRequest 流式执行请求 (query parameters)
+// writeError writes an appropriate HTTP status code based on the error type:
+// ErrAccessDenied → 403 Forbidden, all others → 500 Internal Server Error
+func writeError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrAccessDenied) {
+		http.Error(w, err.Error(), http.StatusForbidden)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusInternalServerError)
+}
+
+// StreamRequest is the request payload for streaming code execution (passed as query parameters).
 type StreamRequest struct {
 	Language string `json:"language"`
 	Code     string `json:"code"`
 	Timeout  int    `json:"timeout"`
 }
 
-// ProcessRequest 进程执行请求
+// ProcessRequest is the request payload for a code execution job.
 type ProcessRequest struct {
 	Language string `json:"language"` // python, node, bash
 	Code    string `json:"code"`
 	Timeout int    `json:"timeout"` // seconds
 }
 
-// ProcessResult 进程执行结果
+// ProcessResult holds the output of a code execution job.
 type ProcessResult struct {
 	ExitCode  int       `json:"exit_code"`
 	Stdout    string    `json:"stdout"`
@@ -43,14 +55,14 @@ type ProcessResult struct {
 	EndedAt   time.Time `json:"ended_at"`
 }
 
-// HealthStatus 健康状态
+// HealthStatus reports the health of the Toolbox service.
 type HealthStatus struct {
 	Status    string `json:"status"`
 	Docker    bool   `json:"docker"`
 	Timestamp int64  `json:"timestamp"`
 }
 
-// EnvironmentInfo 容器运行环境信息（供 AI 生成脚本时参考）
+// EnvironmentInfo describes the sandbox runtime environment (useful for AI-generated scripts).
 type EnvironmentInfo struct {
 	Arch          string `json:"arch"`           // e.g. amd64, arm64
 	OS            string `json:"os"`             // e.g. linux
@@ -60,91 +72,120 @@ type EnvironmentInfo struct {
 	WorkDir       string `json:"work_dir"`       // default working directory
 }
 
-// Server Toolbox HTTP 服务器
+// Server is the Toolbox HTTP server.
 type Server struct {
 	addr           string
-	executor      *Executor
-	ptyHandler    *PtyHandler
+	token          string // Auth token; empty string disables authentication
+	executor       *Executor
+	ptyHandler     *PtyHandler
 	sessionManager *SessionManager
-	server        *http.Server
-	mu            sync.RWMutex
-	requests      int64
-	startTime     time.Time
+	server         *http.Server
+	mu             sync.RWMutex
+	requests       int64
+	startTime      time.Time
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 const CleanupTimeout = 5 * time.Second
 
-// NewServer 创建 Toolbox 服务器
-func NewServer(addr string) *Server {
+// NewServer creates a Toolbox server. Authentication is disabled when token is empty.
+// Executor exposes the embedded Executor so external code (notably the agent
+// binary) can install policy hooks like a permission manager. The returned
+// pointer is owned by the Server; callers must not retain it past the
+// Server's lifetime.
+func (s *Server) Executor() *Executor { return s.executor }
+
+func NewServer(addr, token string) *Server {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
 		addr:           addr,
+		token:          token,
 		executor:       NewExecutor(),
 		ptyHandler:     NewPtyHandler(),
 		sessionManager: NewSessionManager("/tmp/sandrpod-sessions"),
 		startTime:      time.Now(),
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 }
 
-// Handler 返回 Toolbox 的 HTTP handler，可挂载到任意 net.Listener（如 yamux session）。
-// 同时启动 session 清理 goroutine（幂等，多次调用安全）。
+// authMiddleware validates the Bearer token (pass-through when token is empty).
+func (s *Server) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.token != "" && r.Header.Get("Authorization") != "Bearer "+s.token {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next(w, r)
+	}
+}
+
+// Handler returns the Toolbox HTTP handler, which can be mounted on any net.Listener
+// (e.g. a yamux session). Also starts the session cleanup goroutine (idempotent, safe to call multiple times).
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// 启动 session 清理 goroutine
-	s.sessionManager.StartCleanupGoroutine(DefaultSessionTTL, CleanupInterval)
+	// Start the session cleanup goroutine, bound to the Server's lifecycle
+	s.sessionManager.StartCleanupGoroutine(s.ctx, DefaultSessionTTL, CleanupInterval)
 
-	// API 路由
+	a := s.authMiddleware
+
+	// Public endpoints (no authentication required)
 	mux.HandleFunc("/health", s.healthHandler)
-	mux.HandleFunc("/info", s.infoHandler)
-	mux.HandleFunc("/process", s.processHandler)
-	mux.HandleFunc("/processAsync", s.processAsyncHandler)
-	mux.HandleFunc("/status", s.statusHandler)
-	mux.HandleFunc("/stream", s.streamHandler)
 
-	// 文件操作路由
-	mux.HandleFunc("/files/project-dir", s.projectDirHandler)
-	mux.HandleFunc("/files/user-home-dir", s.userHomeDirHandler)
-	mux.HandleFunc("/files/work-dir", s.workDirHandler)
-	mux.HandleFunc("/files", s.filesHandler)
-	mux.HandleFunc("/files/delete", s.filesDeleteHandler)
-	mux.HandleFunc("/files/info", s.filesInfoHandler)
-	mux.HandleFunc("/files/move", s.filesMoveHandler)
-	mux.HandleFunc("/files/folder", s.filesFolderHandler)
-	mux.HandleFunc("/files/download", s.filesDownloadHandler)
-	mux.HandleFunc("/files/search", s.filesSearchHandler)
-	mux.HandleFunc("/files/find", s.filesFindHandler)
-	mux.HandleFunc("/files/replace", s.filesReplaceHandler)
-	mux.HandleFunc("/files/permissions", s.filesPermissionsHandler)
-	mux.HandleFunc("/files/upload", s.filesUploadHandler)
-	mux.HandleFunc("/files/bulk-upload", s.filesBulkUploadHandler)
+	// Authenticated endpoints
+	mux.HandleFunc("/info", a(s.infoHandler))
+	mux.HandleFunc("/process", a(s.processHandler))
+	mux.HandleFunc("/status", a(s.statusHandler))
+	mux.HandleFunc("/stream", a(s.streamHandler))
 
-	// PTY 路由
-	mux.HandleFunc("/pty/create", s.ptyCreateHandler)
-	mux.HandleFunc("/pty/", s.ptyWsHandler)
+	// File operation routes
+	mux.HandleFunc("/files/project-dir", a(s.projectDirHandler))
+	mux.HandleFunc("/files/user-home-dir", a(s.userHomeDirHandler))
+	mux.HandleFunc("/files/work-dir", a(s.workDirHandler))
+	mux.HandleFunc("/files", a(s.filesHandler))
+	mux.HandleFunc("/files/delete", a(s.filesDeleteHandler))
+	mux.HandleFunc("/files/info", a(s.filesInfoHandler))
+	mux.HandleFunc("/files/move", a(s.filesMoveHandler))
+	mux.HandleFunc("/files/folder", a(s.filesFolderHandler))
+	mux.HandleFunc("/files/download", a(s.filesDownloadHandler))
+	mux.HandleFunc("/files/search", a(s.filesSearchHandler))
+	mux.HandleFunc("/files/find", a(s.filesFindHandler))
+	mux.HandleFunc("/files/replace", a(s.filesReplaceHandler))
+	mux.HandleFunc("/files/permissions", a(s.filesPermissionsHandler))
+	mux.HandleFunc("/files/upload", a(s.filesUploadHandler))
+	mux.HandleFunc("/files/bulk-upload", a(s.filesBulkUploadHandler))
 
-	// Session 路由
-	mux.HandleFunc("/process/session", s.sessionHandler)
-	mux.HandleFunc("/process/session/", s.sessionHandler)
+	// PTY routes
+	mux.HandleFunc("/pty/create", a(s.ptyCreateHandler))
+	mux.HandleFunc("/pty/", a(s.ptyWsHandler))
+
+	// Session routes
+	mux.HandleFunc("/process/session", a(s.sessionHandler))
+	mux.HandleFunc("/process/session/", a(s.sessionHandler))
 
 	return mux
 }
 
-// Start 启动服务器（TCP 监听）
+// Start starts the server on a TCP listener.
 func (s *Server) Start() error {
 	mux := s.Handler()
 
 	s.server = &http.Server{
-		Addr:         s.addr,
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		Addr:              s.addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
 	}
 
 	return s.server.ListenAndServe()
 }
 
-// Stop 停止服务器
+// Stop shuts down the server and cancels the internal context (stopping cleanup goroutines).
 func (s *Server) Stop(ctx context.Context) error {
+	s.cancel()
 	return s.server.Shutdown(ctx)
 }
 
@@ -165,18 +206,18 @@ func (s *Server) healthHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
-// infoHandler GET /info — 返回容器运行环境信息，供 AI 生成可执行脚本时参考
+// infoHandler GET /info — returns the sandbox runtime environment info for AI script generation
 func (s *Server) infoHandler(w http.ResponseWriter, r *http.Request) {
 	info := getEnvInfo()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(info)
 }
 
-// getEnvInfo 收集容器运行环境信息
+// getEnvInfo collects runtime environment information about the sandbox container.
 func getEnvInfo() EnvironmentInfo {
 	osVersion := runtime.GOOS
 	if data, err := os.ReadFile("/etc/os-release"); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
+		for line := range strings.SplitSeq(string(data), "\n") {
 			if val, ok := strings.CutPrefix(line, "PRETTY_NAME="); ok {
 				osVersion = strings.Trim(val, `"`)
 				break
@@ -228,7 +269,7 @@ func (s *Server) processHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 默认超时 30 秒
+	// Default timeout is 30 seconds
 	timeout := 30
 	if req.Timeout > 0 {
 		timeout = req.Timeout
@@ -260,38 +301,6 @@ func (s *Server) processHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-func (s *Server) processAsyncHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req ProcessRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	// 返回任务 ID (简化实现，实际应该用队列)
-	taskID := fmt.Sprintf("task-%d", time.Now().UnixNano())
-
-	// 后台执行
-	go func() {
-		timeout := 30
-		if req.Timeout > 0 {
-			timeout = req.Timeout
-		}
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
-		defer cancel()
-
-		s.executor.Execute(ctx, req.Language, req.Code)
-		// 实际应该更新任务状态到 Redis/数据库
-	}()
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"task_id": taskID})
-}
 
 func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
@@ -300,14 +309,14 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 	s.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"requests":  requests,
 		"uptime":    uptime.String(),
 		"executor":  s.executor.Stats(),
 	})
 }
 
-// streamHandler SSE流式执行 (支持 GET URL参数 和 POST JSON body)
+// streamHandler handles SSE streaming execution (supports both GET query params and POST JSON body).
 func (s *Server) streamHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -318,7 +327,7 @@ func (s *Server) streamHandler(w http.ResponseWriter, r *http.Request) {
 	var timeout int = 30
 
 	if r.Method == http.MethodPost {
-		// POST: 从 JSON body 读取
+		// POST: read parameters from the JSON body
 		var req StreamRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, fmt.Sprintf("Invalid request: %v", err), http.StatusBadRequest)
@@ -331,7 +340,7 @@ func (s *Server) streamHandler(w http.ResponseWriter, r *http.Request) {
 			timeout = 30
 		}
 	} else {
-		// GET: 从 URL 参数读取 (保持向后兼容)
+		// GET: read parameters from URL query string (backward compatible)
 		language = r.URL.Query().Get("language")
 		code = r.URL.Query().Get("code")
 		if t := r.URL.Query().Get("timeout"); t != "" {
@@ -344,7 +353,7 @@ func (s *Server) streamHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 设置SSE headers
+	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -359,13 +368,13 @@ func (s *Server) streamHandler(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeout)*time.Second)
 	defer cancel()
 
-	// 使用streaming执行
+	// Execute with streaming output
 	result, err := s.executor.ExecuteStream(ctx, language, code, func(event string, data string) {
 		fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
 		flusher.Flush()
 	})
 
-	// 发送最终结果
+	// Send the final result event
 	if err != nil {
 		fmt.Fprintf(w, "event: error\ndata: %s\n\n", err.Error())
 	} else {
@@ -374,7 +383,13 @@ func (s *Server) streamHandler(w http.ResponseWriter, r *http.Request) {
 	flusher.Flush()
 }
 
-// ptyCreateHandler 创建 PTY 会话
+// ptyCreateHandler creates a new PTY session.
+//
+// When the executor has a permission.Manager installed, we ask the human
+// for consent BEFORE spawning a shell. This is intentionally heavier than a
+// per-file prompt: a PTY can do anything inside the paths the existing
+// rules already allow, so we want a deliberate "yes I want to give the AI
+// a shell right now" gesture each time.
 func (s *Server) ptyCreateHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -384,11 +399,28 @@ func (s *Server) ptyCreateHandler(w http.ResponseWriter, r *http.Request) {
 	width := 80
 	height := 24
 
-	if w := r.URL.Query().Get("width"); w != "" {
-		fmt.Sscanf(w, "%d", &width)
+	if wq := r.URL.Query().Get("width"); wq != "" {
+		fmt.Sscanf(wq, "%d", &width)
 	}
-	if h := r.URL.Query().Get("height"); h != "" {
-		fmt.Sscanf(h, "%d", &height)
+	if hq := r.URL.Query().Get("height"); hq != "" {
+		fmt.Sscanf(hq, "%d", &height)
+	}
+
+	// Permission gate. The executor's manager is the authoritative source
+	// — if there is none (legacy mode), this is a no-op and PTY proceeds
+	// as before so the change is backwards-compatible for existing users.
+	if mgr := s.executor.PermissionManager(); mgr != nil {
+		sandboxName := r.URL.Query().Get("sandbox")
+		if sandboxName == "" {
+			// We're inside agent mode where sandbox name is implicit; use
+			// hostname as a stable label that the dialog can show.
+			sandboxName, _ = os.Hostname()
+		}
+		dec := mgr.CheckPTY(r.Context(), sandboxName, sessionFromContext(r.Context()))
+		if dec.Action == permission.ActionDeny {
+			http.Error(w, dec.Reason, http.StatusForbidden)
+			return
+		}
 	}
 
 	sessionID, err := s.ptyHandler.CreateSession(width, height)
@@ -403,16 +435,16 @@ func (s *Server) ptyCreateHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// ptyWsHandler PTY WebSocket 处理
+// ptyWsHandler handles PTY WebSocket connections.
 func (s *Server) ptyWsHandler(w http.ResponseWriter, r *http.Request) {
-	// 路径: /pty/{sessionId}
+	// Path: /pty/{sessionId}
 	path := r.URL.Path[len("/pty/"):]
 	if path == "" {
 		http.Error(w, "session ID is required", http.StatusBadRequest)
 		return
 	}
 
-	// 升级为 WebSocket
+	// Upgrade the HTTP connection to WebSocket
 	upgrader := websocket.Upgrader{
 		CheckOrigin: func(r *http.Request) bool {
 			return true
@@ -426,13 +458,13 @@ func (s *Server) ptyWsHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
-	// 处理 WebSocket 连接
+	// Handle the WebSocket connection
 	if err := s.ptyHandler.HandleWebSocket(conn, path); err != nil {
 		fmt.Printf("PTY handler error: %v\n", err)
 	}
 }
 
-// projectDirHandler 获取项目目录
+// projectDirHandler returns the project directory path.
 func (s *Server) projectDirHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -444,7 +476,7 @@ func (s *Server) projectDirHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"path": path})
 }
 
-// userHomeDirHandler 获取用户 home 目录
+// userHomeDirHandler returns the user's home directory path.
 func (s *Server) userHomeDirHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -456,7 +488,7 @@ func (s *Server) userHomeDirHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"path": path})
 }
 
-// workDirHandler 获取工作目录
+// workDirHandler returns the current working directory path.
 func (s *Server) workDirHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -468,7 +500,7 @@ func (s *Server) workDirHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"path": path})
 }
 
-// filesHandler 文件列表/信息
+// filesHandler lists files in the given directory.
 func (s *Server) filesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -480,14 +512,12 @@ func (s *Server) filesHandler(w http.ResponseWriter, r *http.Request) {
 		path = s.executor.GetProjectDir()
 	}
 
-	files, err := s.executor.ListFiles(path)
+	files, err := s.executor.ListFiles(r.Context(), path)
 	if err != nil {
-		errMsg := err.Error()
-		// 根据错误类型返回适当的状态码
-		if strings.Contains(errMsg, "denied") || strings.Contains(errMsg, "permission") {
-			http.Error(w, fmt.Sprintf("Access denied: cannot access '%s'. Sandbox files are restricted to the project directory.", path), http.StatusForbidden)
-		} else if strings.Contains(errMsg, "failed to read directory") {
-			http.Error(w, fmt.Sprintf("Cannot read directory '%s': %s", path, errMsg), http.StatusBadRequest)
+		if errors.Is(err, ErrAccessDenied) {
+			writeError(w, err)
+		} else if strings.Contains(err.Error(), "failed to read directory") {
+			http.Error(w, fmt.Sprintf("Cannot read directory '%s': %s", path, err.Error()), http.StatusBadRequest)
 		} else {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
@@ -495,13 +525,13 @@ func (s *Server) filesHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"path":  path,
 		"files": files,
 	})
 }
 
-// filesDeleteHandler 删除文件/目录
+// filesDeleteHandler deletes a file or directory.
 func (s *Server) filesDeleteHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -514,24 +544,19 @@ func (s *Server) filesDeleteHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.executor.DeleteFile(path); err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "cannot delete") || strings.Contains(errMsg, "denied") {
-			http.Error(w, errMsg, http.StatusForbidden)
-		} else {
-			http.Error(w, errMsg, http.StatusInternalServerError)
-		}
+	if err := s.executor.DeleteFile(r.Context(), path); err != nil {
+		writeError(w, err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"success": true,
 		"path":    path,
 	})
 }
 
-// filesInfoHandler 获取文件信息
+// filesInfoHandler returns metadata for a file.
 func (s *Server) filesInfoHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -544,15 +569,14 @@ func (s *Server) filesInfoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	info, err := s.executor.GetFileInfo(path)
+	info, err := s.executor.GetFileInfo(r.Context(), path)
 	if err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "denied") || strings.Contains(errMsg, "permission") {
-			http.Error(w, fmt.Sprintf("Access denied: cannot access '%s'", path), http.StatusForbidden)
-		} else if strings.Contains(errMsg, "no such file") {
+		if errors.Is(err, ErrAccessDenied) {
+			writeError(w, err)
+		} else if strings.Contains(err.Error(), "no such file") {
 			http.Error(w, fmt.Sprintf("File not found: '%s'", path), http.StatusNotFound)
 		} else {
-			http.Error(w, errMsg, http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		return
 	}
@@ -561,7 +585,7 @@ func (s *Server) filesInfoHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(info)
 }
 
-// filesMoveHandler 移动或重命名文件/目录
+// filesMoveHandler moves or renames a file or directory.
 func (s *Server) filesMoveHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -575,25 +599,20 @@ func (s *Server) filesMoveHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.executor.MoveFile(source, destination); err != nil {
-		errMsg := err.Error()
-		if strings.Contains(errMsg, "denied") || strings.Contains(errMsg, "permission") {
-			http.Error(w, fmt.Sprintf("Access denied: cannot move '%s'", source), http.StatusForbidden)
-		} else {
-			http.Error(w, errMsg, http.StatusInternalServerError)
-		}
+	if err := s.executor.MoveFile(r.Context(), source, destination); err != nil {
+		writeError(w, err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"success":    true,
 		"source":     source,
 		"destination": destination,
 	})
 }
 
-// filesFolderHandler 创建目录
+// filesFolderHandler creates a directory.
 func (s *Server) filesFolderHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -606,19 +625,19 @@ func (s *Server) filesFolderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.executor.CreateFolder(path); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := s.executor.CreateFolder(r.Context(), path); err != nil {
+		writeError(w, err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"success": true,
 		"path":    path,
 	})
 }
 
-// filesDownloadHandler 下载文件
+// filesDownloadHandler downloads a file.
 func (s *Server) filesDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -631,13 +650,13 @@ func (s *Server) filesDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := s.executor.DownloadFile(path)
+	data, err := s.executor.DownloadFile(r.Context(), path)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, err)
 		return
 	}
 
-	// 设置下载 headers
+	// Set download headers
 	filename := filepath.Base(path)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
@@ -645,7 +664,7 @@ func (s *Server) filesDownloadHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
-// filesSearchHandler 搜索文件 (glob模式)
+// filesSearchHandler searches for files matching a glob pattern.
 func (s *Server) filesSearchHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -659,9 +678,9 @@ func (s *Server) filesSearchHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.executor.SearchFiles(path, pattern)
+	result, err := s.executor.SearchFiles(r.Context(), path, pattern)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, err)
 		return
 	}
 
@@ -669,7 +688,7 @@ func (s *Server) filesSearchHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-// filesFindHandler 文件内容搜索
+// filesFindHandler searches file contents for a pattern.
 func (s *Server) filesFindHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -683,9 +702,9 @@ func (s *Server) filesFindHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	matches, err := s.executor.FindInFiles(path, pattern)
+	matches, err := s.executor.FindInFiles(r.Context(), path, pattern)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, err)
 		return
 	}
 
@@ -693,14 +712,14 @@ func (s *Server) filesFindHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(matches)
 }
 
-// ReplaceRequest 文本替换请求
+// ReplaceRequest is the request payload for a text replacement operation.
 type ReplaceRequest struct {
 	Files    []string `json:"files"`
 	NewValue string   `json:"newValue"`
 	Pattern  string   `json:"pattern"`
 }
 
-// filesReplaceHandler 文本替换
+// filesReplaceHandler replaces text in files.
 func (s *Server) filesReplaceHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -713,9 +732,9 @@ func (s *Server) filesReplaceHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, err := s.executor.ReplaceInFiles(req.Files, req.Pattern, req.NewValue)
+	results, err := s.executor.ReplaceInFiles(r.Context(), req.Files, req.Pattern, req.NewValue)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeError(w, err)
 		return
 	}
 
@@ -723,7 +742,7 @@ func (s *Server) filesReplaceHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(results)
 }
 
-// filesPermissionsHandler 设置文件权限
+// filesPermissionsHandler sets file ownership and permissions.
 func (s *Server) filesPermissionsHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -745,19 +764,19 @@ func (s *Server) filesPermissionsHandler(w http.ResponseWriter, r *http.Request)
 		fmt.Sscanf(modeStr, "%o", &mode)
 	}
 
-	if err := s.executor.SetFilePermissions(path, owner, group, mode); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	if err := s.executor.SetFilePermissions(r.Context(), path, owner, group, mode); err != nil {
+		writeError(w, err)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"success": true,
 		"path":    path,
 	})
 }
 
-// filesUploadHandler 上传文件
+// filesUploadHandler handles single file uploads.
 func (s *Server) filesUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -788,19 +807,25 @@ func (s *Server) filesUploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 如果 path 是目录，使用原始文件名
+	// If path is a directory, use the original filename
 	destPath := path
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
 		destPath = filepath.Join(path, header.Filename)
 	}
 
-	if err := os.WriteFile(destPath, data, 0644); err != nil {
+	safeDest, err := s.executor.resolveSafePath(destPath, true)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	if err := os.WriteFile(safeDest, data, 0644); err != nil {
 		http.Error(w, fmt.Sprintf("failed to write file: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"success": true,
 		"path":    destPath,
 		"name":    header.Filename,
@@ -808,7 +833,7 @@ func (s *Server) filesUploadHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// filesBulkUploadHandler 批量上传文件
+// filesBulkUploadHandler handles bulk file uploads.
 func (s *Server) filesBulkUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -826,13 +851,13 @@ func (s *Server) filesBulkUploadHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	results := make([]map[string]interface{}, 0)
+	results := make([]map[string]any, 0)
 
 	for filename, fileHeader := range r.MultipartForm.File {
 		for _, header := range fileHeader {
 			file, err := header.Open()
 			if err != nil {
-				results = append(results, map[string]interface{}{
+				results = append(results, map[string]any{
 					"name":    filename,
 					"success": false,
 					"error":   err.Error(),
@@ -843,7 +868,7 @@ func (s *Server) filesBulkUploadHandler(w http.ResponseWriter, r *http.Request) 
 			data, err := io.ReadAll(file)
 			file.Close()
 			if err != nil {
-				results = append(results, map[string]interface{}{
+				results = append(results, map[string]any{
 					"name":    filename,
 					"success": false,
 					"error":   err.Error(),
@@ -852,8 +877,17 @@ func (s *Server) filesBulkUploadHandler(w http.ResponseWriter, r *http.Request) 
 			}
 
 			destPath := filepath.Join(path, filename)
-			if err := os.WriteFile(destPath, data, 0644); err != nil {
-				results = append(results, map[string]interface{}{
+			safeDest, err := s.executor.resolveSafePath(destPath, true)
+			if err != nil {
+				results = append(results, map[string]any{
+					"name":    filename,
+					"success": false,
+					"error":   err.Error(),
+				})
+				continue
+			}
+			if err := os.WriteFile(safeDest, data, 0644); err != nil {
+				results = append(results, map[string]any{
 					"name":    filename,
 					"success": false,
 					"error":   err.Error(),
@@ -861,17 +895,17 @@ func (s *Server) filesBulkUploadHandler(w http.ResponseWriter, r *http.Request) 
 				continue
 			}
 
-			results = append(results, map[string]interface{}{
+			results = append(results, map[string]any{
 				"name":    filename,
 				"success": true,
-				"path":    destPath,
+				"path":    safeDest,
 				"size":    len(data),
 			})
 		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]interface{}{
+	json.NewEncoder(w).Encode(map[string]any{
 		"success": true,
 		"results": results,
 	})

@@ -1,43 +1,229 @@
 // Copyright 2024 SandrPod
-// 代码执行器
+// Code executor
 
 package toolbox
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/sandrpod/sandrpod/pkg/permission"
 )
 
-// Executor 代码执行器
+// ErrAccessDenied is returned when a path is rejected by the blacklist policy.
+var ErrAccessDenied = errors.New("access denied")
+
+// Executor manages concurrent code execution
 type Executor struct {
 	mu      sync.RWMutex
 	running int
-	maxRun  int // 最大并发数
+	maxRun  int    // Maximum concurrent executions
+	workDir string // Safe root directory for file operations
+
+	// permMgr is the optional permission gate. When non-nil, every file
+	// operation that escapes workDir is routed through it (employee gets a
+	// desktop consent prompt). Nil = legacy behavior (system blacklist only).
+	// Set via SetPermissionManager — typically once during agent startup.
+	permMgr *permission.Manager
 }
 
-// NewExecutor 创建执行器
+// SetPermissionManager installs (or replaces) the permission manager.
+// Pass nil to disable interactive permission gating entirely. Safe to call
+// at any time; in-flight resolves use whichever manager is observed.
+func (e *Executor) SetPermissionManager(mgr *permission.Manager) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.permMgr = mgr
+}
+
+// GetWorkDirForPermission exposes the executor's workDir so the agent main
+// can build the permission.Manager with a matching silent-allow zone.
+func (e *Executor) GetWorkDirForPermission() string { return e.workDir }
+
+// PermissionManager returns the currently-installed manager (or nil if
+// permission gating is off). The HTTP layer uses this to apply PTY consent
+// without re-resolving the path tree.
+func (e *Executor) PermissionManager() *permission.Manager {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.permMgr
+}
+
+// sandboxSessionContextKey is unexported to prevent collisions with caller-
+// defined keys; callers use WithSandboxSession / sessionFromContext.
+type sandboxSessionContextKey struct{}
+
+// WithSandboxSession returns a derived context that carries `sessionID`.
+// HTTP handlers should call this when they have a sandbox-session id so the
+// permission manager can attach session-scoped grants correctly.
+func WithSandboxSession(ctx context.Context, sessionID string) context.Context {
+	if sessionID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, sandboxSessionContextKey{}, sessionID)
+}
+
+// sessionFromContext retrieves the sandbox-session id stored by
+// WithSandboxSession, or "" if none is present.
+func sessionFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(sandboxSessionContextKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// resolveAndAuthorize performs the existing system-blacklist check via
+// resolveSafePath, then (if a permission manager is installed) routes the
+// resulting absolute path through the consent flow.
+//
+// Caller is a free-text label surfaced in the prompt body and audit log
+// (e.g. "files.read", "files.delete"). It is NOT a security boundary —
+// just operator UX.
+func (e *Executor) resolveAndAuthorize(ctx context.Context, p string, mode permission.Mode, caller string) (string, error) {
+	write := mode == permission.ModeWrite || mode == permission.ModeReadWrite
+	safe, err := e.resolveSafePath(p, write)
+	if err != nil {
+		return "", err
+	}
+
+	e.mu.RLock()
+	mgr := e.permMgr
+	e.mu.RUnlock()
+	if mgr == nil {
+		return safe, nil
+	}
+
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	decision := mgr.Check(ctx, permission.Request{
+		Path:      safe,
+		Mode:      mode,
+		Caller:    caller,
+		SessionID: sessionFromContext(ctx),
+	})
+	if decision.Action == permission.ActionDeny {
+		return "", fmt.Errorf("%w: %s", ErrAccessDenied, decision.Reason)
+	}
+	return safe, nil
+}
+
+// NewExecutor creates a new Executor with default settings
 func NewExecutor() *Executor {
 	return &Executor{
-		maxRun: 10, // 默认最大并发
+		maxRun:  10, // Default concurrency limit
+		workDir: defaultWorkDir(),
 	}
 }
 
-// Execute 执行代码
+// rawReadBlacklist / rawWriteBlacklist are the raw blacklist entries; init() expands them (including symlink resolution).
+var rawReadBlacklist = []string{"/proc", "/sys", "/dev", "/boot"}
+
+var rawWriteBlacklist = []string{
+	"/etc",
+	"/root",
+	"/bin",
+	"/sbin",
+	"/usr",
+	"/lib",
+	"/lib64",
+	"/var/run",
+}
+
+// readBlacklist / writeBlacklist are populated by init() with both the raw paths and their
+// resolved symlink targets so that restrictions work correctly on macOS (/etc → /private/etc, etc.) and Linux.
+var (
+	readBlacklist  []string
+	writeBlacklist []string
+)
+
+func init() {
+	readBlacklist = expandBlacklist(rawReadBlacklist)
+	writeBlacklist = expandBlacklist(rawWriteBlacklist)
+}
+
+// expandBlacklist appends the resolved symlink target for each blacklist path when it differs from the original.
+func expandBlacklist(list []string) []string {
+	seen := make(map[string]bool, len(list)*2)
+	result := make([]string, 0, len(list)*2)
+	for _, p := range list {
+		if !seen[p] {
+			seen[p] = true
+			result = append(result, p)
+		}
+		if resolved, err := filepath.EvalSymlinks(p); err == nil && !seen[resolved] {
+			seen[resolved] = true
+			result = append(result, resolved)
+		}
+	}
+	return result
+}
+
+// isBlacklisted reports whether clean (a normalized absolute path) matches any blacklist prefix.
+func isBlacklisted(clean string, list []string) bool {
+	for _, prefix := range list {
+		if clean == prefix || strings.HasPrefix(clean, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// resolveSymlinks resolves symlinks in a path as much as possible.
+// For paths that do not yet exist (e.g. files about to be created), it walks up to
+// the nearest existing parent, resolves that, then re-appends the remaining segments
+// so that /tmp/foo → /private/tmp/foo (macOS) and similar cases are handled correctly.
+func resolveSymlinks(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	parent := filepath.Dir(p)
+	if parent == p {
+		return p
+	}
+	return filepath.Join(resolveSymlinks(parent), filepath.Base(p))
+}
+
+// resolveSafePath normalizes a user-supplied path and checks it against the read/write blacklists.
+// Relative paths are resolved against workDir; an empty path returns workDir itself.
+// When write=true, the write blacklist is also checked (system files must not be modified);
+// when write=false, only the read blacklist is checked (kernel/device paths are inaccessible).
+func (e *Executor) resolveSafePath(p string, write bool) (string, error) {
+	if p == "" {
+		return e.workDir, nil
+	}
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(e.workDir, p)
+	}
+	clean := resolveSymlinks(filepath.Clean(p))
+
+	if isBlacklisted(clean, readBlacklist) {
+		return "", fmt.Errorf("%w: %q is a restricted system path", ErrAccessDenied, clean)
+	}
+	if write && isBlacklisted(clean, writeBlacklist) {
+		return "", fmt.Errorf("%w: %q is read-only (system files cannot be modified)", ErrAccessDenied, clean)
+	}
+	return clean, nil
+}
+
+// Execute runs code in the given language and returns the result
 func (e *Executor) Execute(ctx context.Context, language, code string) (*ProcessResult, error) {
 	return e.ExecuteStream(ctx, language, code, nil)
 }
 
-// StreamCallback 流式输出回调
+// StreamCallback is a callback for streaming output events
 type StreamCallback func(event string, data string)
 
-// ExecuteStream 执行代码并流式输出
+// ExecuteStream executes code and streams output via an optional callback
 func (e *Executor) ExecuteStream(ctx context.Context, language, code string, callback StreamCallback) (*ProcessResult, error) {
 	e.mu.Lock()
 	if e.running >= e.maxRun {
@@ -45,6 +231,7 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 		return nil, fmt.Errorf("too many concurrent executions")
 	}
 	e.running++
+	mgr := e.permMgr
 	e.mu.Unlock()
 
 	defer func() {
@@ -52,6 +239,24 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 		e.running--
 		e.mu.Unlock()
 	}()
+
+	// Command policy gate. We pattern-match the submitted code against the
+	// deny/warn lists from permissions.json BEFORE spawning the runtime —
+	// see pkg/permission/policy.go for the honest scope ("token-level
+	// scan, not a real shell parser"). Warn-level hits are recorded for
+	// the caller via the StreamCallback so the agent UI / Acme backend
+	// can surface them as audit events.
+	if mgr != nil {
+		dec := mgr.CheckExec(code)
+		if callback != nil {
+			for _, w := range dec.Warns {
+				callback("policy_warn", fmt.Sprintf("⚠️ command %q is on the warn-list (token %q)", w.Command, w.Token))
+			}
+		}
+		if dec.Action == permission.ActionDeny {
+			return nil, fmt.Errorf("%w: %s", ErrAccessDenied, dec.Reason)
+		}
+	}
 
 	start := time.Now()
 
@@ -81,18 +286,18 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 		return nil, fmt.Errorf("unsupported language: %s", language)
 	}
 
-	// 设置工作目录和环境变量
+	// Set working directory and environment
 	cmd.Dir = defaultWorkDir()
-	// 继承父进程的环境变量��确保 PATH 可以找到 python3/node 等命令
+	// Inherit the parent process environment so PATH resolves python3, node, etc.
 	cmd.Env = os.Environ()
-	// 进程组隔离（Unix only；Windows 为 no-op）
+	// Process group isolation (Unix only; no-op on Windows)
 	setSysProcAttr(cmd)
 
-	// 使用管道进行流式输出
+	// Attach pipes for streaming output
 	stdoutPipe, _ := cmd.StdoutPipe()
 	stderrPipe, _ := cmd.StderrPipe()
 
-	// 设置超时
+	// Ensure a valid context (for timeout handling)
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -101,7 +306,7 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
 
-	// 并发读取 stdout 和 stderr
+	// Read stdout and stderr concurrently
 	var wg sync.WaitGroup
 	var stdout, stderr bytes.Buffer
 
@@ -115,7 +320,7 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 		io.Copy(&stderr, stderrPipe) //nolint:errcheck
 	}()
 
-	// 等待完成或超时
+	// Wait for completion or context cancellation
 	done := make(chan error, 1)
 	go func() {
 		wg.Wait()
@@ -144,7 +349,7 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 			}
 		}
 
-		// 发送最终输出
+		// Deliver final output via callback
 		if callback != nil {
 			if stdout.Len() > 0 {
 				callback("stdout", stdout.String())
@@ -164,13 +369,13 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 	}
 }
 
-// HealthCheck 健康检查
+// HealthCheck verifies that required runtimes are available
 func (e *Executor) HealthCheck() HealthCheckResult {
 	result := HealthCheckResult{
 		Docker: true,
 	}
 
-	// 检查 Python
+	// Check Python
 	if err := exec.Command("python3", "--version").Run(); err != nil {
 		result.Python = false
 		result.Docker = false
@@ -178,7 +383,7 @@ func (e *Executor) HealthCheck() HealthCheckResult {
 		result.Python = true
 	}
 
-	// 检查 Node
+	// Check Node
 	if err := exec.Command("node", "--version").Run(); err != nil {
 		result.Node = false
 	} else {
@@ -188,19 +393,19 @@ func (e *Executor) HealthCheck() HealthCheckResult {
 	return result
 }
 
-// HealthCheckResult 健康检查结果
+// HealthCheckResult holds the result of a health check
 type HealthCheckResult struct {
 	Docker bool
 	Python bool
 	Node   bool
 }
 
-// Stats 获取统计信息
-func (e *Executor) Stats() map[string]interface{} {
+// Stats returns current execution statistics
+func (e *Executor) Stats() map[string]any {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	return map[string]interface{}{
+	return map[string]any{
 		"running": e.running,
 		"max_run": e.maxRun,
 	}
