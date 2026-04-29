@@ -48,7 +48,16 @@ Client → API Server (Control Plane, :8080)
 | **API Server** | REST control plane. Handles sandbox CRUD, job scheduling, and proxies requests through tunnels |
 | **Poder** | Worker node. Maintains a persistent WebSocket connection to the API Server and manages Docker container lifecycle |
 | **sandrpod-agent** | Registers the local machine directly as a sandbox with an embedded Toolbox — no Docker required |
+| **sandrpod-tray** | Optional user-session GUI for employee-PC mode: tray icon + consent prompts + local settings page. See [docs/PERMISSION_AND_AUDIT.md](docs/PERMISSION_AND_AUDIT.md) |
 | **Toolbox** | Code execution service running inside each sandbox container. Supports PTY, file operations, and sessions |
+
+> **Employee-PC mode (opt-in)**: when `sandrpod-agent` runs on a real
+> employee laptop rather than a server, you can enable a per-PC
+> permission gate (path consent + command denylist + PTY consent) and a
+> decision-audit pipeline that ships every allow/deny/warn event to a
+> central HTTP endpoint. Both layers are off by default
+> (`--permission-mode=off`) and fully described in
+> **[docs/PERMISSION_AND_AUDIT.md](docs/PERMISSION_AND_AUDIT.md)**.
 
 ---
 
