@@ -308,9 +308,7 @@ func (m *Manager) CheckPTY(ctx context.Context, sandboxName, sessionID string) D
 	if m == nil {
 		return Decision{Action: ActionAllow}
 	}
-	// We could short-circuit "auto-allow if a session-grant for this
-	// sessionID already approved a PTY". For Sprint 3 we keep it simple:
-	// every PTY open prompts. Sprint 4 may add a session-grant cache.
+
 	req := Request{
 		Path:      "PTY:" + sandboxName,
 		Mode:      ModeExec,
@@ -319,22 +317,77 @@ func (m *Manager) CheckPTY(ctx context.Context, sandboxName, sessionID string) D
 		Reason:    "AI 请求打开交互式终端会话（一旦允许，AI 在该会话中可以执行任意 shell 命令，仅受路径授权和命令策略限制）",
 	}
 
+	// Short-circuit: if the same AI session already got "本会话允许" for
+	// this sandbox's PTY, don't bother the user again. New sessions get
+	// new sessionIDs and will re-prompt — that is the entire point of
+	// session-scoped grants over permanent ones for shells.
+	snap := m.store.Snapshot()
+	if matchSessionAllow(req, snap.SessionGrants, m.homeDir, time.Now()) {
+		dec := Decision{Action: ActionAllow}
+		m.recordDecision("pty", dec, req)
+		return dec
+	}
+
 	m.promptMu.Lock()
 	defer m.promptMu.Unlock()
+
+	// Re-check after acquiring the lock — a concurrent CheckPTY for the
+	// same sessionID may have just persisted a session grant.
+	snap = m.store.Snapshot()
+	if matchSessionAllow(req, snap.SessionGrants, m.homeDir, time.Now()) {
+		dec := Decision{Action: ActionAllow}
+		m.recordDecision("pty", dec, req)
+		return dec
+	}
 
 	promptCtx, cancel := context.WithTimeout(ctx, DefaultPromptDeadline)
 	defer cancel()
 
 	resp, err := m.notifier.Ask(promptCtx, req)
 	if err != nil {
-		return Decision{Action: ActionDeny, Reason: fmt.Sprintf("pty consent prompt failed: %v", err)}
+		dec := Decision{Action: ActionDeny, Reason: fmt.Sprintf("pty consent prompt failed: %v", err)}
+		m.recordDecision("pty", dec, req)
+		return dec
 	}
 	var dec Decision
 	switch resp {
-	case PromptAllowOnce, PromptAllowSession, PromptAllowPermanent:
-		// We don't persist permanent PTY grants — that would let an AI
-		// open shells silently forever. PTY consent is per-open.
+	case PromptAllowOnce:
 		dec = Decision{Action: ActionAllow}
+
+	case PromptAllowSession:
+		// Session-scoped persistence: subsequent PTY opens within the
+		// same AI conversation will silent-allow until ExpiresAt.
+		// Without a session id we can't write a session grant — fall
+		// back to allow-once so the click isn't a no-op.
+		if sessionID == "" {
+			dec = Decision{Action: ActionAllow}
+			break
+		}
+		_ = m.store.AddSessionRule(Rule{
+			Path:      req.Path,
+			Mode:      req.Mode,
+			SessionID: sessionID,
+			ExpiresAt: time.Now().Add(8 * time.Hour),
+		})
+		dec = Decision{Action: ActionAllow}
+
+	case PromptAllowPermanent:
+		// Defensive: the macOS / Linux / Windows prompters all swap the
+		// third button to "本会话允许" when Mode==Exec, so this branch
+		// shouldn't be reachable in practice. Treat it as session-scoped
+		// (the safer interpretation) so a future prompter that returns
+		// PromptAllowPermanent for a PTY request doesn't silently grant
+		// forever-shell.
+		if sessionID != "" {
+			_ = m.store.AddSessionRule(Rule{
+				Path:      req.Path,
+				Mode:      req.Mode,
+				SessionID: sessionID,
+				ExpiresAt: time.Now().Add(8 * time.Hour),
+			})
+		}
+		dec = Decision{Action: ActionAllow}
+
 	case PromptDeny:
 		dec = Decision{Action: ActionDeny, Reason: "PTY denied by user"}
 	case PromptTimeout:

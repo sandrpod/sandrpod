@@ -71,7 +71,14 @@ func newPlatformPrompter() permission.Notifier { return NewWindowsPrompter() }
 // PowerShell child process is killed and the dialog disappears. The
 // user sees the dialog vanish; the manager records PromptTimeout.
 func (p *WindowsPrompter) Ask(ctx context.Context, req permission.Request) (permission.PromptResponse, error) {
-	legend := "[是 = 永久允许]  [否 = 允许本次]  [取消 = 拒绝]`r`n`r`n"
+	// PTY consent: third option is session-scoped, not permanent (see
+	// manager.CheckPTY). The legend text is the only thing differentiating
+	// the two cases on Windows because MessageBox can't relabel buttons.
+	yesMeaning := "永久允许"
+	if req.Mode == permission.ModeExec {
+		yesMeaning = "本会话允许"
+	}
+	legend := "[是 = " + yesMeaning + "]  [否 = 允许本次]  [取消 = 拒绝]`r`n`r`n"
 	body := legend + buildPromptBody(req)
 
 	// All single-quoted strings in PowerShell are literal — only doubled
@@ -115,6 +122,10 @@ Write-Output $result.ToString()
 	answer := strings.TrimSpace(stdout.String())
 	switch answer {
 	case "Yes":
+		// Yes maps to whichever permanence the legend told the user it would.
+		if req.Mode == permission.ModeExec {
+			return permission.PromptAllowSession, nil
+		}
 		return permission.PromptAllowPermanent, nil
 	case "No":
 		return permission.PromptAllowOnce, nil

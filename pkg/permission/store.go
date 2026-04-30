@@ -212,9 +212,18 @@ func (s *Store) flushLocked() error {
 	return nil
 }
 
-// upsertRule appends r, replacing any existing rule with the same path.
-// Hardlock rules always win over non-hardlock upserts (so a permanent
-// allow can never silently shadow a hardlock).
+// upsertRule appends r, or merges it into an existing rule with the same path.
+//
+// Merge semantics for same-path rules:
+//   - Hardlock always wins over non-hardlock (defense in depth — a permanent
+//     allow can never silently shadow a hardlock).
+//   - For permanent + permanent collisions on the same path we widen the
+//     mode (r ∪ w → rw) instead of overwriting. Without this widening, the
+//     user would see the dialog re-pop whenever the AI's mode changed
+//     (read after write or vice versa) and feel like the previous "永久
+//     允许" click was forgotten.
+//   - Same-mode upsert refreshes GrantedAt + Note in case the caller is
+//     re-recording an audit event.
 func upsertRule(rules []Rule, r Rule) []Rule {
 	for i, existing := range rules {
 		if existing.Path != r.Path {
@@ -223,8 +232,33 @@ func upsertRule(rules []Rule, r Rule) []Rule {
 		if existing.Scope == ScopeHardlock && r.Scope != ScopeHardlock {
 			return rules // refuse to overwrite hardlock
 		}
+		// Permanent + permanent: widen the mode union rather than overwrite.
+		if existing.Scope == ScopePermanent && r.Scope == ScopePermanent {
+			r.Mode = unionMode(existing.Mode, r.Mode)
+		}
 		rules[i] = r
 		return rules
 	}
 	return append(rules, r)
+}
+
+// unionMode returns the most permissive of (a, b). It treats deny / unknown
+// as opaque "keep verbatim" so we never accidentally promote a deny rule.
+func unionMode(a, b Mode) Mode {
+	// Deny rules are not permissive grants — never widen.
+	if a == "deny" || b == "deny" {
+		if a == "deny" {
+			return a
+		}
+		return b
+	}
+	// Reach rw if either side has it, or if both r+w pair appears.
+	if a == ModeReadWrite || b == ModeReadWrite {
+		return ModeReadWrite
+	}
+	if (a == ModeRead && b == ModeWrite) || (a == ModeWrite && b == ModeRead) {
+		return ModeReadWrite
+	}
+	// Same mode (or only one side present) — keep b (the new rule's value).
+	return b
 }

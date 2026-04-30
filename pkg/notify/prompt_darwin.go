@@ -35,13 +35,23 @@ func newPlatformPrompter() permission.Notifier { return NewMacPrompter() }
 
 // Ask renders a 3-button modal dialog and returns the employee's choice.
 //
-// Buttons: [拒绝] [允许本次] [永久允许]
+// Buttons depend on the request mode:
+//
+//   - Mode != ModeExec (path access)
+//       [拒绝] [允许本次] [永久允许]
+//       — third button persists a permanent rule
+//
+//   - Mode == ModeExec (PTY shell consent)
+//       [拒绝] [允许本次] [本会话允许]
+//       — third button persists a session-scoped grant; opening a new
+//         AI conversation will re-prompt. We deliberately do NOT offer
+//         "永久允许" for PTY because a shell session can do anything
+//         the path rules already permit, and giving forever-silent-PTY
+//         crosses the threshold from "consent UI" into "set-and-forget
+//         remote control" — out of scope for this feature.
 //
 // macOS `display dialog` enforces a hard maximum of 3 buttons (osascript
-// error -50: "最多允许使用三个按钮"). We dropped the original
-// "本会话允许" option — it was confusable with "允许本次" anyway, and
-// session-scoped grants can still be installed via the tray settings page
-// when needed (rare path).
+// error -50: "最多允许使用三个按钮").
 //
 // We use `display dialog` rather than `display notification` because:
 //   - notification is fire-and-forget (no return value).
@@ -58,8 +68,12 @@ func (p *MacPrompter) Ask(ctx context.Context, req permission.Request) (permissi
 	}
 
 	body := buildPromptBody(req)
+	thirdButton := "永久允许"
+	if req.Mode == permission.ModeExec {
+		thirdButton = "本会话允许"
+	}
 	script := fmt.Sprintf(`
-		set theButtons to {"拒绝", "允许本次", "永久允许"}
+		set theButtons to {"拒绝", "允许本次", %s}
 		set theResult to display dialog %s ¬
 			with title %s ¬
 			buttons theButtons ¬
@@ -74,6 +88,7 @@ func (p *MacPrompter) Ask(ctx context.Context, req permission.Request) (permissi
 		end if
 		return btn
 	`,
+		quoteAS(thirdButton),
 		quoteAS(body),
 		quoteAS(p.AppTitle),
 		deadline,
@@ -105,6 +120,8 @@ func (p *MacPrompter) Ask(ctx context.Context, req permission.Request) (permissi
 		return permission.PromptAllowOnce, nil
 	case "永久允许":
 		return permission.PromptAllowPermanent, nil
+	case "本会话允许":
+		return permission.PromptAllowSession, nil
 	case "拒绝":
 		return permission.PromptDeny, nil
 	case "TIMEOUT":

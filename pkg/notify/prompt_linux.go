@@ -74,13 +74,22 @@ func (p *LinuxPrompter) Ask(ctx context.Context, req permission.Request) (permis
 func (p *LinuxPrompter) askZenity(ctx context.Context, bin string, req permission.Request) (permission.PromptResponse, error) {
 	body := buildPromptBody(req)
 
+	// PTY consent uses session-scoped persistence; path consent uses permanent.
+	// See pkg/permission/manager.go::CheckPTY for the rationale (shell sessions
+	// shouldn't be set-and-forget; per-AI-conversation expiry is the right
+	// granularity).
+	thirdBtn := "永久允许"
+	if req.Mode == permission.ModeExec {
+		thirdBtn = "本会话允许"
+	}
+
 	args := []string{
 		"--question",
 		"--title=" + p.AppTitle,
 		"--text=" + body,
 		"--ok-label=允许本次",
 		"--cancel-label=拒绝",
-		"--extra-button=永久允许",
+		"--extra-button=" + thirdBtn,
 		"--width=520",
 		"--icon-name=dialog-warning",
 	}
@@ -113,6 +122,9 @@ func (p *LinuxPrompter) askZenity(ctx context.Context, bin string, req permissio
 	case 1:
 		if answer == "永久允许" {
 			return permission.PromptAllowPermanent, nil
+		}
+		if answer == "本会话允许" {
+			return permission.PromptAllowSession, nil
 		}
 		// Empty stdout → user clicked Cancel (拒绝) or closed the dialog.
 		return permission.PromptDeny, nil
