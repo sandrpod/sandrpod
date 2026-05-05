@@ -41,64 +41,20 @@ var (
 	publicURL      = flag.String("public-url", os.Getenv("SANDRPOD_PUBLIC_URL"), "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
 )
 
-func main() {
-	flag.Parse()
+// serverConfig holds runtime configuration for the HTTP mux.
+type serverConfig struct {
+	Token  string // API bearer token; empty = no auth
+	APIURL string // used by scheduler for bootstrapping
+}
 
-	if *help {
-		flag.Usage()
-		os.Exit(0)
-	}
-
-	log.Printf("Starting SandrPod API Server v0.3.0 (Control Plane)")
-
-	// Register cloud providers
-	if err := aws.Register(); err != nil {
-		log.Printf("Warning: Failed to register AWS provider: %v", err)
-	} else {
-		log.Printf("AWS provider registered")
-	}
-	if err := aliyun.Register(); err != nil {
-		log.Printf("Warning: Failed to register Aliyun provider: %v", err)
-	} else {
-		log.Printf("Aliyun provider registered")
-	}
-
-	factory := provider.GetFactory()
-	log.Printf("Registered providers: %v", factory.Names())
-
-	// ── Store construction ────────────────────────────────────────────────────
-	var stores podpkg.Stores
-	switch {
-	case *dbDSN == "":
-		stores = store.NewMemoryStores()
-		log.Printf("Using in-memory store (data will be lost on restart)")
-	case strings.HasPrefix(*dbDSN, "sqlite:"):
-		dsn, _ := strings.CutPrefix(*dbDSN, "sqlite:")
-		db, err := sqlitestore.Open(dsn)
-		if err != nil {
-			log.Fatalf("Failed to open SQLite DB %q: %v", dsn, err)
-		}
-		defer db.Close()
-		stores = podpkg.Stores{
-			Sandboxes: sqlitestore.NewSandboxRepo(db),
-			Poders:    sqlitestore.NewPoderRepo(db),
-			Jobs:      sqlitestore.NewJobRepo(db),
-		}
-		log.Printf("Using SQLite store at %q", dsn)
-	default:
-		log.Fatalf("Unknown -db value %q (supported: sqlite:<path>)", *dbDSN)
-	}
-
+// buildMux constructs and returns the HTTP mux for the API server.
+// All handler logic is self-contained here so that tests can call it directly
+// without starting a real TCP listener.
+func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *tunnel.TunnelStore) http.Handler {
 	jobStore := stores.Jobs
 	sandboxStore := stores.Sandboxes
 	poderStore := stores.Poders
-	tunnelStore := tunnel.NewTunnelStore()
-	directStore := tunnel.NewDirectTunnelStore() // direct sandbox agent tunnels (toC)
-	apiURL := *publicURL
-	if apiURL == "" {
-		apiURL = fmt.Sprintf("http://localhost:%d", *port)
-	}
-	scheduler := podpkg.NewScheduler(poderStore, apiURL)
+	scheduler := podpkg.NewScheduler(poderStore, cfg.APIURL)
 
 	mux := http.NewServeMux()
 
@@ -109,8 +65,8 @@ func main() {
 	// Authentication middleware
 	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			if *token != "" {
-				if r.Header.Get("Authorization") != "Bearer "+*token {
+			if cfg.Token != "" {
+				if r.Header.Get("Authorization") != "Bearer "+cfg.Token {
 					http.Error(w, "Unauthorized", http.StatusUnauthorized)
 					return
 				}
@@ -1090,11 +1046,71 @@ func main() {
 		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 	}))
 
+	return mux
+}
+
+func main() {
+	flag.Parse()
+
+	if *help {
+		flag.Usage()
+		os.Exit(0)
+	}
+
+	log.Printf("Starting SandrPod API Server v0.3.0 (Control Plane)")
+
+	// Register cloud providers
+	if err := aws.Register(); err != nil {
+		log.Printf("Warning: Failed to register AWS provider: %v", err)
+	} else {
+		log.Printf("AWS provider registered")
+	}
+	if err := aliyun.Register(); err != nil {
+		log.Printf("Warning: Failed to register Aliyun provider: %v", err)
+	} else {
+		log.Printf("Aliyun provider registered")
+	}
+
+	factory := provider.GetFactory()
+	log.Printf("Registered providers: %v", factory.Names())
+
+	// ── Store construction ────────────────────────────────────────────────────
+	var stores podpkg.Stores
+	switch {
+	case *dbDSN == "":
+		stores = store.NewMemoryStores()
+		log.Printf("Using in-memory store (data will be lost on restart)")
+	case strings.HasPrefix(*dbDSN, "sqlite:"):
+		dsn, _ := strings.CutPrefix(*dbDSN, "sqlite:")
+		db, err := sqlitestore.Open(dsn)
+		if err != nil {
+			log.Fatalf("Failed to open SQLite DB %q: %v", dsn, err)
+		}
+		defer db.Close()
+		stores = podpkg.Stores{
+			Sandboxes: sqlitestore.NewSandboxRepo(db),
+			Poders:    sqlitestore.NewPoderRepo(db),
+			Jobs:      sqlitestore.NewJobRepo(db),
+		}
+		log.Printf("Using SQLite store at %q", dsn)
+	default:
+		log.Fatalf("Unknown -db value %q (supported: sqlite:<path>)", *dbDSN)
+	}
+
+	tunnelStore := tunnel.NewTunnelStore()
+	directStore := tunnel.NewDirectTunnelStore() // direct sandbox agent tunnels (toC)
+	apiURL := *publicURL
+	if apiURL == "" {
+		apiURL = fmt.Sprintf("http://localhost:%d", *port)
+	}
+	cfg := serverConfig{Token: *token, APIURL: apiURL}
+	handler := buildMux(cfg, stores, tunnelStore, directStore)
+
 	// Start the HTTP server
 	addr := fmt.Sprintf(":%d", *port)
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           mux,
+		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		WriteTimeout:      120 * time.Second,
@@ -1113,7 +1129,7 @@ func main() {
 		server.Shutdown(ctx)
 	}()
 
-	go cleanupOfflinePoders(rootCtx, poderStore, *offlineTimeout)
+	go cleanupOfflinePoders(rootCtx, stores.Poders, *offlineTimeout)
 
 	log.Printf("API server listening on %s (Control Plane + Tunnel Mode)", addr)
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
