@@ -1,3 +1,9 @@
+# SandrPod Horizontal Scaling Design
+
+> **Note:** This document is written in Chinese. It is an internal design note describing a future path from single-node SQLite to multi-instance + PostgreSQL, with zero-downtime migration and no breaking changes to the existing API or Poder tunnel protocol.
+
+---
+
 # SandrPod 横向扩展设计
 
 > **目标**：从单节点 SQLite 平滑演进到多实例 + PostgreSQL，全程不破坏现有 API 与 Poder 协议，零停机切换。

@@ -1,3 +1,11 @@
+# SandrPod Technical Architecture Design v1.0
+
+> **Note:** This document is written in Chinese. It is an internal design note from the early v1.0 planning phase (2024-03) and describes the **intended architecture blueprint**. Some sections have not been implemented or were revised during development.  
+> For the current working architecture, see [`../ARCHITECTURE.md`](../ARCHITECTURE.md).  
+> For the horizontal-scaling (multi-instance + PostgreSQL) design, see [`horizontal-scaling.md`](horizontal-scaling.md).
+
+---
+
 # SandrPod 技术架构设计 v1.0
 
 > ⚠️ **历史文档**：本文档为 v1.0 初期设计规划（2024-03），描述的是**目标架构蓝图**，部分内容尚未实现或已在实现过程中调整。  
