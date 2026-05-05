@@ -190,6 +190,14 @@ func main() {
 			if cur, ok := tunnelStore.Get(poderID); ok && cur == t {
 				tunnelStore.Remove(poderID)
 				poderStore.SetOffline(poderID)
+				// Mark orphaned sandboxes as ERROR — the tunnel is gone so we
+				// cannot reach the containers; callers will get a meaningful
+				// state rather than a stale RUNNING record.
+				for _, sb := range sandboxStore.ListByPoderID(poderID) {
+					_ = sandboxStore.Update(sb.Name, func(s *podpkg.SandboxInfo) {
+						s.State = podpkg.StateError
+					})
+				}
 			}
 			t.Close()
 			log.Printf("Poder %s tunnel disconnected", poderID)
@@ -295,8 +303,26 @@ func main() {
 				http.Error(w, "poder not found", http.StatusNotFound)
 				return
 			}
-			// Force-close the tunnel if still connected
-			if t, ok := tunnelStore.Get(pID); ok {
+			// Clean up sandboxes that belonged to this Poder.
+			// If the tunnel is still alive, ask Poder to delete each container
+			// first, then remove the store record. If the tunnel is gone (or
+			// the delete request fails), we still remove the record so it
+			// doesn't linger as a stale RUNNING entry.
+			sandboxes := sandboxStore.ListByPoderID(pID)
+			t, tunnelAlive := tunnelStore.Get(pID)
+			for _, sb := range sandboxes {
+				if tunnelAlive {
+					delReq, _ := http.NewRequestWithContext(r.Context(), http.MethodDelete,
+						"http://poder/sandboxes/"+sb.Name, nil)
+					if resp, err := t.Client.Do(delReq); err != nil {
+						log.Printf("DELETE poder %s: failed to delete container %s: %v", pID, sb.Name, err)
+					} else {
+						resp.Body.Close()
+					}
+				}
+				_ = sandboxStore.Delete(sb.Name)
+			}
+			if tunnelAlive {
 				t.Close()
 			}
 			if err := poderStore.Delete(pID); err != nil {

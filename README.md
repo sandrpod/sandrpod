@@ -30,6 +30,8 @@ At its core, SandrPod connects a central API server to worker nodes (Poder) via 
 - **Multi-node scheduling** — connect multiple Poder workers across regions; the scheduler picks the least-loaded node automatically
 - **Direct agent mode** — register any machine as a sandbox without Docker using `sandrpod-agent`
 - **Reverse tunnel architecture** — Poder dials in to the API Server; no inbound ports required on worker nodes
+- **Permission gate (opt-in)** — employee-PC mode with path consent dialogs, command denylist, and PTY consent; TCC-inspired macOS/Linux/Windows support via `sandrpod-tray`
+- **Decision audit pipeline (opt-in)** — every allow/deny/warn event logged locally (NDJSON) and shipped to a central HTTP endpoint for compliance and observability
 
 ---
 
@@ -91,7 +93,25 @@ docker run -d --name sandrpod-poder --restart=unless-stopped \
 go run ./cmd/agent -api-url=http://localhost:8080 -name=my-machine
 ```
 
-### 4. Execute Code
+### 4. Employee-PC Mode (permission gate + audit)
+
+```bash
+# Start the tray companion (user-session, shows 🛡 icon in the menu bar)
+sandrpod-tray serve
+
+# Start the agent with permission gate and audit upload
+go run ./cmd/agent \
+  -api-url=http://localhost:8080 \
+  -name=my-laptop \
+  -permission-mode=prompt \
+  -audit-upload-url=https://your-platform/api/audit/decisions/batch
+```
+
+Permission modes: `off` (default, legacy behavior) | `prompt` (consent dialog for paths outside `work_dir`) | `strict` (silent deny outside `work_dir`, headless servers).
+
+See **[docs/PERMISSION_AND_AUDIT.md](docs/PERMISSION_AND_AUDIT.md)** for the full architecture, `permissions.json` schema, `sandrpod-tray` CLI reference, and audit HTTP protocol.
+
+### 5. Execute Code
 
 ```bash
 curl -X POST "http://localhost:8080/api/v1/sandboxes/execute?sandbox=my-sandbox" \
@@ -173,16 +193,23 @@ sandrpod-cli poder delete <poder-id>
 ## Building
 
 ```bash
-# Local build
-go build -o server  ./cmd/server
-go build -o poder   ./cmd/poder
-go build -o agent   ./cmd/agent
+# One-shot: all platforms + sandrpod-tray (skips missing toolchains gracefully)
+make build-all
 
-# Cross-compile to dist/
+# Local build (agent/server are CGO-free; tray requires CGO + native libs)
+go build -o server        ./cmd/server
+go build -o poder         ./cmd/poder
+go build -o agent         ./cmd/agent
+go build -o sandrpod-tray ./cmd/sandrpod-tray   # CGO required
+
+# Cross-compile to dist/ (agent + server only, CGO=0)
 CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/server-linux-amd64 ./cmd/server
 CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrpod-agent-linux-amd64 ./cmd/agent
 CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/sandrpod-agent-darwin-arm64 ./cmd/agent
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrpod-agent-windows-amd64.exe ./cmd/agent
+
+# sandrpod-tray (CGO): macOS host build; Linux via Docker; Windows via mingw-w64
+# `make build-all` handles all three automatically.
 
 # Docker images (amd64)
 docker buildx build --platform linux/amd64 -f docker/Dockerfile.poder   -t sandrpod/poder:latest   --load .

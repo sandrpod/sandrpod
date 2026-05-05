@@ -362,7 +362,7 @@ ExecuteStream(ctx, "bash", code, callback)
 {
   "version": 1,
   "user": "alice",
-  "work_dir": "/Users/alice/AgentSandbox",
+  "work_dir": "/Users/alice/workspace",
   "rules": [
     { "path": "~/Documents", "mode": "rw",   "scope": "permanent", "granted_at": "..." },
     { "path": "~/.ssh",      "mode": "deny", "scope": "hardlock",  "note": "default seed" }

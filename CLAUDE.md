@@ -6,12 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 # Build all binaries (dev, native arch)
-go build -o server  ./cmd/server
-go build -o poder   ./cmd/poder
-go build -o agent   ./cmd/agent
-go build -o toolbox ./cmd/toolbox
+go build -o server       ./cmd/server
+go build -o poder        ./cmd/poder
+go build -o agent        ./cmd/agent
+go build -o toolbox      ./cmd/toolbox
+go build -o sandrpod-tray ./cmd/sandrpod-tray  # CGO required (systray uses Cocoa/GTK/win32)
 
-# Cross-compile release binaries → dist/
+# One-shot cross-compile: all platforms + sandrpod-tray (auto-skips missing toolchains)
+make build-all
+# Outputs: dist/server-linux-amd64, dist/sandrpod-agent-{linux,darwin,windows}-{amd64,arm64}[.exe]
+#          dist/sandrpod-tray-darwin-{amd64,arm64}, dist/sandrpod-tray-windows-amd64.exe (needs mingw-w64)
+#          dist/sandrpod-tray-linux-{amd64,arm64} (needs docker)
+
+# Cross-compile release binaries → dist/ (agent/server are CGO=0; tray needs CGO)
 CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/server-linux-amd64          ./cmd/server
 CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrpod-agent-linux-amd64  ./cmd/agent
 CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o dist/sandrpod-agent-linux-arm64  ./cmd/agent
@@ -46,6 +53,28 @@ docker run -d --name sandrpod-poder --restart=unless-stopped \
 # Run sandrpod-agent (registers local machine directly as a sandbox)
 go run ./cmd/agent -api-url=http://localhost:8080 -name=my-agent
 
+# Run sandrpod-agent in employee-PC mode (permission gate + audit)
+go run ./cmd/agent -api-url=http://localhost:8080 -name=my-laptop \
+  -permission-mode=prompt \
+  -audit-upload-url=https://your-platform/api/audit/decisions/batch
+
+# sandrpod-agent permission/audit flags:
+#   -permission-mode   off | prompt | strict  (default: off)
+#   -permission-file   override ~/.sandrpod/permissions.json path
+#   -audit-dir         local NDJSON log dir (default: ~/.sandrpod/audit; empty=disabled)
+#   -audit-upload-url  POST endpoint for audit batch upload (empty=local only)
+#   -audit-upload-token bearer token for upload (defaults to -token)
+# Env equivalents: SANDRPOD_PERMISSION_MODE, SANDRPOD_PERMISSION_FILE,
+#                  SANDRPOD_AUDIT_DIR, SANDRPOD_AUDIT_UPLOAD_URL, SANDRPOD_AUDIT_UPLOAD_TOKEN
+
+# Run sandrpod-tray (user-session GUI companion for employee-PC mode)
+sandrpod-tray serve                                      # tray icon + IPC + local settings HTTP
+sandrpod-tray rules ls                                   # list permanent rules and hardlocks
+sandrpod-tray rules add ~/Documents --mode rw            # add permanent path grant
+sandrpod-tray policy ls                                  # show command deny/warn lists
+sandrpod-tray unlock ~/.ssh --i-understand-the-risk      # remove a hardlock (CLI only, not GUI)
+sandrpod-tray seed                                       # install default hardlock seeds
+
 # Run Toolbox (inside sandbox container, port 8080)
 go run ./cmd/toolbox -port 8080
 ```
@@ -55,8 +84,6 @@ go run ./cmd/toolbox -port 8080
 SandrPod is an AI code execution infrastructure platform providing fast, secure, and scalable sandbox environments.
 
 主要参考daytona的实现，但更简化和轻量化，为AI agent提供代码执行沙箱环境。 实现对langchain deepagents的沙箱环境插件。
-
-未来考虑为openclaw提供标准化的沙箱运行环境。
 
 ### Core Components
 
@@ -73,7 +100,9 @@ Client → API Server (Control Plane)
 
 **Proxy+Agent** (`cmd/poder`): Combined worker node service. Dials API Server via WebSocket reverse tunnel (`/ws/poder/connect`). Polls for CREATE/DELETE sandbox jobs. Manages Docker container lifecycle.
 
-**sandrpod-agent** (`cmd/agent`): Registers the local machine directly as a sandbox via `/ws/sandbox/connect`. Embeds Toolbox — no Docker required. Useful for local development and single-machine setups.
+**sandrpod-agent** (`cmd/agent`): Registers the local machine directly as a sandbox via `/ws/sandbox/connect`. Embeds Toolbox — no Docker required. Supports opt-in permission gate (`--permission-mode`) and audit pipeline for employee-PC deployments.
+
+**sandrpod-tray** (`cmd/sandrpod-tray`): User-session GUI daemon for employee-PC mode. Provides tray icon, native consent dialogs (osascript/zenity/PowerShell), and a local HTTP settings page. Communicates with `sandrpod-agent` over `~/.sandrpod/authz.sock`. See `docs/PERMISSION_AND_AUDIT.md`.
 
 **Toolbox** (`cmd/toolbox`): Code execution service running inside each sandbox container. Provides HTTP API for code execution with PTY support.
 
@@ -85,6 +114,9 @@ Client → API Server (Control Plane)
 - `pkg/store/`: Repository implementations — in-memory adapter (`memory.go`) and SQLite backend (`sqlite/`). Plug-in via `store.Stores` aggregate.
 - `pkg/tunnel/`: WebSocket + yamux reverse tunnel (`PoderTunnel`, `TunnelStore`). Used by both Poder and sandrpod-agent.
 - `pkg/toolbox/`: Code execution engine with PTY, file operations, and process management.
+- `pkg/permission/`: Decision engine for employee-PC mode. 5-branch policy (work_dir → hardlock → permanent → session → ask). Includes `Store` (atomic JSON), `Manager`, `IPCClient/Server`, command policy scanner, and default hardlock seeds.
+- `pkg/notify/`: Cross-platform consent dialog. macOS: `osascript display dialog`; Linux: `zenity`/`kdialog`; Windows: PowerShell `MessageBox`. Fail-close (timeout/error → deny).
+- `pkg/audit/`: Local NDJSON audit log (`Recorder`, auto-rotate at 8 MiB) + background HTTP uploader (`Uploader`, at-least-once delivery). Decoupled from `pkg/permission` via `AuditSink` interface.
 
 ### State Machine
 
