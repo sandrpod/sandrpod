@@ -83,7 +83,7 @@ go run ./cmd/toolbox -port 8080
 
 SandrPod is an AI code execution infrastructure platform providing fast, secure, and scalable sandbox environments.
 
-主要参考daytona的实现，但更简化和轻量化，为AI agent提供代码执行沙箱环境。 实现对langchain deepagents的沙箱环境插件。
+轻量化的 AI agent 沙箱环境，实现对 langchain deepagents 的沙箱环境插件。
 
 ### Core Components
 
@@ -199,5 +199,4 @@ with client.sandbox("temp-sb") as sb:
 
 ## 参考项目
 
-- [Daytona](https://github.com/daytonaio/daytona) — sandbox management reference
 - [LangChain DeepAgents](https://github.com/langchain-ai/deepagents) — Python SDK integration reference

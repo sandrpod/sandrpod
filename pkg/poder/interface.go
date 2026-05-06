@@ -1,5 +1,5 @@
 // Copyright 2024 SandrPod
-// Poder core interface - modeled after the Daytona Runner
+// Poder core interface
 
 package poder
 
