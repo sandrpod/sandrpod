@@ -34,32 +34,40 @@ type PodInfo struct {
 }
 
 // CreatePodRequest is the request payload for creating a pod.
+//
+// JSON tags are required because sandpod-server marshals an upstream
+// CreateSandboxRequest (which has snake_case json tags) and forwards the
+// JSON over the tunnel to this struct on the Poder side. Without explicit
+// tags, Go's case-insensitive default field matching fails on snake_case
+// keys like "image_id" → "ImageID" (underscore breaks the match), so the
+// field silently stays at its zero value and the Poder docker driver
+// fell back to the default toolbox image regardless of caller intent.
 type CreatePodRequest struct {
-	Name         string            // Pod name
-	Region       string            // Region
-	InstanceType string            // Instance type
-	ImageID      string            // Image ID
-	Provider     string            // Cloud provider
-	NetworkConfig *NetworkConfig   // Network configuration
-	DiskConfig   *DiskConfig       // Disk configuration
-	Labels       map[string]string // Labels
+	Name         string            `json:"name"`
+	Region       string            `json:"region,omitempty"`
+	InstanceType string            `json:"instance_type,omitempty"`
+	ImageID      string            `json:"image_id,omitempty"`
+	Provider     string            `json:"provider,omitempty"`
+	NetworkConfig *NetworkConfig   `json:"network_config,omitempty"`
+	DiskConfig   *DiskConfig       `json:"disk_config,omitempty"`
+	Labels       map[string]string `json:"labels,omitempty"`
 	// Bootstrap configuration
-	APIURL       string // Toolbox API URL
-	PoderVersion string // Poder version
-	LogLevel     string // Log level
+	APIURL       string `json:"api_url,omitempty"`       // Toolbox API URL
+	PoderVersion string `json:"poder_version,omitempty"` // Poder version
+	LogLevel     string `json:"log_level,omitempty"`     // Log level
 }
 
 // NetworkConfig holds network configuration for a pod.
 type NetworkConfig struct {
-	VpcID         string // VPC ID
-	SubnetID      string // Subnet ID
-	SecurityGroup string // Security group
+	VpcID         string `json:"vpc_id,omitempty"`
+	SubnetID      string `json:"subnet_id,omitempty"`
+	SecurityGroup string `json:"security_group,omitempty"`
 }
 
 // DiskConfig holds disk configuration for a pod.
 type DiskConfig struct {
-	SizeGiB    int    // Disk size in GiB
-	VolumeType string // Volume type
+	SizeGiB    int    `json:"size_gib,omitempty"`
+	VolumeType string `json:"volume_type,omitempty"`
 }
 
 // CommandResult holds the output of a remotely executed command.
