@@ -89,14 +89,31 @@ func NewPoderTunnel(id string, ws *websocket.Conn) (*PoderTunnel, error) {
 		return nil, fmt.Errorf("yamux client: %w", err)
 	}
 
-	openStream := func() (net.Conn, error) {
-		return session.Open()
+	// openStream opens a yamux stream, aborting early if ctx is cancelled.
+	// session.Open() itself does not accept a context, so we run it in a
+	// goroutine and race it against ctx.Done().
+	openStream := func(ctx context.Context) (net.Conn, error) {
+		type result struct {
+			conn net.Conn
+			err  error
+		}
+		ch := make(chan result, 1)
+		go func() {
+			conn, err := session.Open()
+			ch <- result{conn, err}
+		}()
+		select {
+		case r := <-ch:
+			return r.conn, r.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 
 	client := &http.Client{
 		Transport: &http.Transport{
-			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-				return openStream()
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return openStream(ctx)
 			},
 			MaxIdleConnsPerHost: 32,
 		},
@@ -105,7 +122,7 @@ func NewPoderTunnel(id string, ws *websocket.Conn) (*PoderTunnel, error) {
 
 	wsDialer := &websocket.Dialer{
 		NetDial: func(_, _ string) (net.Conn, error) {
-			return openStream()
+			return openStream(context.Background())
 		},
 		HandshakeTimeout: 10 * time.Second,
 	}
