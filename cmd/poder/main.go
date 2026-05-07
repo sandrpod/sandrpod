@@ -7,6 +7,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
@@ -67,10 +70,9 @@ func main() {
 		log.Fatalf("Failed to create Docker Poder: %v", err)
 	}
 
-	poderID := *poderIDFlag
-	if poderID == "" {
-		hostname, _ := os.Hostname()
-		poderID = fmt.Sprintf("poder-%s", hostname)
+	poderID, err := resolvePoderID(*poderIDFlag)
+	if err != nil {
+		log.Fatalf("Failed to resolve Poder ID: %v", err)
 	}
 
 	mux := http.NewServeMux()
@@ -866,4 +868,51 @@ func getMemoryUsage() float64 {
 		return 0.5
 	}
 	return float64(memTotal-memAvailable) / float64(memTotal)
+}
+
+// resolvePoderID returns a stable Poder ID across restarts.
+//
+// Priority:
+//  1. Explicit flag / env PODER_ID  — always wins, no persistence needed
+//  2. Persisted ID in $PODER_DATA_DIR/poder-id (default: /var/lib/sandrpod/poder-id)
+//  3. Auto-generate a random ID, persist it for next boot
+//
+// This ensures the Poder keeps the same ID after container restarts so that
+// the API Server can reassociate existing sandbox records to the reconnected Poder.
+func resolvePoderID(explicit string) (string, error) {
+	if explicit != "" {
+		log.Printf("Poder ID (explicit): %s", explicit)
+		return explicit, nil
+	}
+
+	dataDir := env("PODER_DATA_DIR", "/var/lib/sandrpod")
+	idFile := filepath.Join(dataDir, "poder-id")
+
+	// Try reading persisted ID.
+	if data, err := os.ReadFile(idFile); err == nil {
+		id := strings.TrimSpace(string(data))
+		if id != "" {
+			log.Printf("Poder ID (persisted): %s", id)
+			return id, nil
+		}
+	}
+
+	// Generate a new random ID.
+	buf := make([]byte, 8)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate random poder id: %w", err)
+	}
+	id := "poder-" + hex.EncodeToString(buf)
+
+	// Persist it so subsequent restarts use the same ID.
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		// Non-fatal: log and continue without persistence.
+		log.Printf("Warning: cannot create data dir %s: %v — ID will not be persisted", dataDir, err)
+	} else if err := os.WriteFile(idFile, []byte(id+"\n"), 0o644); err != nil {
+		log.Printf("Warning: cannot write poder-id file %s: %v — ID will not be persisted", idFile, err)
+	} else {
+		log.Printf("Poder ID (generated, persisted to %s): %s", idFile, id)
+	}
+
+	return id, nil
 }

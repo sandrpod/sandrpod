@@ -141,18 +141,26 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		tunnelStore.Add(t)
 		log.Printf("Poder %s connected via tunnel", poderID)
 
+		// Reconnect reconciliation: verify every RUNNING sandbox that was previously
+		// assigned to this Poder still exists on the worker. Docker containers are
+		// destroyed when the Poder process exits, so any sandbox the worker no longer
+		// knows about must be marked ERROR to prevent stale RUNNING records.
+		go reconcilePoderSandboxes(poderID, t, sandboxStore)
+
 		// Disconnect cleanup: only remove from store if it is still this tunnel (not overwritten by a reconnect)
 		defer func() {
 			if cur, ok := tunnelStore.Get(poderID); ok && cur == t {
 				tunnelStore.Remove(poderID)
 				poderStore.SetOffline(poderID)
-				// Mark orphaned sandboxes as ERROR — the tunnel is gone so we
+				// Mark surviving sandboxes as ERROR — the tunnel is gone so we
 				// cannot reach the containers; callers will get a meaningful
 				// state rather than a stale RUNNING record.
 				for _, sb := range sandboxStore.ListByPoderID(poderID) {
-					_ = sandboxStore.Update(sb.Name, func(s *podpkg.SandboxInfo) {
-						s.State = podpkg.StateError
-					})
+					if sb.State == podpkg.StateRunning || sb.State == podpkg.StateStarting {
+						_ = sandboxStore.Update(sb.Name, func(s *podpkg.SandboxInfo) {
+							s.State = podpkg.StateError
+						})
+					}
 				}
 			}
 			t.Close()
@@ -1251,6 +1259,57 @@ func splitPath(path string) []string {
 		return nil
 	}
 	return strings.Split(strings.Trim(path, "/"), "/")
+}
+
+// reconcilePoderSandboxes is called once, right after a Poder reconnects via tunnel.
+// It checks every RUNNING/STARTING sandbox that was previously assigned to this Poder:
+// if the worker no longer has the container (e.g. Poder restarted and Docker containers
+// were lost), the sandbox is marked ERROR so callers get an accurate state instead of
+// a stale RUNNING record that can never be reached.
+func reconcilePoderSandboxes(poderID string, t *tunnel.PoderTunnel, ss podpkg.SandboxRepository) {
+	// Give the yamux session a moment to finish its handshake before sending requests.
+	time.Sleep(500 * time.Millisecond)
+
+	candidates := ss.ListByPoderID(poderID)
+	if len(candidates) == 0 {
+		return
+	}
+	log.Printf("Poder %s reconnected: reconciling %d sandbox(es)", poderID, len(candidates))
+
+	for _, sb := range candidates {
+		// Only check sandboxes that are supposed to be alive.
+		if sb.State != podpkg.StateRunning && sb.State != podpkg.StateStarting {
+			continue
+		}
+
+		// Ask the Poder worker whether this container still exists.
+		url := "http://poder/sandboxes/" + sb.Name
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			log.Printf("reconcile %s/%s: build request error: %v", poderID, sb.Name, err)
+			continue
+		}
+
+		resp, err := t.Client.Do(req)
+		if err != nil {
+			// Tunnel error — worker might not be ready yet; leave state untouched.
+			log.Printf("reconcile %s/%s: request failed: %v (skipping)", poderID, sb.Name, err)
+			continue
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusNotFound {
+			// Container is gone on the worker side.
+			log.Printf("reconcile %s/%s: container not found on worker → marking ERROR", poderID, sb.Name)
+			_ = ss.Update(sb.Name, func(s *podpkg.SandboxInfo) {
+				s.State = podpkg.StateError
+			})
+		} else if resp.StatusCode == http.StatusOK {
+			log.Printf("reconcile %s/%s: container alive ✓", poderID, sb.Name)
+		} else {
+			log.Printf("reconcile %s/%s: unexpected status %d from worker", poderID, sb.Name, resp.StatusCode)
+		}
+	}
 }
 
 // cleanupOfflinePoders marks Poder nodes as offline when heartbeats stop.
