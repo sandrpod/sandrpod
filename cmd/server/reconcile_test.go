@@ -65,10 +65,13 @@ func dialTunnel(t *testing.T, handler http.Handler) *tunnel.PoderTunnel {
 	return clientTunnel
 }
 
-// sandboxMux returns an http.Handler simulating Poder's GET /sandboxes/{name}.
-// Names in alive → 200; others → 404.
+// sandboxMux returns an http.Handler simulating Poder's /health and
+// GET /sandboxes/{name}. Names in alive → 200; others → 404.
 func sandboxMux(alive map[string]bool) http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
 	mux.HandleFunc("/sandboxes/", func(w http.ResponseWriter, r *http.Request) {
 		name := r.URL.Path[len("/sandboxes/"):]
 		if alive[name] {

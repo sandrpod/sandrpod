@@ -1267,8 +1267,33 @@ func splitPath(path string) []string {
 // were lost), the sandbox is marked ERROR so callers get an accurate state instead of
 // a stale RUNNING record that can never be reached.
 func reconcilePoderSandboxes(poderID string, t *tunnel.PoderTunnel, ss podpkg.SandboxRepository) {
-	// Give the yamux session a moment to finish its handshake before sending requests.
-	time.Sleep(500 * time.Millisecond)
+	const (
+		perReqTimeout  = 10 * time.Second // per-sandbox GET timeout
+		warmupTimeout  = 30 * time.Second // how long to wait for worker /health
+		warmupInterval = 1 * time.Second
+	)
+
+	// Wait until the Poder worker is ready to accept yamux streams.
+	// The yamux session is open, but Poder's HTTP server may need a moment to
+	// start calling session.Accept(). Poll /health until it responds or we give up.
+	warmupDeadline := time.Now().Add(warmupTimeout)
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), perReqTimeout)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://poder/health", nil)
+		resp, err := t.Client.Do(req)
+		cancel()
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				break // worker is ready
+			}
+		}
+		if time.Now().After(warmupDeadline) {
+			log.Printf("Poder %s reconnected: worker not ready after %v — skipping reconcile", poderID, warmupTimeout)
+			return
+		}
+		time.Sleep(warmupInterval)
+	}
 
 	candidates := ss.ListByPoderID(poderID)
 	if len(candidates) == 0 {
@@ -1283,30 +1308,33 @@ func reconcilePoderSandboxes(poderID string, t *tunnel.PoderTunnel, ss podpkg.Sa
 		}
 
 		// Ask the Poder worker whether this container still exists.
-		url := "http://poder/sandboxes/" + sb.Name
-		req, err := http.NewRequest(http.MethodGet, url, nil)
+		ctx, cancel := context.WithTimeout(context.Background(), perReqTimeout)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://poder/sandboxes/"+sb.Name, nil)
 		if err != nil {
+			cancel()
 			log.Printf("reconcile %s/%s: build request error: %v", poderID, sb.Name, err)
 			continue
 		}
 
 		resp, err := t.Client.Do(req)
+		cancel()
 		if err != nil {
-			// Tunnel error — worker might not be ready yet; leave state untouched.
+			// Tunnel error — skip this sandbox, leave state untouched.
 			log.Printf("reconcile %s/%s: request failed: %v (skipping)", poderID, sb.Name, err)
 			continue
 		}
 		resp.Body.Close()
 
-		if resp.StatusCode == http.StatusNotFound {
+		switch resp.StatusCode {
+		case http.StatusNotFound:
 			// Container is gone on the worker side.
 			log.Printf("reconcile %s/%s: container not found on worker → marking ERROR", poderID, sb.Name)
 			_ = ss.Update(sb.Name, func(s *podpkg.SandboxInfo) {
 				s.State = podpkg.StateError
 			})
-		} else if resp.StatusCode == http.StatusOK {
+		case http.StatusOK:
 			log.Printf("reconcile %s/%s: container alive ✓", poderID, sb.Name)
-		} else {
+		default:
 			log.Printf("reconcile %s/%s: unexpected status %d from worker", poderID, sb.Name, resp.StatusCode)
 		}
 	}
