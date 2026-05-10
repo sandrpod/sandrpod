@@ -681,18 +681,23 @@ func heartbeatLoop(ctx context.Context, poderID string, p *poder.DockerPoder) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			pods, _ := p.ListPods(ctx)
-			containerCount := 0
-			if pods != nil {
-				containerCount = len(pods)
+			// Query Docker directly for the authoritative list of running containers.
+			// This is correct even after a Poder restart (BasePoder.ListPods only
+			// knows about containers created in the current process lifetime).
+			containerNames, err := p.ListRunningSandboxNames(ctx)
+			if err != nil {
+				log.Printf("Heartbeat: ListRunningSandboxNames failed: %v", err)
+				containerNames = nil // send nil → server skips reconcile this tick
 			}
+			containerCount := len(containerNames)
 			cpuUsage, memUsage := getHostUsage()
 
 			url := fmt.Sprintf("%s/api/v1/poders/%s/heartbeat", *apiURL, poderID)
 			reqBody := podpkg.HeartbeatRequest{
-				Containers:  containerCount,
-				CPUUsage:    cpuUsage,
-				MemoryUsage: memUsage,
+				Containers:     containerCount,
+				CPUUsage:       cpuUsage,
+				MemoryUsage:    memUsage,
+				ContainerNames: containerNames,
 			}
 			body, _ := json.Marshal(reqBody)
 			req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))

@@ -1,0 +1,76 @@
+# Copyright 2024 SandrPod
+# Toolbox 镜像 - CentOS Stream 9 运行时（功能全量版）
+
+# ─── 构建阶段 ────────────────────────────────────────────────────────────────
+FROM golang:1.25-alpine AS builder
+
+WORKDIR /app
+
+RUN apk add --no-cache git
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=auto go build -o /toolbox ./cmd/toolbox
+
+# ─── 运行时镜像 ──────────────────────────────────────────────────────────────
+FROM quay.io/centos/centos:stream9
+
+# 系统基础 + 开发工具链 + 常用运维工具 + 数据库客户端
+# --allowerasing: 替换 curl-minimal（stream9 内置）为完整版 curl
+RUN dnf update -y && \
+    dnf install -y --allowerasing \
+        ca-certificates \
+        tzdata \
+        bash \
+        curl \
+        wget \
+        git \
+        openssh-clients \
+        procps-ng \
+        which \
+        findutils \
+        util-linux \
+        gcc \
+        gcc-c++ \
+        make \
+        cmake \
+        python3 \
+        python3-pip \
+        python3-devel \
+        nodejs \
+        npm \
+        jq \
+        zip \
+        unzip \
+        tar \
+        gzip \
+        bzip2 \
+        xz \
+        rsync \
+        net-tools \
+        iproute \
+        iputils \
+        bind-utils \
+        mysql \
+        postgresql \
+        sqlite \
+    && dnf clean all \
+    && rm -rf /var/cache/dnf
+
+# pip 升级 + 常用 Python 包
+RUN python3 -m pip install --upgrade pip && \
+    pip3 install --no-cache-dir \
+        requests \
+        httpx \
+        boto3 \
+        pydantic \
+        python-dotenv
+
+WORKDIR /workspace
+
+COPY --from=builder /toolbox /app/toolbox
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/toolbox"]
+CMD ["-port=8080"]

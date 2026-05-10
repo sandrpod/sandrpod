@@ -60,10 +60,13 @@ type RegisterPoderRequest struct {
 }
 
 // HeartbeatRequest carries usage stats sent by a Poder node on each heartbeat.
+// ContainerNames is the authoritative list of sandbox container names currently
+// running on this Poder; the Server uses it to reconcile RUNNING sandbox states.
 type HeartbeatRequest struct {
-	Containers int     `json:"containers"`
-	CPUUsage   float64 `json:"cpu_usage"`
-	MemoryUsage float64 `json:"memory_usage"`
+	Containers     int      `json:"containers"`
+	CPUUsage       float64  `json:"cpu_usage"`
+	MemoryUsage    float64  `json:"memory_usage"`
+	ContainerNames []string `json:"container_names,omitempty"`
 }
 
 // PoderStore is a thread-safe in-memory store for Poder node records.

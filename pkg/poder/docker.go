@@ -14,6 +14,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -244,6 +245,29 @@ func (p *DockerPoder) GetPod(ctx context.Context, podID string) (*PodInfo, error
 	}
 
 	return pod, nil
+}
+
+// ListRunningSandboxNames returns the sandbox names of all running SandrPod-managed
+// containers by querying Docker directly. This is the authoritative source: it
+// reflects reality even after a Poder restart (unlike BasePoder.ListPods which
+// only knows about containers created in the current process lifetime).
+func (p *DockerPoder) ListRunningSandboxNames(ctx context.Context) ([]string, error) {
+	containers, err := p.dockerClient.ContainerList(ctx, container.ListOptions{
+		Filters: filters.NewArgs(
+			filters.Arg("status", "running"),
+			filters.Arg("label", "sandrpod/sandbox-name"),
+		),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("docker ContainerList: %w", err)
+	}
+	names := make([]string, 0, len(containers))
+	for _, c := range containers {
+		if name := c.Labels["sandrpod/sandbox-name"]; name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, nil
 }
 
 // FindPodByName finds a pod by its sandbox name via a direct Docker container list query.

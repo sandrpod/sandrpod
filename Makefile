@@ -1,4 +1,4 @@
-.PHONY: build build-all test vet lint clean docker-poder docker-toolbox
+.PHONY: build build-all test vet lint clean docker-poder docker-toolbox docker-toolbox-centos
 
 # ─── Go binaries ────────────────────────────────────────────────────────────
 
@@ -104,10 +104,15 @@ docker-poder: ## Build the Poder Docker image (linux/amd64)
 		-f docker/Dockerfile.poder \
 		-t sandrpod/poder:latest --load .
 
-docker-toolbox: ## Build the Toolbox Docker image (linux/amd64)
+docker-toolbox: ## Build the Toolbox Docker image - Alpine (linux/amd64)
 	docker buildx build --platform linux/amd64 \
 		-f docker/Dockerfile.toolbox \
 		-t sandrpod/toolbox:latest --load .
+
+docker-toolbox-centos: ## Build the Toolbox Docker image - CentOS Stream 9 full-featured (linux/amd64)
+	docker buildx build --platform linux/amd64 \
+		-f docker/Dockerfile.toolbox.centos \
+		-t sandrpod/toolbox:centos --load .
 
 docker: docker-poder docker-toolbox ## Build all Docker images
 
