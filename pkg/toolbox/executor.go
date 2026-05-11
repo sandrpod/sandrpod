@@ -169,9 +169,11 @@ func expandBlacklist(list []string) []string {
 }
 
 // isBlacklisted reports whether clean (a normalized absolute path) matches any blacklist prefix.
+// Uses filepath.Separator so the prefix match works on both Unix ("/") and Windows ("\").
 func isBlacklisted(clean string, list []string) bool {
+	sep := string(filepath.Separator)
 	for _, prefix := range list {
-		if clean == prefix || strings.HasPrefix(clean, prefix+"/") {
+		if clean == prefix || strings.HasPrefix(clean, prefix+sep) {
 			return true
 		}
 	}
@@ -201,6 +203,12 @@ func (e *Executor) resolveSafePath(p string, write bool) (string, error) {
 	if p == "" {
 		return e.workDir, nil
 	}
+	// Normalize forward slashes to the native separator. On Windows clients
+	// commonly send "/c/Users/x/a.txt" or "/foo/bar"; without this conversion
+	// filepath.IsAbs returns false for slash-prefixed paths on Windows and
+	// the path gets incorrectly joined onto workDir. On Unix FromSlash is a
+	// no-op (separator is already "/").
+	p = filepath.FromSlash(p)
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(e.workDir, p)
 	}

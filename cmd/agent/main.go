@@ -12,7 +12,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"flag"
@@ -464,23 +463,4 @@ func toWS(u string) string {
 	return u
 }
 
-// getOSVersion reads PRETTY_NAME from /etc/os-release (Linux) or falls back
-// to runtime.GOOS on other platforms (macOS, Windows).
-func getOSVersion() string {
-	f, err := os.Open("/etc/os-release")
-	if err != nil {
-		return runtime.GOOS
-	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "PRETTY_NAME=") {
-			val := strings.TrimPrefix(line, "PRETTY_NAME=")
-			val = strings.Trim(val, `"`)
-			return val
-		}
-	}
-	return runtime.GOOS
-}
+// getOSVersion is provided by os_version_{unix,windows}.go.

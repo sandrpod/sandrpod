@@ -38,14 +38,23 @@ func TestExecutor_GetWorkDir(t *testing.T) {
 	}
 }
 
-func TestExecutor_GetUserHomeDir_DefaultsToRoot(t *testing.T) {
+// TestExecutor_GetUserHomeDir_FallbackNonEmpty checks that GetUserHomeDir
+// always returns a non-empty, writable path. The old implementation hard-
+// coded "/root" as the fallback which was nonsensical on Windows and on
+// most macOS / non-root Linux hosts. The new implementation falls through
+// os.UserHomeDir → $HOME → $USERPROFILE → os.TempDir, which guarantees
+// SOMETHING usable on every platform but doesn't promise a specific
+// directory name.
+func TestExecutor_GetUserHomeDir_FallbackNonEmpty(t *testing.T) {
 	e := newTestExecutor(t)
-	old := os.Getenv("HOME")
-	os.Unsetenv("HOME")
-	defer os.Setenv("HOME", old)
-
-	if got := e.GetUserHomeDir(); got != "/root" {
-		t.Errorf("GetUserHomeDir() with no HOME = %q, want /root", got)
+	got := e.GetUserHomeDir()
+	if got == "" {
+		t.Fatalf("GetUserHomeDir() returned empty string")
+	}
+	// Should at least be an existing directory (UserHomeDir, $HOME, or
+	// TempDir all satisfy this).
+	if info, err := os.Stat(got); err != nil || !info.IsDir() {
+		t.Errorf("GetUserHomeDir() = %q is not an existing directory (err=%v)", got, err)
 	}
 }
 

@@ -98,12 +98,17 @@ func (s *Server) Executor() *Executor { return s.executor }
 
 func NewServer(addr, token string) *Server {
 	ctx, cancel := context.WithCancel(context.Background())
+	// Use the platform temp dir instead of hardcoded /tmp — on Windows /tmp
+	// doesn't exist and session storage silently dies. os.TempDir() returns:
+	//   Linux:   /tmp (honors $TMPDIR)
+	//   macOS:   /var/folders/.../T (honors $TMPDIR)
+	//   Windows: %TEMP% (typically C:\Users\<user>\AppData\Local\Temp)
 	return &Server{
 		addr:           addr,
 		token:          token,
 		executor:       NewExecutor(),
 		ptyHandler:     NewPtyHandler(),
-		sessionManager: NewSessionManager("/tmp/sandrpod-sessions"),
+		sessionManager: NewSessionManager(filepath.Join(os.TempDir(), "sandrpod-sessions")),
 		startTime:      time.Now(),
 		ctx:            ctx,
 		cancel:         cancel,
@@ -214,26 +219,9 @@ func (s *Server) infoHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // getEnvInfo collects runtime environment information about the sandbox container.
+// OS-version / kernel-version probing is delegated to platform_{unix,windows}.go
+// so the Unix-only /etc/os-release and /proc/version reads don't run on Windows.
 func getEnvInfo() EnvironmentInfo {
-	osVersion := runtime.GOOS
-	if data, err := os.ReadFile("/etc/os-release"); err == nil {
-		for line := range strings.SplitSeq(string(data), "\n") {
-			if val, ok := strings.CutPrefix(line, "PRETTY_NAME="); ok {
-				osVersion = strings.Trim(val, `"`)
-				break
-			}
-		}
-	}
-
-	kernelVersion := ""
-	if data, err := os.ReadFile("/proc/version"); err == nil {
-		fields := strings.Fields(strings.TrimSpace(string(data)))
-		// "Linux version 5.15.0-91-generic ..."
-		if len(fields) >= 3 {
-			kernelVersion = fields[2]
-		}
-	}
-
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = nativeShell()
@@ -244,8 +232,8 @@ func getEnvInfo() EnvironmentInfo {
 	return EnvironmentInfo{
 		Arch:          runtime.GOARCH,
 		OS:            runtime.GOOS,
-		OSVersion:     osVersion,
-		KernelVersion: kernelVersion,
+		OSVersion:     platformOSVersion(),
+		KernelVersion: platformKernelVersion(),
 		Shell:         shell,
 		WorkDir:       workDir,
 	}
@@ -637,9 +625,14 @@ func (s *Server) filesFolderHandler(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// filesDownloadHandler downloads a file.
+// filesDownloadHandler streams a file to the client.
+//
+// Uses http.ServeContent so large files don't have to fit in memory; it also
+// gives clients Range, ETag, and Last-Modified support for free. Permission
+// gating is applied via resolveAndAuthorize before we open the file so the
+// consent prompt still fires before any disk I/O happens.
 func (s *Server) filesDownloadHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -650,18 +643,39 @@ func (s *Server) filesDownloadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, err := s.executor.DownloadFile(r.Context(), path)
+	safe, err := s.executor.resolveAndAuthorize(r.Context(), path, permission.ModeRead, "files.download")
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	// Set download headers
-	filename := filepath.Base(path)
+	f, err := os.Open(safe)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.Error(w, fmt.Sprintf("File not found: %q", path), http.StatusNotFound)
+			return
+		}
+		http.Error(w, fmt.Sprintf("failed to open file: %v", err), http.StatusInternalServerError)
+		return
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to stat file: %v", err), http.StatusInternalServerError)
+		return
+	}
+	if fi.IsDir() {
+		http.Error(w, "path is a directory; use /files for listings", http.StatusBadRequest)
+		return
+	}
+
+	name := filepath.Base(safe)
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename))
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
-	w.Write(data)
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename=%q`, name))
+	// ServeContent will set Content-Length, handle Range/If-Modified-Since,
+	// and stream straight from the file descriptor — no memory buffering.
+	http.ServeContent(w, r, name, fi.ModTime(), f)
 }
 
 // filesSearchHandler searches for files matching a glob pattern.
@@ -777,17 +791,28 @@ func (s *Server) filesPermissionsHandler(w http.ResponseWriter, r *http.Request)
 }
 
 // filesUploadHandler handles single file uploads.
+//
+// Three things this implementation is careful about that the previous version
+// got wrong:
+//  1. Path separators — normalize via filepath.FromSlash before calling Stat,
+//     so a Windows agent can handle a client that sends "/c/Users/x/dir".
+//  2. Directory traversal — header.Filename is untrusted input. Strip it down
+//     to filepath.Base so an upload named "../../etc/passwd" lands as "passwd"
+//     inside the requested directory.
+//  3. Permission gate — use resolveAndAuthorize (not resolveSafePath) so the
+//     human consent prompt fires for uploads outside workDir.
 func (s *Server) filesUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	path := r.URL.Query().Get("path")
-	if path == "" {
+	rawPath := r.URL.Query().Get("path")
+	if rawPath == "" {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
 	}
+	path := filepath.FromSlash(rawPath)
 
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		http.Error(w, fmt.Sprintf("failed to parse multipart form: %v", err), http.StatusBadRequest)
@@ -801,50 +826,66 @@ func (s *Server) filesUploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
-	data, err := io.ReadAll(file)
-	if err != nil {
-		http.Error(w, fmt.Sprintf("failed to read file: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	// If path is a directory, use the original filename
+	// Decide destination. If the caller pointed at a directory we append the
+	// (sanitized) original filename; otherwise we treat path as the literal
+	// destination file. filepath.Base strips any directory components from
+	// header.Filename, blocking "../../etc/passwd"-style traversal attacks.
 	destPath := path
 	if info, err := os.Stat(path); err == nil && info.IsDir() {
-		destPath = filepath.Join(path, header.Filename)
+		destPath = filepath.Join(path, filepath.Base(header.Filename))
 	}
 
-	safeDest, err := s.executor.resolveSafePath(destPath, true)
+	safeDest, err := s.executor.resolveAndAuthorize(r.Context(), destPath, permission.ModeWrite, "files.upload")
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	if err := os.WriteFile(safeDest, data, 0644); err != nil {
-		http.Error(w, fmt.Sprintf("failed to write file: %v", err), http.StatusInternalServerError)
+	// Stream the upload to disk instead of buffering the whole body in memory.
+	// 32 MiB form limit above only bounds the parser; the file we create here
+	// could legitimately be larger if the client uses chunked encoding.
+	out, err := os.OpenFile(safeDest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("failed to create file: %v", err), http.StatusInternalServerError)
+		return
+	}
+	n, copyErr := io.Copy(out, file)
+	if closeErr := out.Close(); closeErr != nil && copyErr == nil {
+		copyErr = closeErr
+	}
+	if copyErr != nil {
+		http.Error(w, fmt.Sprintf("failed to write file: %v", copyErr), http.StatusInternalServerError)
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
 		"success": true,
-		"path":    destPath,
-		"name":    header.Filename,
-		"size":    len(data),
+		"path":    safeDest,
+		"name":    filepath.Base(header.Filename),
+		"size":    n,
 	})
 }
 
 // filesBulkUploadHandler handles bulk file uploads.
+//
+// Same hardening as filesUploadHandler: FromSlash on the target path, Base
+// on each filename (so per-field keys containing "../" can't escape), and
+// every destination passes through resolveAndAuthorize for permission
+// gating. Each file is streamed via io.Copy instead of io.ReadAll so a
+// 4 GiB upload doesn't OOM the agent process.
 func (s *Server) filesBulkUploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
-	path := r.URL.Query().Get("path")
-	if path == "" {
+	rawPath := r.URL.Query().Get("path")
+	if rawPath == "" {
 		http.Error(w, "path is required", http.StatusBadRequest)
 		return
 	}
+	path := filepath.FromSlash(rawPath)
 
 	if err := r.ParseMultipartForm(64 << 20); err != nil {
 		http.Error(w, fmt.Sprintf("failed to parse multipart form: %v", err), http.StatusBadRequest)
@@ -855,51 +896,65 @@ func (s *Server) filesBulkUploadHandler(w http.ResponseWriter, r *http.Request) 
 
 	for filename, fileHeader := range r.MultipartForm.File {
 		for _, header := range fileHeader {
+			// Prefer the header's own filename (set by the uploading client)
+			// over the form-field key, then strip path components either way.
+			displayName := header.Filename
+			if displayName == "" {
+				displayName = filename
+			}
+			safeName := filepath.Base(displayName)
+
 			file, err := header.Open()
 			if err != nil {
 				results = append(results, map[string]any{
-					"name":    filename,
+					"name":    safeName,
 					"success": false,
 					"error":   err.Error(),
 				})
 				continue
 			}
 
-			data, err := io.ReadAll(file)
+			destPath := filepath.Join(path, safeName)
+			safeDest, err := s.executor.resolveAndAuthorize(r.Context(), destPath, permission.ModeWrite, "files.bulk_upload")
+			if err != nil {
+				file.Close()
+				results = append(results, map[string]any{
+					"name":    safeName,
+					"success": false,
+					"error":   err.Error(),
+				})
+				continue
+			}
+
+			out, err := os.OpenFile(safeDest, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+			if err != nil {
+				file.Close()
+				results = append(results, map[string]any{
+					"name":    safeName,
+					"success": false,
+					"error":   err.Error(),
+				})
+				continue
+			}
+			n, copyErr := io.Copy(out, file)
 			file.Close()
-			if err != nil {
-				results = append(results, map[string]any{
-					"name":    filename,
-					"success": false,
-					"error":   err.Error(),
-				})
-				continue
+			if closeErr := out.Close(); closeErr != nil && copyErr == nil {
+				copyErr = closeErr
 			}
-
-			destPath := filepath.Join(path, filename)
-			safeDest, err := s.executor.resolveSafePath(destPath, true)
-			if err != nil {
+			if copyErr != nil {
 				results = append(results, map[string]any{
-					"name":    filename,
+					"name":    safeName,
 					"success": false,
-					"error":   err.Error(),
-				})
-				continue
-			}
-			if err := os.WriteFile(safeDest, data, 0644); err != nil {
-				results = append(results, map[string]any{
-					"name":    filename,
-					"success": false,
-					"error":   err.Error(),
+					"error":   copyErr.Error(),
 				})
 				continue
 			}
 
 			results = append(results, map[string]any{
-				"name":    filename,
+				"name":    safeName,
 				"success": true,
 				"path":    safeDest,
-				"size":    len(data),
+				"size":    n,
 			})
 		}
 	}

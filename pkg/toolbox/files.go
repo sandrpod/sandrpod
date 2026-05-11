@@ -34,13 +34,27 @@ func (e *Executor) GetProjectDir() string {
 	return e.workDir
 }
 
-// GetUserHomeDir returns the current user's home directory, defaulting to /root.
+// GetUserHomeDir returns the current user's home directory.
+//
+// os.UserHomeDir does the right thing on every platform:
+//   - Unix:    $HOME (falls back to /etc/passwd lookup if env is empty)
+//   - macOS:   $HOME (same as Unix)
+//   - Windows: %USERPROFILE% (falls back to %HOMEDRIVE%%HOMEPATH%)
+//
+// Only if all of those fail do we fall back to the OS temp dir, which is
+// at least guaranteed to be writable. Returning "/root" on Windows (the
+// previous behavior) was nonsensical and broke session storage.
 func (e *Executor) GetUserHomeDir() string {
-	home := os.Getenv("HOME")
-	if home == "" {
-		home = "/root"
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		return home
 	}
-	return home
+	if home := os.Getenv("HOME"); home != "" {
+		return home
+	}
+	if home := os.Getenv("USERPROFILE"); home != "" {
+		return home
+	}
+	return os.TempDir()
 }
 
 // GetWorkDir returns the working directory (equivalent to the project directory).

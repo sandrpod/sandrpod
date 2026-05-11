@@ -9,9 +9,41 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"syscall"
 )
+
+// platformOSVersion returns a human-readable OS distribution string.
+// Reads PRETTY_NAME from /etc/os-release (Linux); returns runtime.GOOS
+// ("darwin", "linux", ...) when the file is unavailable (macOS, BSD).
+func platformOSVersion() string {
+	data, err := os.ReadFile("/etc/os-release")
+	if err != nil {
+		return runtime.GOOS
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if val, ok := strings.CutPrefix(line, "PRETTY_NAME="); ok {
+			return strings.Trim(val, `"`)
+		}
+	}
+	return runtime.GOOS
+}
+
+// platformKernelVersion returns the kernel version string. On Linux this is
+// the third field of /proc/version ("Linux version <ver> ..."); on macOS the
+// file does not exist and we return an empty string.
+func platformKernelVersion() string {
+	data, err := os.ReadFile("/proc/version")
+	if err != nil {
+		return ""
+	}
+	fields := strings.Fields(strings.TrimSpace(string(data)))
+	if len(fields) >= 3 {
+		return fields[2]
+	}
+	return ""
+}
 
 // defaultWorkDir returns /workspace when running inside a container, otherwise
 // falls back to the current working directory (local-agent scenario on macOS/Linux).

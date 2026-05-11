@@ -10,8 +10,43 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 )
+
+// platformOSVersion returns a human-readable Windows version string. Shells
+// out to `cmd /c ver` which prints e.g. "Microsoft Windows [Version 10.0.22631.4317]".
+// Falls back to runtime.GOOS if the command fails (unlikely — cmd.exe is
+// guaranteed on any Windows host that can run a Go binary).
+func platformOSVersion() string {
+	out, err := exec.Command("cmd", "/c", "ver").Output()
+	if err == nil {
+		s := strings.TrimSpace(string(out))
+		if s != "" {
+			return s
+		}
+	}
+	return runtime.GOOS
+}
+
+// platformKernelVersion returns the NT kernel/build identifier. We extract
+// the bracketed "[Version X.Y.Build.Rev]" tail from `cmd /c ver` output; if
+// not present, return an empty string (mirrors the Unix behavior of "kernel
+// version unknown on this host").
+func platformKernelVersion() string {
+	out, err := exec.Command("cmd", "/c", "ver").Output()
+	if err != nil {
+		return ""
+	}
+	s := strings.TrimSpace(string(out))
+	// "Microsoft Windows [Version 10.0.22631.4317]"
+	if i := strings.LastIndex(s, "Version "); i >= 0 {
+		ver := s[i+len("Version "):]
+		ver = strings.TrimRight(ver, "]")
+		return strings.TrimSpace(ver)
+	}
+	return ""
+}
 
 // defaultWorkDir returns the current working directory on Windows
 // (there is no /workspace container path convention).
