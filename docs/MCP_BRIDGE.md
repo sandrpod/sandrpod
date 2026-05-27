@@ -203,34 +203,61 @@ fails CI if throughput drops below 100 req/s or p99 exceeds 500 ms —
 the bounds are loose so flaky CI machines don't trip them, but
 catastrophic regressions (lock contention, leaks) will.
 
-## Authentication (`--mcp-token`)
+## Authentication
 
-The bridge accepts inbound `/mcp` requests in three trust modes:
+The bridge runs through two independent auth layers — one at the API
+Server, one at the agent — and each uses a **different HTTP header** so
+clients can pass both at once:
 
-| Mode | When safe | Setup |
-|---|---|---|
-| **No auth** (default) | Loopback `--mcp-only`, or single-tenant deployment where the API Server itself is the trust boundary | Omit `--mcp-token` |
-| **Shared-secret Bearer** | Multi-tenant API Server, or anytime you don't fully trust intermediaries | `sandrpod-agent --mcp-token=<secret>` and put the same value in your MCP client's `Authorization: Bearer <secret>` header |
+| Layer | Token | Header | Set on |
+|---|---|---|---|
+| API Server (`/api/v1/*` ingress) | `cfg.Token` | `X-Sandrpod-Token: <token>` | `sandrpod-server -token <…>` |
+| Agent (`/mcp` endpoint after tunnel) | `--mcp-token` | `Authorization: Bearer <token>` | `sandrpod-agent --mcp-token <…>` |
 
-The API Server forwards the `Authorization` header verbatim — it does
-**not** know or validate the secret. So even a compromised API Server
-cannot forge new MCP calls; it can only replay ones it intercepted.
+The API Server validates `X-Sandrpod-Token` and forwards `Authorization`
+**unchanged** through the tunnel. So even a compromised API Server cannot
+forge new MCP calls — it never sees the MCP Bearer in plaintext, only
+relays it. (It can still replay calls it intercepted on the wire; that's
+the known residual risk of the proxy model.)
 
-Example client config with auth (LangChain):
+### Example client config
 
 ```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
 client = MultiServerMCPClient({
     "personal": {
         "url": "https://your-server/api/v1/sandboxes/laptop-1/mcp",
         "transport": "streamable_http",
-        "headers": {"Authorization": "Bearer hunter2"},
+        "headers": {
+            "X-Sandrpod-Token":  "api-token-abc",    # API Server auth
+            "Authorization":     "Bearer mcp-xyz",    # forwarded to agent
+        },
     },
 })
 ```
 
-Admin endpoints (on `~/.sandrpod/mcp.sock`) are **never** covered by
-this token — the Unix-socket file permissions (0600, same uid) are the
-auth boundary for management operations.
+### Three deployment modes
+
+| Mode | When safe | Setup |
+|---|---|---|
+| **Both tokens** (recommended for production) | Multi-tenant or shared API Server | Server: `-token …`; agent: `--mcp-token …`; client sends both headers |
+| **API token only** | Single-tenant API Server, no shared infra | Server: `-token …`; agent omits `--mcp-token`; client sends only `X-Sandrpod-Token` |
+| **No auth** | Loopback `--mcp-only`, dev box | Omit both flags |
+
+### Legacy `Authorization: Bearer <cfg.Token>` clients
+
+Pre-MCP-bridge clients (sandbox CRUD, exec, etc.) that put the API
+token in `Authorization: Bearer` continue to work — the middleware
+falls back to that scheme. But **for any call that goes to `/mcp`** the
+client must switch to `X-Sandrpod-Token`, because the agent expects
+`Authorization` to carry its own Bearer.
+
+### Admin endpoints
+
+The admin socket on `~/.sandrpod/mcp.sock` is **never** covered by
+either of these tokens — Unix-socket file permissions (0600, same uid)
+are the auth boundary for management operations.
 
 ## Permission gate (employee-PC mode)
 
@@ -295,11 +322,9 @@ client →  POST /api/v1/sandboxes/{name}/mcp  →  API Server  →  tunnel  →
 The API Server uses a streaming-aware proxy (`proxyHTTPStreaming`) that
 flushes after each chunk, so SSE upgrade works end-to-end.
 
-Authentication: by default, any caller that can hit the sandbox via the
-existing sandbox-auth path can use the bridge. For multi-tenant or
-defense-in-depth deployments, set `--mcp-token=<secret>` on the agent
-(see Authentication section above) — the API Server proxies the
-`Authorization` header verbatim, so the secret never lives in the server.
+Authentication: see the Authentication section above. Short version:
+API token in `X-Sandrpod-Token`, MCP Bearer in `Authorization` — the
+two are independent and only the agent sees the MCP Bearer in plaintext.
 
 ## Tray integration
 

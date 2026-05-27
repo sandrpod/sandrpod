@@ -736,13 +736,19 @@ mux.HandleFunc("/api/v1/sandboxes/", func(w http.ResponseWriter, r *http.Request
 
 建议直接抽一个 `proxyHTTPStreaming` 函数复用，或在现有 `proxyHTTP` 内检测 `Content-Type: text/event-stream` 时自动启用 flush。
 
-### 鉴权
+### 鉴权（已升级两层模型，见 [`MCP_AUTH_HEADER_CONFLICT_FIX.md`](MCP_AUTH_HEADER_CONFLICT_FIX.md)）
 
-`/api/v1/sandboxes/{name}/mcp` 沿用 SandrPod 现有的 sandbox 鉴权：
+最初版本只有一层鉴权（API Server `Authorization: Bearer cfg.Token`），引入 `--mcp-token` 后两个值都要塞 `Authorization`，单 header 装不下。修复后改为两个 header 分担：
 
-- API Server 接受请求时校验调用方 token（或 OAuth/SaaS 模式下的 bearer）
-- 经隧道转发后，agent 侧的 `/mcp` 路径**默认接受所有来自隧道的请求**（隧道本身就是认证边界）
-- 不应在 agent 侧再做一遍 token 校验——隧道入站是可信的（只有 API Server 持有合法 yamux 通道）
+| 头 | 谁验证 | 值 |
+|---|---|---|
+| `X-Sandrpod-Token` | API Server | `cfg.Token`（sandrpod 平台级令牌） |
+| `Authorization: Bearer …` | agent 侧 `mcpTokenMiddleware` | `--mcp-token`（sandbox 资源级令牌） |
+
+- API Server **不消费** `Authorization`，原样透传给 agent
+- agent 即使收到经隧道的请求，也再用 Bearer 自己验证一次（defense-in-depth）
+- API Server 被攻陷只能 replay 截获请求，无法伪造新调用（不持有 mcp-token）
+- 老客户端 `Authorization: Bearer cfg.Token` 走兼容路径，仅用于非 `/mcp` 路由
 
 ---
 

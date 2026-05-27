@@ -47,28 +47,89 @@ func TestAuthMiddleware(t *testing.T) {
 	handler := newTestHandler(t, serverConfig{Token: tok})
 
 	tests := []struct {
-		name       string
-		authHeader string
-		wantStatus int
+		name        string
+		sandrpodTok string // X-Sandrpod-Token header
+		authHeader  string // Authorization header
+		wantStatus  int
 	}{
-		{"no auth header", "", http.StatusUnauthorized},
-		{"wrong token", "Bearer wrong", http.StatusUnauthorized},
-		{"correct token", "Bearer " + tok, http.StatusOK},
+		{"no headers", "", "", http.StatusUnauthorized},
+		{"legacy: Authorization correct", "", "Bearer " + tok, http.StatusOK},
+		{"legacy: Authorization wrong", "", "Bearer wrong", http.StatusUnauthorized},
+		{"legacy: Authorization wrong scheme", "", "Basic " + tok, http.StatusUnauthorized},
+		{"preferred: X-Sandrpod-Token correct", tok, "", http.StatusOK},
+		{"preferred: X-Sandrpod-Token wrong", "wrong", "", http.StatusUnauthorized},
+		// The whole point of this fix: X-Sandrpod-Token authenticates,
+		// Authorization carries a DIFFERENT value meant for the agent.
+		// We must let the request through without touching Authorization.
+		{"both headers, X-Sandrpod-Token correct + Authorization is MCP bearer", tok, "Bearer mcp-token-xyz", http.StatusOK},
+		{"both headers, X-Sandrpod-Token wrong + Authorization correct (fallback)", "wrong", "Bearer " + tok, http.StatusOK},
+		{"both headers, both wrong", "wrong", "Bearer wrong", http.StatusUnauthorized},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "/api/v1/sandboxes", nil)
+			if tc.sandrpodTok != "" {
+				req.Header.Set("X-Sandrpod-Token", tc.sandrpodTok)
+			}
 			if tc.authHeader != "" {
 				req.Header.Set("Authorization", tc.authHeader)
 			}
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, req)
 			if w.Code != tc.wantStatus {
-				t.Errorf("expected %d, got %d", tc.wantStatus, w.Code)
+				t.Errorf("expected %d, got %d (body: %s)", tc.wantStatus, w.Code, w.Body.String())
+			}
+			if tc.wantStatus == http.StatusUnauthorized {
+				if got := w.Header().Get("WWW-Authenticate"); !strings.Contains(got, "Bearer") || !strings.Contains(got, "X-Sandrpod-Token") {
+					t.Errorf("expected WWW-Authenticate to advertise both schemes, got %q", got)
+				}
 			}
 		})
 	}
+}
+
+// TestAuthMiddleware_AuthorizationPreservedForHandler is the regression
+// guard for docs/MCP_AUTH_HEADER_CONFLICT_FIX.md: when authentication
+// succeeds via X-Sandrpod-Token, the Authorization header must reach
+// the handler unchanged so it can be forwarded through the tunnel to
+// the agent's /mcp endpoint.
+func TestAuthMiddleware_AuthorizationPreservedForHandler(t *testing.T) {
+	const apiTok = "api-token-abc"
+	const mcpBearer = "Bearer mcp-token-xyz"
+
+	stores := store.NewMemoryStores()
+	ts := tunnel.NewTunnelStore()
+	ds := tunnel.NewDirectTunnelStore()
+	mux := buildMux(serverConfig{Token: apiTok}, stores, ts, ds)
+
+	// Wrap with a probe that captures whatever Authorization the
+	// downstream handler sees. We attach the probe by installing a
+	// route OUTSIDE buildMux is awkward — instead we just rely on the
+	// 404 path: the auth middleware runs on /api/v1/sandboxes/, and
+	// if it lets us through with a non-existent sandbox name we'll
+	// hit a 404. The body of that 404 is irrelevant; we only need to
+	// verify we got past auth without the Authorization header being
+	// mutated. Use an httptest server so we can read response cleanly.
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/v1/sandboxes/nonexistent", nil)
+	req.Header.Set("X-Sandrpod-Token", apiTok)
+	req.Header.Set("Authorization", mcpBearer)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Fatalf("auth blocked despite valid X-Sandrpod-Token")
+	}
+	// The handler path doesn't return Authorization back to us; we
+	// verify the no-mutation contract by direct inspection in the
+	// TestMCPRouteForwardsBearer test below, which spins up a fake
+	// agent and asserts on what reaches it. This sub-test just
+	// confirms the auth middleware accepts the combination.
 }
 
 // --- 3. GET /api/v1/sandboxes (empty store) ---

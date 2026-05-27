@@ -81,10 +81,18 @@ type PoderTunnel struct {
 // NewPoderTunnel creates a tunnel from an already-upgraded WebSocket connection.
 // The caller (API Server) becomes the yamux client; Poder serves HTTP over yamux.
 func NewPoderTunnel(id string, ws *websocket.Conn) (*PoderTunnel, error) {
+	return NewPoderTunnelFromConn(id, newWSConn(ws))
+}
+
+// NewPoderTunnelFromConn is the transport-agnostic constructor used by
+// NewPoderTunnel and by tests that want to wire the two halves over a
+// net.Pipe instead of a real WebSocket. Production callers should use
+// NewPoderTunnel; this is exported to give tests a clean injection point.
+func NewPoderTunnelFromConn(id string, conn io.ReadWriteCloser) (*PoderTunnel, error) {
 	cfg := yamux.DefaultConfig()
-	cfg.KeepAliveInterval = 5 * time.Second  // faster dead-connection detection (was 30s)
+	cfg.KeepAliveInterval = 5 * time.Second // faster dead-connection detection (was 30s)
 	cfg.ConnectionWriteTimeout = 5 * time.Second
-	session, err := yamux.Client(newWSConn(ws), cfg)
+	session, err := yamux.Client(conn, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("yamux client: %w", err)
 	}

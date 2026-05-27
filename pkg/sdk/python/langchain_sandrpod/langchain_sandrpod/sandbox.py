@@ -192,8 +192,14 @@ class SandrPodSandbox(BaseSandbox):
     # ------------------------------------------------------------------ #
 
     def _build_http_client(self) -> httpx.Client:
+        # 优先 X-Sandrpod-Token,让 Authorization 留给 MCP 资源层(agent
+        # --mcp-token)。同时保留 Authorization 是为了兼容老服务端(还
+        # 没合入 X-Sandrpod-Token 支持的版本)——服务端 authMiddleware 优先
+        # 看 X-Sandrpod-Token,fallback 到 Authorization。
+        # 见 docs/MCP_AUTH_HEADER_CONFLICT_FIX.md。
         headers: dict[str, str] = {}
         if self._api_token:
+            headers["X-Sandrpod-Token"] = self._api_token
             headers["Authorization"] = f"Bearer {self._api_token}"
         # timeout=None: 由调用方在每个请求上动态设置
         return httpx.Client(base_url=self._base_url, headers=headers, timeout=None)

@@ -7,6 +7,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -62,16 +63,58 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		CheckOrigin: func(r *http.Request) bool { return true },
 	}
 
-	// Authentication middleware
+	// Authentication middleware.
+	//
+	// Two accepted header schemes:
+	//
+	//   X-Sandrpod-Token: <cfg.Token>          ← preferred for new clients
+	//   Authorization:    Bearer <cfg.Token>   ← legacy fallback
+	//
+	// Why two? The MCP transport bridge needs the Authorization header
+	// to carry a DIFFERENT secret (the agent's --mcp-token) and have it
+	// forwarded verbatim through the tunnel. If we kept consuming
+	// Authorization for the API token, every MCP client would have to
+	// choose between passing API-Server auth or passing agent auth — they
+	// can't put two different bearer values in one header. See
+	// docs/MCP_AUTH_HEADER_CONFLICT_FIX.md for the full case.
+	//
+	// New behavior:
+	//   - X-Sandrpod-Token correct           → next; Authorization untouched
+	//   - X-Sandrpod-Token missing/wrong AND
+	//     Authorization correct              → next (legacy path)
+	//   - Otherwise                          → 401 with both schemes in
+	//                                          WWW-Authenticate
 	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			if cfg.Token != "" {
-				if r.Header.Get("Authorization") != "Bearer "+cfg.Token {
-					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			if cfg.Token == "" {
+				next(w, r)
+				return
+			}
+
+			want := []byte(cfg.Token)
+
+			// Preferred: X-Sandrpod-Token. Constant-time compare prevents
+			// the obvious timing oracle on the secret.
+			if got := r.Header.Get("X-Sandrpod-Token"); got != "" &&
+				subtle.ConstantTimeCompare([]byte(got), want) == 1 {
+				next(w, r)
+				return
+			}
+
+			// Legacy: Authorization: Bearer <cfg.Token>. When this path
+			// fires, Authorization will reach the agent as cfg.Token —
+			// not the MCP Bearer — but legacy callers don't use /mcp,
+			// so the practical impact is zero.
+			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+				if subtle.ConstantTimeCompare([]byte(auth[len("Bearer "):]), want) == 1 {
+					next(w, r)
 					return
 				}
 			}
-			next(w, r)
+
+			w.Header().Set("WWW-Authenticate",
+				`Bearer realm="sandrpod-api", X-Sandrpod-Token realm="sandrpod-api"`)
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		}
 	}
 

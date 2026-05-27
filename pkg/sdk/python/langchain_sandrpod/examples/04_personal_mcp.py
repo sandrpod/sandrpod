@@ -15,6 +15,7 @@ Run::
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 
 import httpx
@@ -39,11 +40,25 @@ async def main(sandbox_name: str) -> None:
         print("install langchain-mcp-adapters to use the LangChain side")
         return
 
+    # Two-tier auth (see docs/MCP_BRIDGE.md #Authentication):
+    #   - X-Sandrpod-Token authenticates to the API Server
+    #   - Authorization: Bearer authenticates to the agent's /mcp endpoint
+    # In dev you can omit either by configuring sandrpod-server / -agent
+    # without the matching token.
+    api_token = os.environ.get("SANDRPOD_API_TOKEN", "")
+    mcp_token = os.environ.get("SANDRPOD_MCP_TOKEN", "")
+    headers: dict[str, str] = {}
+    if api_token:
+        headers["X-Sandrpod-Token"] = api_token
+    if mcp_token:
+        headers["Authorization"] = f"Bearer {mcp_token}"
+
     client = MultiServerMCPClient(
         {
             "personal": {
                 "url": sb.mcp_url(),
                 "transport": "streamable_http",
+                "headers": headers,
             },
         }
     )
