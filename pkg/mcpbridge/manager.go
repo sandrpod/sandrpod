@@ -28,6 +28,13 @@ const (
 	defaultMaxRestartPerMin = 3
 	defaultPingInterval     = 20 * time.Second
 	defaultPingTimeout      = 5 * time.Second
+
+	// Restart backoff parameters. A child that died once gets back up
+	// quickly (1s); each consecutive failure doubles the wait. The cap
+	// is below the per-minute restart limit so the rate-limit gate is
+	// what ultimately stops a hopelessly-broken child, not the backoff.
+	restartBackoffBase = 1 * time.Second
+	restartBackoffMax  = 30 * time.Second
 )
 
 // ManagerOptions configures a ChildManager.
@@ -506,6 +513,21 @@ func (m *ChildManager) handleChildDeath(ctx context.Context, c *Child, cause err
 		return
 	}
 
+	// Exponential backoff before the actual respawn. Without this, a
+	// child that crashes on startup (e.g. waiting on a slow API that
+	// times out) will burn its entire per-minute restart budget in a
+	// fraction of a second. Backoff turns "thrash then give up" into
+	// "wait and try again with growing patience".
+	backoff := computeBackoff(c.restarts)
+	if backoff > 0 {
+		m.opts.Logger.Printf("mcpbridge: %q died, waiting %s before restart attempt %d", c.Name, backoff, c.restarts+1)
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return
+		}
+	}
+
 	m.opts.Logger.Printf("mcpbridge: restarting %q (attempt %d)", c.Name, c.restarts+1)
 	m.mu.Lock()
 	delete(m.children, c.Name)
@@ -525,6 +547,23 @@ func (m *ChildManager) handleChildDeath(ctx context.Context, c *Child, cause err
 		Decision: DecisionAllow,
 		Server:   c.Name,
 	})
+}
+
+// computeBackoff returns the wait before attempt #(consecutiveFailures+1).
+// Doubles per failure, capped at restartBackoffMax. The first failure
+// (consecutiveFailures == 0) waits restartBackoffBase.
+func computeBackoff(consecutiveFailures int) time.Duration {
+	if consecutiveFailures < 0 {
+		consecutiveFailures = 0
+	}
+	d := restartBackoffBase
+	for i := 0; i < consecutiveFailures && d < restartBackoffMax; i++ {
+		d *= 2
+	}
+	if d > restartBackoffMax {
+		d = restartBackoffMax
+	}
+	return d
 }
 
 func (m *ChildManager) rebuildIndexAfterChange() {

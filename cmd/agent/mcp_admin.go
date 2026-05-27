@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/mcpbridge"
@@ -24,24 +25,29 @@ func defaultMCPAdminSocketPath() string {
 	return filepath.Join(home, ".sandrpod", "mcp.sock")
 }
 
-// startMCPAdminServer binds a Unix-socket HTTP server that exposes the
+// startMCPAdminServer binds an AF_UNIX HTTP server that exposes the
 // mcpbridge admin endpoints (manifest, reload, restart, disable). Local
-// only (Unix-socket file permissions are the auth boundary). Best-effort:
-// failure to bind never aborts the agent.
+// only: on POSIX the socket file permissions are the auth boundary; on
+// Windows ≥10 1803 the parent-directory ACL is. Best-effort — failure
+// to bind never aborts the agent (the bridge keeps serving /mcp).
 //
-// On Windows the function is a no-op — the tray on Windows can call
-// /mcp/manifest directly via the existing yamux tunnel and doesn't need
-// the admin socket for MVP. (Named-pipe support can come later.)
+// AF_UNIX support on Windows requires build 17134+; older Windows hosts
+// simply log "listen failed" and continue without the admin channel.
 func startMCPAdminServer(ctx context.Context, mgr *mcpbridge.ChildManager) {
 	sockPath := defaultMCPAdminSocketPath()
 
 	// If a stale socket file exists, remove it. Otherwise net.Listen
 	// returns "address already in use" even if the previous agent died.
-	if fi, err := os.Stat(sockPath); err == nil && fi.Mode()&os.ModeSocket != 0 {
-		_ = os.Remove(sockPath)
-	} else if err == nil {
-		log.Printf("MCP admin: %s exists and is not a socket — refusing to clobber", sockPath)
-		return
+	// On Windows the file appears as a regular file rather than a socket
+	// (ModeSocket isn't set), so we fall back to removing any pre-existing
+	// file at the canonical path — safe because the parent dir is per-user.
+	if fi, err := os.Stat(sockPath); err == nil {
+		if fi.Mode()&os.ModeSocket != 0 || runtime.GOOS == "windows" {
+			_ = os.Remove(sockPath)
+		} else {
+			log.Printf("MCP admin: %s exists and is not a socket — refusing to clobber", sockPath)
+			return
+		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(sockPath), 0o700); err != nil {
@@ -53,10 +59,7 @@ func startMCPAdminServer(ctx context.Context, mgr *mcpbridge.ChildManager) {
 		log.Printf("MCP admin: listen %s failed: %v — admin socket disabled", sockPath, err)
 		return
 	}
-	// 0600 so only the same uid can connect.
-	if err := os.Chmod(sockPath, 0o600); err != nil {
-		log.Printf("MCP admin: chmod %s failed: %v (continuing — may be world-accessible)", sockPath, err)
-	}
+	tightenSocketPerms(sockPath)
 
 	srv := &http.Server{
 		Handler:           mcpbridge.NewAdminHandler(mgr),

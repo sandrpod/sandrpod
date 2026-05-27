@@ -157,8 +157,12 @@ crash, hang, OOM), the bridge:
 
 1. Marks the child `failed` and removes its tools from the aggregate.
 2. Notifies clients via `tools/list_changed`.
-3. Restarts according to `restart_policy`, subject to `max_restart_per_min`.
-4. Re-publishes the tools when the new child handshakes successfully.
+3. Waits an exponentially-growing backoff (1s → 2s → 4s → 8s → … capped
+   at 30s) before respawning. This prevents a sick child (e.g. waiting
+   on a slow upstream API) from burning its entire per-minute restart
+   budget in one second of thrashing.
+4. Restarts according to `restart_policy`, subject to `max_restart_per_min`.
+5. Re-publishes the tools when the new child handshakes successfully.
 
 A child that exhausts its restart budget stays `failed`. Check
 `/mcp/manifest`'s `last_error` field to see why.
@@ -265,8 +269,13 @@ defense-in-depth deployments, set `--mcp-token=<secret>` on the agent
 
 When `sandrpod-tray serve` is running, a new "MCP 服务" submenu appears
 with per-server state and a "重载 mcp.json" entry. The tray talks to the
-agent over `~/.sandrpod/mcp.sock` (Unix-socket HTTP), so it only works
-when both are running on the same machine.
+agent over `~/.sandrpod/mcp.sock` (AF_UNIX HTTP). Both processes must be
+running as the same OS user on the same machine.
+
+**Platform support**: AF_UNIX sockets work on macOS, Linux, and Windows
+build 17134+ (Windows 10 1803 or later). On older Windows the agent logs
+"admin socket disabled" and continues serving `/mcp` normally — only the
+tray's MCP submenu shows "未连接".
 
 ## Troubleshooting
 
