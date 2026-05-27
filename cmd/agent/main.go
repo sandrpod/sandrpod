@@ -196,6 +196,12 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
 	log.Println("Shutting down...")
+
+	// Drain in-flight MCP tool calls before tearing down so we don't
+	// leave HTTP clients hanging on a half-served response. The agent
+	// tunnel disconnects shortly after we cancel ctx, so 10s is plenty
+	// for any in-flight call to either return or be abandoned.
+	shutdownMCPBridge(10 * time.Second)
 	cancel()
 }
 

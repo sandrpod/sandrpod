@@ -167,6 +167,42 @@ crash, hang, OOM), the bridge:
 A child that exhausts its restart budget stays `failed`. Check
 `/mcp/manifest`'s `last_error` field to see why.
 
+## Graceful shutdown
+
+On SIGTERM/SIGINT the agent:
+
+1. Stops accepting new HTTP connections (server close).
+2. Stops the supervisor and fsnotify watcher so no late restart or
+   reload kicks in mid-drain.
+3. Waits up to **10 seconds** for in-flight `tools/call` invocations to
+   complete (per-child `WaitDrain` on the in-flight WaitGroup).
+4. Sends SIGTERM to remaining children and exits.
+
+Calls that haven't returned by the drain deadline are abandoned and the
+client sees a connection close. The drain bound prevents a hung MCP
+server (e.g. a third-party API stuck behind a load-balancer) from
+holding shutdown forever.
+
+## Performance
+
+Measured on Apple M1 Pro through the full HTTP path (10 fake servers ×
+5 tools each):
+
+| Scenario | Throughput | Latency p99 |
+|---|---:|---:|
+| Full HTTP → bridge → child round-trip | 4,400 req/s | < 10 ms |
+| Dispatch only (no HTTP framing) | 6.4 M op/s | — |
+| tools/list aggregation | 65 K op/s | — |
+
+The design target was 10 servers × 100 req/s aggregate; the
+implementation has ~40× headroom against that. Real-world throughput is
+dominated by the upstream MCP server, not the bridge.
+
+`TestLoad_10ServersX100PerSec` runs as part of `go test ./...` and
+fails CI if throughput drops below 100 req/s or p99 exceeds 500 ms —
+the bounds are loose so flaky CI machines don't trip them, but
+catastrophic regressions (lock contention, leaks) will.
+
 ## Authentication (`--mcp-token`)
 
 The bridge accepts inbound `/mcp` requests in three trust modes:

@@ -126,7 +126,9 @@ func (m *ChildManager) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop terminates every child and the supervisor.
+// Stop is the abrupt-termination path: cancels the supervisor, closes
+// the watcher, kills every child. In-flight tools/call invocations are
+// abandoned. Prefer Shutdown for graceful termination.
 func (m *ChildManager) Stop(ctx context.Context) error {
 	if m.supervisorCancel != nil {
 		m.supervisorCancel()
@@ -147,6 +149,58 @@ func (m *ChildManager) Stop(ctx context.Context) error {
 	m.children = map[string]*Child{}
 	m.fqIndex = map[string]fqEntry{}
 	return firstErr
+}
+
+// Shutdown drains in-flight tools/call invocations up to drainTimeout,
+// then tears everything down. The supervisor and watcher are stopped
+// first so no new restart attempts or reloads kick in during drain.
+//
+// Returns nil on clean drain; an error describing which children didn't
+// finish in time otherwise (but Stop() is still run regardless so the
+// caller can ignore the error and exit).
+func (m *ChildManager) Shutdown(ctx context.Context, drainTimeout time.Duration) error {
+	// Halt anything that might spawn or restart children during drain.
+	if m.supervisorCancel != nil {
+		m.supervisorCancel()
+	}
+	if m.watcher != nil {
+		_ = m.watcher.Close()
+		m.watcher = nil
+	}
+
+	// Snapshot children under read lock so we can drain without
+	// blocking new ones (there shouldn't be any after the supervisor
+	// is stopped, but mid-flight calls keep the WaitGroup busy).
+	m.mu.RLock()
+	pending := make([]*Child, 0, len(m.children))
+	for _, c := range m.children {
+		pending = append(pending, c)
+	}
+	m.mu.RUnlock()
+
+	drainCtx, cancel := context.WithTimeout(ctx, drainTimeout)
+	defer cancel()
+
+	var notDrained []string
+	for _, c := range pending {
+		if !c.WaitDrain(drainCtx) {
+			notDrained = append(notDrained, c.Name)
+		}
+	}
+
+	// Now kill the children — clean or not.
+	m.mu.Lock()
+	for _, c := range m.children {
+		_ = c.Stop(ctx)
+	}
+	m.children = map[string]*Child{}
+	m.fqIndex = map[string]fqEntry{}
+	m.mu.Unlock()
+
+	if len(notDrained) > 0 {
+		return fmt.Errorf("drain timeout exceeded for: %v", notDrained)
+	}
+	return nil
 }
 
 // Reload re-reads the config file and applies the diff: new entries are

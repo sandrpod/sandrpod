@@ -22,6 +22,21 @@ import (
 // only called once from main().
 var currentMgr *mcpbridge.ChildManager
 
+// shutdownMCPBridge gracefully drains in-flight tool calls then tears
+// down the manager. No-op if the bridge was never started. Called from
+// main() and runMCPOnly() so SIGTERM doesn't strand clients mid-call.
+func shutdownMCPBridge(drainTimeout time.Duration) {
+	if currentMgr == nil {
+		return
+	}
+	log.Printf("MCP bridge: draining (timeout=%s)...", drainTimeout)
+	if err := currentMgr.Shutdown(context.Background(), drainTimeout); err != nil {
+		log.Printf("MCP bridge: drain incomplete: %v", err)
+	} else {
+		log.Printf("MCP bridge: drain complete")
+	}
+}
+
 // installMCPBridge starts the optional MCP transport bridge and returns its
 // http.Handler. Returns nil when:
 //   - --mcp-enabled is false; or
@@ -187,7 +202,15 @@ func runMCPOnly() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 	log.Println("MCP-only: shutting down")
-	shutdownCtx, c2 := context.WithTimeout(context.Background(), 5*time.Second)
+
+	// Stop accepting new HTTP connections first so the drain window
+	// isn't extended by clients that arrive after we've decided to
+	// shut down. http.Server.Shutdown drains in-flight HTTP requests
+	// up to its own context — those requests are what's calling into
+	// the bridge, so we then ask the bridge to drain whatever they
+	// kicked off into child stdio.
+	shutdownCtx, c2 := context.WithTimeout(context.Background(), 10*time.Second)
 	defer c2()
 	_ = srv.Shutdown(shutdownCtx)
+	shutdownMCPBridge(10 * time.Second)
 }

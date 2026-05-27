@@ -85,6 +85,12 @@ type Child struct {
 	restarts     int
 	restartTimes []time.Time // sliding window for MaxRestartPerMin
 	configHash   string      // set by manager for Reload diff
+
+	// inFlight tracks tools/call invocations currently waiting on the
+	// child. Used by Stop to drain gracefully — without it, SIGTERM
+	// arriving mid-call leaves the caller hanging on an EOF read after
+	// the subprocess is killed.
+	inFlight sync.WaitGroup
 }
 
 func newChild(name string, cfg ServerConfig) *Child {
@@ -195,6 +201,9 @@ func (c *Child) LastError() string {
 
 // CallTool proxies a call to the child. Returns an error if the child is not
 // ready or the tool was filtered out.
+//
+// The in-flight WaitGroup is incremented while the call is outstanding so
+// Stop / WaitDrain can wait for it to complete before killing the child.
 func (c *Child) CallTool(ctx context.Context, name string, args any) (*mcp.CallToolResult, error) {
 	c.mu.RLock()
 	t := c.transport
@@ -209,10 +218,30 @@ func (c *Child) CallTool(ctx context.Context, name string, args any) (*mcp.CallT
 		return nil, fmt.Errorf("tool %s not exposed by child %s", name, c.Name)
 	}
 
+	c.inFlight.Add(1)
+	defer c.inFlight.Done()
+
 	req := mcp.CallToolRequest{}
 	req.Params.Name = name
 	req.Params.Arguments = args
 	return t.CallTool(ctx, req)
+}
+
+// WaitDrain blocks until all in-flight CallTool invocations on this child
+// have returned, or ctx is cancelled. Returns true on clean drain, false
+// if the context deadline fired first.
+func (c *Child) WaitDrain(ctx context.Context) bool {
+	done := make(chan struct{})
+	go func() {
+		c.inFlight.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (c *Child) setFailed(err error) {
