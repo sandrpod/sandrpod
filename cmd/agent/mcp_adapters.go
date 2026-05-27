@@ -150,15 +150,23 @@ func (a *mcpPermissionAdapter) flushLocked() error {
 // Check is the PermissionGate impl. Returns Allow immediately for already-
 // granted entries; otherwise prompts via the notifier and (on
 // PromptAllowPermanent) persists. Failure modes are fail-close (deny).
+//
+// Sensitive tools (delete_*, send_*, …) bypass the cache and prompt every
+// time, even if the user previously chose "allow permanent". This is a
+// safety floor: a permanent grant for a benign tool like list_issues
+// should never accidentally cover delete_repo just because they share a
+// server. See sensitiveToolPatterns below for the exact list.
 func (a *mcpPermissionAdapter) Check(ctx context.Context, evt mcpbridge.PermissionEvent) (mcpbridge.Decision, error) {
+	sensitive := evt.Source == "mcp.call" && isSensitiveTool(evt.Tool)
+
 	a.mu.Lock()
-	if evt.Source == "mcp.call" {
+	if evt.Source == "mcp.call" && !sensitive {
 		key := evt.Server + ":" + evt.Tool
 		if a.grants.Tools[key] {
 			a.mu.Unlock()
 			return mcpbridge.DecisionAllow, nil
 		}
-	} else if a.grants.Servers[evt.Server] {
+	} else if evt.Source != "mcp.call" && a.grants.Servers[evt.Server] {
 		// mcp.spawn / mcp.restart inherit the server-level grant.
 		a.mu.Unlock()
 		return mcpbridge.DecisionAllow, nil
@@ -184,6 +192,14 @@ func (a *mcpPermissionAdapter) Check(ctx context.Context, evt mcpbridge.Permissi
 	case permission.PromptAllowOnce, permission.PromptAllowSession:
 		return mcpbridge.DecisionAllow, nil
 	case permission.PromptAllowPermanent:
+		// Sensitive tools never get a permanent grant — even if the
+		// user picks "allow permanent" in the dialog. The reasoning:
+		// a destructive tool's risk profile per-call is high enough
+		// that we'd rather make the user click through every time than
+		// have a single misclick turn into a standing authorization.
+		if sensitive {
+			return mcpbridge.DecisionAllow, nil
+		}
 		a.mu.Lock()
 		if evt.Source == "mcp.call" {
 			a.grants.Tools[evt.Server+":"+evt.Tool] = true
@@ -216,6 +232,77 @@ func describeEvent(evt mcpbridge.PermissionEvent) string {
 		return fmt.Sprintf("Restart MCP server %q", evt.Server)
 	}
 	return evt.Source + " " + evt.Server
+}
+
+// sensitiveToolPatterns is the built-in list of substrings that mark a
+// tool as destructive / irreversible / outbound-side-effect. Matching is
+// case-insensitive on the un-prefixed tool name (e.g. "delete_repo",
+// not "github__delete_repo").
+//
+// The list is intentionally conservative — false positives mean an extra
+// prompt, false negatives mean a permanent grant on something the user
+// would have wanted to confirm. We bias toward the former.
+//
+// Extend via SANDRPOD_MCP_SENSITIVE_PATTERNS env (comma-separated).
+// Replace (not extend) via SANDRPOD_MCP_SENSITIVE_PATTERNS_OVERRIDE.
+var sensitiveToolPatterns = []string{
+	"delete",
+	"remove",
+	"drop",
+	"truncate",
+	"purge",
+	"destroy",
+	"wipe",
+	"send",      // send_email, send_message, send_dm, ...
+	"publish",   // publish_post, publish_repo, ...
+	"post",      // post_tweet, post_comment, ... (some false positives — OK)
+	"transfer",
+	"pay",
+	"charge",
+	"merge",     // merge_pr — irreversible from user POV
+	"revoke",
+	"reset",     // reset_password
+	"unsubscribe",
+}
+
+func isSensitiveTool(toolName string) bool {
+	if toolName == "" {
+		return false
+	}
+	lower := strings.ToLower(toolName)
+	for _, p := range sensitivePatternsRuntime() {
+		if strings.Contains(lower, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// sensitivePatternsRuntime resolves env overrides on each call. We re-read
+// env every time rather than caching so operators can change the env
+// (e.g. via tray restart of the agent) without rebuilding. The cost is
+// trivial — Check is not on the hot path of an MCP tool, the underlying
+// child call dominates by orders of magnitude.
+func sensitivePatternsRuntime() []string {
+	if override := os.Getenv("SANDRPOD_MCP_SENSITIVE_PATTERNS_OVERRIDE"); override != "" {
+		return splitCSVLower(override)
+	}
+	base := sensitiveToolPatterns
+	if extra := os.Getenv("SANDRPOD_MCP_SENSITIVE_PATTERNS"); extra != "" {
+		base = append(append([]string{}, base...), splitCSVLower(extra)...)
+	}
+	return base
+}
+
+func splitCSVLower(s string) []string {
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.ToLower(strings.TrimSpace(p)); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 // defaultMCPGrantsPath returns the conventional store location.

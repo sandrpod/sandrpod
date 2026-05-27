@@ -163,6 +163,35 @@ crash, hang, OOM), the bridge:
 A child that exhausts its restart budget stays `failed`. Check
 `/mcp/manifest`'s `last_error` field to see why.
 
+## Authentication (`--mcp-token`)
+
+The bridge accepts inbound `/mcp` requests in three trust modes:
+
+| Mode | When safe | Setup |
+|---|---|---|
+| **No auth** (default) | Loopback `--mcp-only`, or single-tenant deployment where the API Server itself is the trust boundary | Omit `--mcp-token` |
+| **Shared-secret Bearer** | Multi-tenant API Server, or anytime you don't fully trust intermediaries | `sandrpod-agent --mcp-token=<secret>` and put the same value in your MCP client's `Authorization: Bearer <secret>` header |
+
+The API Server forwards the `Authorization` header verbatim — it does
+**not** know or validate the secret. So even a compromised API Server
+cannot forge new MCP calls; it can only replay ones it intercepted.
+
+Example client config with auth (LangChain):
+
+```python
+client = MultiServerMCPClient({
+    "personal": {
+        "url": "https://your-server/api/v1/sandboxes/laptop-1/mcp",
+        "transport": "streamable_http",
+        "headers": {"Authorization": "Bearer hunter2"},
+    },
+})
+```
+
+Admin endpoints (on `~/.sandrpod/mcp.sock`) are **never** covered by
+this token — the Unix-socket file permissions (0600, same uid) are the
+auth boundary for management operations.
+
 ## Permission gate (employee-PC mode)
 
 When `sandrpod-agent` runs with `--permission-mode=prompt` or `=strict`, the
@@ -171,12 +200,28 @@ bridge wires itself to the same consent flow as filesystem access:
 | Event | Default behavior |
 |---|---|
 | `mcp.spawn` (first time a server starts) | Prompt: "Run MCP server X with command Y?" |
-| `mcp.call` (every tool invocation) | Allowed if the user granted "permanent" earlier; otherwise prompts. |
+| `mcp.call` on a **non-sensitive** tool | Allowed if the user granted "permanent" earlier; otherwise prompts. |
+| `mcp.call` on a **sensitive** tool | Prompts every time, even after "allow permanent". Never persisted. |
 | `mcp.restart` | No prompt — rate-limited by the policy above. |
 
-Permanent grants are persisted in `~/.sandrpod/mcp_grants.json` (separate
-file from `permissions.json` to keep schemas stable). Delete a server's
-entry there to revoke.
+**Sensitive tool patterns** (case-insensitive substring match on the
+un-prefixed tool name): `delete`, `remove`, `drop`, `truncate`, `purge`,
+`destroy`, `wipe`, `send`, `publish`, `post`, `transfer`, `pay`,
+`charge`, `merge`, `revoke`, `reset`, `unsubscribe`.
+
+Extend or override the list via env:
+
+```bash
+# Add to defaults (comma-separated):
+SANDRPOD_MCP_SENSITIVE_PATTERNS=fire_,grant_admin
+
+# Replace the defaults entirely (e.g. you don't care about merge_pr):
+SANDRPOD_MCP_SENSITIVE_PATTERNS_OVERRIDE=delete,destroy,wipe,send_money
+```
+
+Permanent grants for non-sensitive tools are persisted in
+`~/.sandrpod/mcp_grants.json` (separate file from `permissions.json` to
+keep schemas stable). Delete a server's entry there to revoke.
 
 `--permission-mode=off` skips all prompts (everything allowed). Use this
 only when the network boundary is your security model (e.g. local LAN
@@ -210,8 +255,11 @@ client →  POST /api/v1/sandboxes/{name}/mcp  →  API Server  →  tunnel  →
 The API Server uses a streaming-aware proxy (`proxyHTTPStreaming`) that
 flushes after each chunk, so SSE upgrade works end-to-end.
 
-Authentication: any caller that can hit the sandbox via the existing
-sandbox-auth path can use the bridge. There is no separate MCP-level token.
+Authentication: by default, any caller that can hit the sandbox via the
+existing sandbox-auth path can use the bridge. For multi-tenant or
+defense-in-depth deployments, set `--mcp-token=<secret>` on the agent
+(see Authentication section above) — the API Server proxies the
+`Authorization` header verbatim, so the secret never lives in the server.
 
 ## Tray integration
 

@@ -124,6 +124,7 @@ var (
 	mcpHotReload  = flag.Bool("mcp-hot-reload", envBool("SANDRPOD_MCP_HOT_RELOAD", true), "Watch mcp.json and diff-reload on change.")
 	mcpOnly       = flag.Bool("mcp-only", envBool("SANDRPOD_MCP_ONLY", false), "Run only the MCP bridge: no tunnel, no toolbox. Listens on -mcp-listen.")
 	mcpListen     = flag.String("mcp-listen", envOr("SANDRPOD_MCP_LISTEN", "127.0.0.1:7090"), "HTTP listen address used in --mcp-only mode.")
+	mcpToken      = flag.String("mcp-token", envOr("SANDRPOD_MCP_TOKEN", ""), "Shared secret required on /mcp requests (Authorization: Bearer <token>). Empty disables auth — only safe when the tunnel/listener is itself the trust boundary.")
 )
 
 func main() {

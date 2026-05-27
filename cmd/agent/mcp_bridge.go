@@ -73,7 +73,19 @@ func installMCPBridge(ctx context.Context) http.Handler {
 
 	currentMgr = mgr
 	startMCPAdminServer(ctx, mgr)
-	return mcpbridge.NewHTTPHandler(mgr)
+
+	// Wrap with shared-secret middleware. When --mcp-token is unset we
+	// fall through unchanged (backward compatible). When set, every
+	// /mcp request must carry the matching Bearer; admin endpoints stay
+	// on the unix socket and use file-permission auth instead.
+	publicHandler := mcpbridge.NewHTTPHandler(mgr)
+	if *mcpToken != "" {
+		publicHandler = mcpTokenMiddleware(*mcpToken, publicHandler)
+		log.Printf("MCP bridge: shared-secret auth enabled (token length=%d)", len(*mcpToken))
+	} else {
+		log.Printf("MCP bridge: WARNING — no --mcp-token set; any caller that reaches /mcp can invoke tools")
+	}
+	return publicHandler
 }
 
 // buildMCPPermissionGate constructs a PermissionGate for the bridge. When
