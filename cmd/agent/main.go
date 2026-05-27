@@ -38,6 +38,12 @@ import (
 // Default "dev" makes local builds clearly distinguishable on the server side.
 var agentVersion = "dev"
 
+// sharedAuditRecorder is set by installAuditPipeline and reused by the MCP
+// bridge so both subsystems write through the same Recorder (= same mutex,
+// same rotation cadence). Without sharing, two recorders racing on
+// active.log can drop events at rotation boundaries.
+var sharedAuditRecorder *audit.Recorder
+
 // auditAdapter bridges pkg/audit.Recorder to permission.AuditSink, keeping
 // pkg/permission free of any pkg/audit dependency.
 type auditAdapter struct {
@@ -63,6 +69,21 @@ func (a *auditAdapter) Record(source, decision, path, mode, caller, sessionID, r
 func envOr(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
+	}
+	return defaultVal
+}
+
+// envBool reads a boolean env var (true/false/1/0/yes/no, case-insensitive),
+// returning defaultVal when unset or unparseable.
+func envBool(key string, defaultVal bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	switch v {
+	case "":
+		return defaultVal
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
 	}
 	return defaultVal
 }
@@ -96,6 +117,13 @@ var (
 	auditDir         = flag.String("audit-dir", envOr("SANDRPOD_AUDIT_DIR", ""), "Audit log directory (default: ~/.sandrpod/audit). Empty disables local audit.")
 	auditUploadURL   = flag.String("audit-upload-url", envOr("SANDRPOD_AUDIT_UPLOAD_URL", ""), "Endpoint to POST audit batches to. Empty disables upload (still logs locally).")
 	auditUploadToken = flag.String("audit-upload-token", envOr("SANDRPOD_AUDIT_UPLOAD_TOKEN", ""), "Bearer token sent with audit upload requests. Defaults to -token if empty.")
+
+	// MCP transport bridge — see docs/MCP_TRANSPORT_BRIDGE_DESIGN.md
+	mcpEnabled    = flag.Bool("mcp-enabled", envBool("SANDRPOD_MCP_ENABLED", true), "Enable MCP transport bridge if mcp.json is present (default true).")
+	mcpConfigPath = flag.String("mcp-config", envOr("SANDRPOD_MCP_CONFIG", ""), "Path to mcp.json (default: ~/.sandrpod/mcp.json). Empty + missing default disables the bridge.")
+	mcpHotReload  = flag.Bool("mcp-hot-reload", envBool("SANDRPOD_MCP_HOT_RELOAD", true), "Watch mcp.json and diff-reload on change.")
+	mcpOnly       = flag.Bool("mcp-only", envBool("SANDRPOD_MCP_ONLY", false), "Run only the MCP bridge: no tunnel, no toolbox. Listens on -mcp-listen.")
+	mcpListen     = flag.String("mcp-listen", envOr("SANDRPOD_MCP_LISTEN", "127.0.0.1:7090"), "HTTP listen address used in --mcp-only mode.")
 )
 
 func main() {
@@ -104,6 +132,14 @@ func main() {
 	if *help {
 		flag.Usage()
 		os.Exit(0)
+	}
+
+	// --mcp-only short-circuits the tunnel/toolbox pipeline: useful for
+	// local-LAN MCP aggregation (replaces mcp-proxy/supergateway) and for
+	// developer dogfood without an API Server.
+	if *mcpOnly {
+		runMCPOnly()
+		return
 	}
 
 	if *name == "" {
@@ -144,7 +180,14 @@ func main() {
 	}
 
 	tbHandler := tb.Handler()
-	agentHandler := newAgentMux(tbHandler, *name)
+
+	// Optional MCP transport bridge: aggregates local stdio MCP servers
+	// (configured in mcp.json) and exposes them as a single Streamable-HTTP
+	// MCP endpoint mounted at /mcp on the agent mux. Off-by-config when no
+	// mcp.json is present so users who don't use MCP pay nothing.
+	bridgeHandler := installMCPBridge(ctx)
+
+	agentHandler := newAgentMux(tbHandler, *name, bridgeHandler)
 
 	go connectLoop(ctx, agentHandler)
 
@@ -259,6 +302,11 @@ func installAuditPipeline(ctx context.Context, tb *toolbox.Server) error {
 	}
 	log.Printf("audit recorder writing to %s", dir)
 
+	// Stash the recorder so the MCP bridge can reuse it (avoiding two
+	// concurrent writers to active.log racing on rotation). Set BEFORE
+	// the bridge starts in main().
+	sharedAuditRecorder = rec
+
 	// Hand the recorder to the permission manager (if any).
 	if mgr := tb.Executor().PermissionManager(); mgr != nil {
 		mgr.SetAuditSink(&auditAdapter{rec: rec})
@@ -304,8 +352,15 @@ func installAuditPipeline(ctx context.Context, tb *toolbox.Server) error {
 //	*    /process/session/<name>/<rest>       → * /process/session/<rest>
 //	GET  /logs?sandbox=<name>                → empty log response
 //	*    everything else (/stream, /pty/, …) → toolbox directly (same paths)
-func newAgentMux(tb http.Handler, sandboxName string) http.Handler {
+func newAgentMux(tb http.Handler, sandboxName string, mcpBridge http.Handler) http.Handler {
 	mux := http.NewServeMux()
+
+	// Mount the MCP bridge first if configured. It owns "/mcp" and any
+	// "/mcp/..." subpath (manifest, future SSE-only mode, etc.).
+	if mcpBridge != nil {
+		mux.Handle("/mcp", mcpBridge)
+		mux.Handle("/mcp/", mcpBridge)
+	}
 
 	// /execute → /process
 	mux.HandleFunc("/execute", func(w http.ResponseWriter, r *http.Request) {

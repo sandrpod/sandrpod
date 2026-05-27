@@ -55,6 +55,11 @@ func onTrayReady() {
 	resume.Hide()
 	systray.AddSeparator()
 
+	// MCP transport bridge submenu — talks to the agent over a local
+	// unix socket. Gracefully shows "未连接" when the agent isn't running.
+	initMCPMenu()
+	systray.AddSeparator()
+
 	about := systray.AddMenuItem("关于 sandrpod-tray", "")
 	quit := systray.AddMenuItem("退出（停止 IPC 服务）", "")
 

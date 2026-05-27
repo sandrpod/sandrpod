@@ -131,6 +131,9 @@ func startHTTP() error {
 	mux.HandleFunc("/api/rules/rm", httpRuleRemove)
 	mux.HandleFunc("/api/policy/upsert", httpPolicyUpsert)
 	mux.HandleFunc("/api/policy/rm", httpPolicyRemove)
+	mux.HandleFunc("/api/mcp/manifest", httpMCPManifest)
+	mux.HandleFunc("/api/mcp/reload", httpMCPReload)
+	mux.HandleFunc("/api/mcp/server", httpMCPServerAction)
 
 	srv := &http.Server{
 		Handler:           mux,

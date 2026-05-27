@@ -671,6 +671,26 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 		}
 
+		// MCP transport bridge proxy: any method, any sub-path under /mcp.
+		// The bridge runs inside sandrpod-agent and exposes MCP Streamable
+		// HTTP, which negotiates SSE on the same endpoint, so we route
+		// through the streaming proxy to preserve real-time flushes.
+		// See docs/MCP_TRANSPORT_BRIDGE_DESIGN.md §七.
+		if action == "mcp" || strings.HasPrefix(action, "mcp/") {
+			_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+			if !ok {
+				return
+			}
+			// Reconstruct the agent-side path: /mcp, /mcp/manifest, /mcp/sse, ...
+			subPath := strings.TrimPrefix(path, name+"/")
+			targetURL := "http://agent/" + subPath
+			if r.URL.RawQuery != "" {
+				targetURL += "?" + r.URL.RawQuery
+			}
+			proxyHTTPStreaming(t, r, targetURL, w)
+			return
+		}
+
 		switch r.Method {
 		case http.MethodGet:
 			if sessionPath != "" {
@@ -1196,6 +1216,50 @@ func proxyHTTP(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w http.
 	maps.Copy(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	io.Copy(w, resp.Body)
+}
+
+// proxyHTTPStreaming forwards an HTTP request through the tunnel like
+// proxyHTTP, but uses the tunnel's streaming client (no buffering, no idle
+// timeout) and flushes the response writer after every chunk so SSE events
+// reach the caller in real time. Used for MCP Streamable HTTP, which can
+// upgrade a single POST into a long-lived text/event-stream response.
+func proxyHTTPStreaming(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w http.ResponseWriter) {
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
+	if err != nil {
+		http.Error(w, "failed to create request", http.StatusInternalServerError)
+		return
+	}
+	for k, v := range r.Header {
+		if k != "Host" {
+			req.Header[k] = v
+		}
+	}
+	resp, err := t.StreamClient().Do(req)
+	if err != nil {
+		log.Printf("tunnel streaming proxy %s error: %v", targetURL, err)
+		http.Error(w, "failed to proxy request", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	maps.Copy(w.Header(), resp.Header)
+	w.WriteHeader(resp.StatusCode)
+
+	flusher, _ := w.(http.Flusher)
+	buf := make([]byte, 4096)
+	for {
+		n, readErr := resp.Body.Read(buf)
+		if n > 0 {
+			if _, wErr := w.Write(buf[:n]); wErr != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			return
+		}
+	}
 }
 
 // proxyHTTPErr is like proxyHTTP but returns an error if the upstream failed.

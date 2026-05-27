@@ -1,6 +1,6 @@
 module github.com/sandrpod/sandrpod
 
-go 1.25.0
+go 1.25.5
 
 require (
 	github.com/aliyun/alibaba-cloud-sdk-go v1.63.107
@@ -11,9 +11,14 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ssm v1.48.0
 	github.com/creack/pty v1.1.23
 	github.com/docker/docker v28.5.2+incompatible
+	github.com/fsnotify/fsnotify v1.10.1
+	github.com/getlantern/systray v1.2.2
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/hashicorp/yamux v0.1.2
+	github.com/mark3labs/mcp-go v0.54.1
+	golang.org/x/sys v0.42.0
+	modernc.org/sqlite v1.49.1
 )
 
 require (
@@ -43,10 +48,10 @@ require (
 	github.com/getlantern/hex v0.0.0-20190417191902-c6586a6fe0b7 // indirect
 	github.com/getlantern/hidden v0.0.0-20190325191715-f02dbb02be55 // indirect
 	github.com/getlantern/ops v0.0.0-20190325191751-d70cb0d6f85f // indirect
-	github.com/getlantern/systray v1.2.2 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-stack/stack v1.8.0 // indirect
+	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/jmespath/go-jmespath v0.4.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -63,6 +68,9 @@ require (
 	github.com/oxtoacart/bpool v0.0.0-20190530202638-03653db5a59c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2 // indirect
+	github.com/spf13/cast v1.7.1 // indirect
+	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.67.0 // indirect
 	go.opentelemetry.io/otel v1.42.0 // indirect
@@ -70,12 +78,11 @@ require (
 	go.opentelemetry.io/otel/metric v1.42.0 // indirect
 	go.opentelemetry.io/otel/trace v1.42.0 // indirect
 	golang.org/x/net v0.52.0 // indirect
-	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	gopkg.in/ini.v1 v1.67.0 // indirect
 	gotest.tools/v3 v3.5.2 // indirect
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.49.1 // indirect
 )

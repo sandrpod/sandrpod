@@ -198,6 +198,39 @@ class SandrPodSandbox(BaseSandbox):
         # timeout=None: 由调用方在每个请求上动态设置
         return httpx.Client(base_url=self._base_url, headers=headers, timeout=None)
 
+    # ------------------------------------------------------------------ #
+    # MCP transport bridge — see docs/MCP_BRIDGE.md                       #
+    # ------------------------------------------------------------------ #
+
+    def mcp_url(self) -> str:
+        """Return the URL of the sandbox's MCP transport bridge endpoint.
+
+        The bridge runs inside ``sandrpod-agent`` and aggregates the user's
+        local stdio MCP servers (defined in ``~/.sandrpod/mcp.json``) into a
+        single Streamable-HTTP MCP endpoint. Hand this URL to any
+        MCP-compatible client (e.g. ``langchain-mcp-adapters``).
+
+        Example::
+
+            from langchain_mcp_adapters.client import MultiServerMCPClient
+
+            sb = SandrPodSandbox(sandbox_name="my-laptop")
+            client = MultiServerMCPClient({
+                "personal": {"url": sb.mcp_url(), "transport": "streamable_http"},
+            })
+            tools = await client.get_tools()
+        """
+        return f"{self._base_url}/api/v1/sandboxes/{self._sandbox_name}/mcp"
+
+    def mcp_manifest_url(self) -> str:
+        """URL of the bridge's introspection endpoint.
+
+        ``GET`` returns a JSON payload listing every loaded MCP server with
+        its state and tool count. Useful for health checks before opening
+        an MCP session, or for surfacing "what tools are available" in a UI.
+        """
+        return f"{self._base_url}/api/v1/sandboxes/{self._sandbox_name}/mcp/manifest"
+
     def _toolbox_url(self, sub_path: str) -> str:
         """构造通过 API Server 代理到 Toolbox 的 URL。
 
