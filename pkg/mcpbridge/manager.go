@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -96,22 +98,38 @@ func NewManager(opts ManagerOptions) *ChildManager {
 }
 
 // Start loads the config, spawns every enabled child, and (optionally)
-// arms the supervisor + fsnotify watcher. A failure to spawn a single
-// child does not abort the whole manager; that child is marked failed
-// and the others continue.
+// arms the supervisor + fsnotify watcher.
+//
+// Two failure modes are tolerated by design:
+//
+//  1. A single child failing to spawn — the others continue, the failed
+//     one is marked Failed and shows up in /mcp/manifest with last_error.
+//  2. The config file being absent at start time — the manager comes up
+//     with zero children, the watcher is still armed on the parent dir,
+//     and a later create/write triggers a normal reload. This makes
+//     "install sandrpod-agent before creating mcp.json" work the way
+//     users actually do it, rather than failing the bridge permanently.
+//
+// Parse errors (file present but malformed JSON) still surface as a
+// hard error — silently swallowing bad JSON would mask configuration
+// mistakes that the user wants to fix.
 func (m *ChildManager) Start(ctx context.Context) error {
 	cfg, err := LoadConfig(m.opts.ConfigPath)
-	if err != nil {
+	switch {
+	case err == nil:
+		m.mu.Lock()
+		for _, name := range cfg.SortedKeys() {
+			sc := cfg.McpServers[name]
+			m.spawnLocked(ctx, name, sc)
+		}
+		m.rebuildIndexLocked()
+		m.mu.Unlock()
+	case errors.Is(err, os.ErrNotExist):
+		m.opts.Logger.Printf("mcpbridge: config %s not present yet — starting with no servers; will pick up on create",
+			m.opts.ConfigPath)
+	default:
 		return err
 	}
-
-	m.mu.Lock()
-	for _, name := range cfg.SortedKeys() {
-		sc := cfg.McpServers[name]
-		m.spawnLocked(ctx, name, sc)
-	}
-	m.rebuildIndexLocked()
-	m.mu.Unlock()
 
 	// Long-lived supervisor uses a derived context independent of the
 	// passed-in ctx so the caller can let ctx outlive a single request.
@@ -207,10 +225,17 @@ func (m *ChildManager) Shutdown(ctx context.Context, drainTimeout time.Duration)
 // spawned, removed entries are stopped, modified entries (different
 // command/args/env/sandrpod opts) are restarted. Unchanged entries keep
 // their existing subprocess.
+//
+// File-absent is handled like an empty config (all children torn down),
+// so `rm ~/.sandrpod/mcp.json` is a valid "shut down all my MCP servers"
+// gesture and a later recreate brings them back.
 func (m *ChildManager) Reload(ctx context.Context) error {
 	cfg, err := LoadConfig(m.opts.ConfigPath)
 	if err != nil {
-		return err
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		cfg = &Config{McpServers: map[string]ServerConfig{}}
 	}
 	wantKeys := map[string]struct{}{}
 	for _, k := range cfg.SortedKeys() {
@@ -626,15 +651,28 @@ func (m *ChildManager) rebuildIndexAfterChange() {
 	m.mu.Unlock()
 }
 
-// startWatcherLocked arms fsnotify on the config file. Caller holds m.mu.
+// startWatcherLocked arms fsnotify on the config file's parent dir.
+// Caller holds m.mu.
+//
+// We watch the DIR rather than the file so that:
+//   - atomic-replace saves (editor) don't lose the watcher on inode swap
+//   - the file being absent at start time is no obstacle — fsnotify is
+//     happy watching an empty dir, and a later Create on the dir fires
+//     a normal event
+//
+// If the parent dir doesn't exist yet, we create it (0700) — this is
+// the canonical $HOME/.sandrpod dir that other sandrpod subsystems
+// also create on demand.
 func (m *ChildManager) startWatcherLocked() error {
+	dir := parentDir(m.opts.ConfigPath)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("mkdir watch dir %s: %w", dir, err)
+	}
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
 	}
-	// Watch the parent dir so atomic-replace (editor save) doesn't lose
-	// the watcher when the inode changes.
-	if err := w.Add(parentDir(m.opts.ConfigPath)); err != nil {
+	if err := w.Add(dir); err != nil {
 		_ = w.Close()
 		return err
 	}
@@ -645,8 +683,15 @@ func (m *ChildManager) startWatcherLocked() error {
 
 func (m *ChildManager) watchLoop(w *fsnotify.Watcher) {
 	target := m.opts.ConfigPath
+	// Coalesce bursts (atomic save = Rename+Create+Write) into one Reload.
 	debounce := time.NewTimer(time.Hour)
 	debounce.Stop()
+	// All four ops are interesting:
+	//   Write   — in-place edit
+	//   Create  — file freshly created (first-time install or post-rm)
+	//   Rename  — atomic-save: old inode renamed away, new one appears
+	//   Remove  — user deleted the file → Reload sees ENOENT, tears children
+	const interestingOps = fsnotify.Write | fsnotify.Create | fsnotify.Rename | fsnotify.Remove
 	for {
 		select {
 		case ev, ok := <-w.Events:
@@ -656,10 +701,9 @@ func (m *ChildManager) watchLoop(w *fsnotify.Watcher) {
 			if ev.Name != target {
 				continue
 			}
-			if ev.Op&(fsnotify.Write|fsnotify.Create|fsnotify.Rename) == 0 {
+			if ev.Op&interestingOps == 0 {
 				continue
 			}
-			// Coalesce burst of events from atomic saves into one Reload.
 			debounce.Reset(250 * time.Millisecond)
 		case <-debounce.C:
 			m.opts.Logger.Printf("mcpbridge: config changed, reloading")

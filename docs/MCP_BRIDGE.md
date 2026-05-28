@@ -340,9 +340,12 @@ tray's MCP submenu shows "未连接".
 
 ## Troubleshooting
 
-**`bridge disabled` in agent logs** — `mcp.json` is missing at the
-default location. Run `sandrpod-agent --mcp-config=/path/to/mcp.json`
-explicitly or copy your Claude config (see Quick start).
+**`no servers loaded yet` in agent logs** — `mcp.json` doesn't exist
+at the configured path. The bridge is still UP and watching for the
+file: drop it in (`cp ~/Library/Application\ Support/Claude/claude_desktop_config.json
+~/.sandrpod/mcp.json` on macOS) and the agent picks it up within ~250 ms
+without a restart. `rm` of the file works the same way in reverse —
+all children stop, manifest reports zero servers.
 
 **A server shows `state: failed`** — check `last_error` in
 `/mcp/manifest`. Most common causes: missing required env var, command

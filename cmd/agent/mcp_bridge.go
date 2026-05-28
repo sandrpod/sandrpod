@@ -37,15 +37,15 @@ func shutdownMCPBridge(drainTimeout time.Duration) {
 	}
 }
 
-// installMCPBridge starts the optional MCP transport bridge and returns its
-// http.Handler. Returns nil when:
-//   - --mcp-enabled is false; or
-//   - the mcp.json path resolves to a missing file (treated as "not
-//     configured", not an error — we don't want every employee PC without
-//     MCP to fail).
+// installMCPBridge starts the optional MCP transport bridge and returns
+// its http.Handler. The handler is returned even when mcp.json doesn't
+// exist yet — the bridge comes up with zero children, watches the
+// parent dir, and picks up a later file create automatically. This
+// matches how users actually install things: run sandrpod-agent first,
+// figure out where the config goes second.
 //
-// A non-nil handler means the bridge is up; even if individual children
-// failed to spawn, the handler serves /mcp/manifest so operators can see why.
+// Returns nil only when --mcp-enabled is explicitly false (operator
+// opted out).
 func installMCPBridge(ctx context.Context) http.Handler {
 	if !*mcpEnabled {
 		return nil
@@ -54,14 +54,6 @@ func installMCPBridge(ctx context.Context) http.Handler {
 	path := *mcpConfigPath
 	if path == "" {
 		path = mcpbridge.DefaultConfigPath()
-	}
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			log.Printf("MCP bridge: no config at %s, bridge disabled", path)
-			return nil
-		}
-		log.Printf("MCP bridge: stat %s failed: %v", path, err)
-		return nil
 	}
 
 	perm, permDesc := buildMCPPermissionGate()
@@ -81,9 +73,14 @@ func installMCPBridge(ctx context.Context) http.Handler {
 	}
 
 	snap := mgr.Snapshot()
-	log.Printf("MCP bridge ready: config=%s servers=%d hot_reload=%v", path, len(snap), *mcpHotReload)
-	for _, s := range snap {
-		log.Printf("  %-20s state=%-10s tools=%d", s.Name, s.State, s.ToolCount)
+	if len(snap) == 0 {
+		log.Printf("MCP bridge ready: config=%s no servers loaded yet (hot_reload=%v will pick up a later mcp.json create)",
+			path, *mcpHotReload)
+	} else {
+		log.Printf("MCP bridge ready: config=%s servers=%d hot_reload=%v", path, len(snap), *mcpHotReload)
+		for _, s := range snap {
+			log.Printf("  %-20s state=%-10s tools=%d", s.Name, s.State, s.ToolCount)
+		}
 	}
 
 	currentMgr = mgr
