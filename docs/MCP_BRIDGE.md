@@ -123,6 +123,63 @@ Standard Claude Desktop layout, with optional sandrpod extensions:
 Other tools (Claude Desktop, Cursor) ignore the `sandrpod` sub-object, so the
 same file works everywhere.
 
+## Connecting OAuth-only services (Notion, Linear, Sentry, …)
+
+A growing class of services expose only a **remote, OAuth-authenticated**
+MCP server and deliberately do **not** offer a static API token. Notion's
+hosted server (`https://mcp.notion.com/mcp`) is the canonical example: it
+requires per-user OAuth 2.1 (PKCE) and explicitly rejects bearer tokens.
+
+The bridge only forks **stdio** children — it does not connect to remote
+HTTP MCP servers directly, and by design **sandrpod never stores OAuth
+tokens** (they are personal credentials; keeping them would make us
+responsible for refresh, encryption, and GDPR deletion). Both constraints
+are satisfied by the community [`mcp-remote`](https://github.com/geelen/mcp-remote)
+stdio bridge, which Notion's own docs recommend:
+
+```jsonc
+{
+  "mcpServers": {
+    "notion": {
+      "command": "npx",
+      "args": ["-y", "mcp-remote", "https://mcp.notion.com/mcp"],
+      "sandrpod": {
+        // OAuth means: spawn → mcp-remote opens a browser → you click
+        // "authorize" → token cached. That round-trip easily exceeds the
+        // 30s default handshake window, so widen it.
+        "startup_timeout_sec": 180
+      }
+    }
+  }
+}
+```
+
+What happens on first start:
+
+1. The bridge forks `mcp-remote` like any other stdio child.
+2. `mcp-remote` connects to the remote server, sees it needs OAuth, and
+   **opens a browser on the local machine** (PKCE flow).
+3. The employee — who is sitting at this machine — completes the consent.
+4. `mcp-remote` caches the access + refresh tokens in **its own**
+   `~/.mcp-auth/` directory and handles refresh/rotation itself.
+
+Throughout, **the bridge handles zero OAuth tokens**. The OAuth flow and
+all credential storage live entirely inside the `mcp-remote` subprocess;
+sandrpod's role stays "fork stdio + relay JSON-RPC". This keeps the
+privacy model clean — the credential chain simply doesn't include us.
+
+> **Verified end-to-end**: Notion via `mcp-remote` comes up `ready` with
+> its full tool set aggregated alongside other servers under the single
+> `/mcp` endpoint (tools appear as `notion__*`).
+
+**Caveat — interactive first run.** The browser consent in step 2-3
+requires a human at the machine. This works precisely because, in the
+employee-PC deployment, the person driving the remote AI *is* the person
+at the keyboard. In an unattended/headless deployment (nobody at the
+machine) the OAuth flow cannot complete — use a static-token server there
+instead (e.g. for Notion, the older `@notionhq/notion-mcp-server` with
+`NOTION_TOKEN`).
+
 ## How tool names get prefixed
 
 Each child's tools are exposed as `<alias>__<original_name>`. So GitHub's
@@ -351,6 +408,13 @@ all children stop, manifest reports zero servers.
 `/mcp/manifest`. Most common causes: missing required env var, command
 not on PATH, npm registry unreachable for `npx -y` first-run, exceeded
 `max_restart_per_min`.
+
+**An OAuth (`mcp-remote`) server fails or hangs on first start** — the
+browser consent didn't complete in time. Bump `startup_timeout_sec` (180
+is a good value), and make sure a browser actually opened on the machine.
+If `~/.mcp-auth/` already holds a stale/expired grant, clear it and let
+the flow run again. Remember the consent must be completed by a human at
+*this* machine — it won't work in a headless deployment.
 
 **Claude Desktop and SandrPod fighting over the same MCP server** — they
 both fork-exec the stdio child. Some servers hold exclusive resources
