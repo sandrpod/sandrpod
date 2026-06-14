@@ -6,13 +6,17 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/sandrpod/sandrpod/pkg/mcpbridge"
 	"github.com/sandrpod/sandrpod/pkg/toolbox"
 )
 
@@ -20,7 +24,27 @@ var (
 	port  = flag.Int("port", 8080, "Toolbox server port")
 	token = flag.String("token", os.Getenv("TOOLBOX_TOKEN"), "Bearer token for authentication (empty = no auth)")
 	help  = flag.Bool("help", false, "Show help")
+
+	// MCP bridge: aggregates stdio MCP servers from mcp.json into a single
+	// /mcp endpoint. Enabled by default so an in-sandbox agent can register
+	// new MCP servers at runtime by editing mcp.json (hot-reload picks them
+	// up). The bridge starts cleanly even when mcp.json is absent.
+	mcpEnabled   = flag.Bool("mcp-enabled", envBool("SANDRPOD_MCP_ENABLED", true), "Enable the MCP bridge at /mcp")
+	mcpConfig    = flag.String("mcp-config", os.Getenv("SANDRPOD_MCP_CONFIG"), "Path to mcp.json (default: OS config dir / mcp.json)")
+	mcpHotReload = flag.Bool("mcp-hot-reload", envBool("SANDRPOD_MCP_HOT_RELOAD", true), "Watch mcp.json and diff-reload on change")
+	mcpToken     = flag.String("mcp-token", os.Getenv("SANDRPOD_MCP_TOKEN"), "Shared secret required on /mcp requests (empty = no MCP auth)")
 )
+
+func envBool(key string, def bool) bool {
+	switch os.Getenv(key) {
+	case "1", "true", "TRUE", "yes":
+		return true
+	case "0", "false", "FALSE", "no":
+		return false
+	default:
+		return def
+	}
+}
 
 func main() {
 	flag.Parse()
@@ -35,6 +59,12 @@ func main() {
 	addr := fmt.Sprintf(":%d", *port)
 	server := toolbox.NewServer(addr, *token)
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Optional MCP bridge. Mounted at /mcp on the toolbox server.
+	mgr := installMCPBridge(ctx, server)
+
 	// Start the server
 	go func() {
 		if err := server.Start(); err != nil {
@@ -48,7 +78,78 @@ func main() {
 	<-sigChan
 
 	log.Println("Shutting down Toolbox...")
-	ctx, cancel := context.WithTimeout(context.Background(), 10*toolbox.CleanupTimeout)
-	defer cancel()
-	server.Stop(ctx)
+	// Drain in-flight MCP tool calls before tearing down the bridge children.
+	if mgr != nil {
+		drainCtx, dc := context.WithTimeout(context.Background(), 10*time.Second)
+		if err := mgr.Shutdown(drainCtx, 10*time.Second); err != nil {
+			log.Printf("MCP bridge: drain incomplete: %v", err)
+		}
+		dc()
+	}
+	shutdownCtx, c := context.WithTimeout(context.Background(), 10*toolbox.CleanupTimeout)
+	defer c()
+	server.Stop(shutdownCtx)
+}
+
+// installMCPBridge starts the MCP bridge (if enabled) and mounts its handler
+// on the toolbox server at /mcp. Returns the manager for graceful shutdown, or
+// nil when disabled / failed to start (the toolbox keeps serving without MCP).
+func installMCPBridge(ctx context.Context, server *toolbox.Server) *mcpbridge.ChildManager {
+	if !*mcpEnabled {
+		log.Printf("MCP bridge: disabled (-mcp-enabled=false)")
+		return nil
+	}
+
+	path := *mcpConfig
+	if path == "" {
+		path = mcpbridge.DefaultConfigPath()
+	}
+
+	// Permission/Audit are agent (employee-PC) concerns and are intentionally
+	// nil here: a server-side container has no interactive user, and the
+	// container itself is the security boundary. The bridge substitutes an
+	// allow-all gate when Permission is nil.
+	mgr := mcpbridge.NewManager(mcpbridge.ManagerOptions{
+		ConfigPath: path,
+		HotReload:  *mcpHotReload,
+		Logger:     log.Default(),
+	})
+
+	if err := mgr.Start(ctx); err != nil {
+		log.Printf("MCP bridge: start failed (%s): %v — bridge disabled", path, err)
+		return nil
+	}
+
+	snap := mgr.Snapshot()
+	if len(snap) == 0 {
+		log.Printf("MCP bridge ready: config=%s no servers yet (hot_reload=%v will pick up a later mcp.json create)", path, *mcpHotReload)
+	} else {
+		log.Printf("MCP bridge ready: config=%s servers=%d hot_reload=%v", path, len(snap), *mcpHotReload)
+		for _, s := range snap {
+			log.Printf("  %-20s state=%-10s tools=%d", s.Name, s.State, s.ToolCount)
+		}
+	}
+
+	var handler http.Handler = mcpbridge.NewHTTPHandler(mgr)
+	if *mcpToken != "" {
+		handler = mcpTokenMiddleware(*mcpToken, handler)
+		log.Printf("MCP bridge: shared-secret auth enabled (token length=%d)", len(*mcpToken))
+	} else {
+		log.Printf("MCP bridge: WARNING — no -mcp-token set; any caller that reaches /mcp can invoke tools")
+	}
+	server.SetMCPHandler(handler)
+	return mgr
+}
+
+// mcpTokenMiddleware enforces a constant-time Bearer check on /mcp requests.
+func mcpTokenMiddleware(secret string, next http.Handler) http.Handler {
+	want := "Bearer " + secret
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := r.Header.Get("Authorization")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

@@ -42,8 +42,8 @@ type StreamRequest struct {
 // ProcessRequest is the request payload for a code execution job.
 type ProcessRequest struct {
 	Language string `json:"language"` // python, node, bash
-	Code    string `json:"code"`
-	Timeout int    `json:"timeout"` // seconds
+	Code     string `json:"code"`
+	Timeout  int    `json:"timeout"` // seconds
 }
 
 // ProcessResult holds the output of a code execution job.
@@ -85,6 +85,19 @@ type Server struct {
 	startTime      time.Time
 	ctx            context.Context
 	cancel         context.CancelFunc
+
+	// mcpHandler, when set, is mounted at /mcp (and /mcp/...) by Handler().
+	// It lets standalone toolbox deployments expose the same MCP bridge the
+	// agent does. Nil = no MCP surface (the route stays unregistered → 404).
+	// Set once before Start() via SetMCPHandler.
+	mcpHandler http.Handler
+}
+
+// SetMCPHandler installs the optional MCP bridge handler mounted at /mcp.
+// Call before Start(); calling after the mux is built has no effect on the
+// already-served handler.
+func (s *Server) SetMCPHandler(h http.Handler) {
+	s.mcpHandler = h
 }
 
 const CleanupTimeout = 5 * time.Second
@@ -169,6 +182,15 @@ func (s *Server) Handler() http.Handler {
 	// Session routes
 	mux.HandleFunc("/process/session", a(s.sessionHandler))
 	mux.HandleFunc("/process/session/", a(s.sessionHandler))
+
+	// Optional MCP bridge. The bridge owns "/mcp" and any "/mcp/..." subpath
+	// (manifest, tool calls). Mounted only when an MCP handler was installed
+	// via SetMCPHandler; it carries its own auth (shared-secret), so it is
+	// intentionally not wrapped in the toolbox authMiddleware here.
+	if s.mcpHandler != nil {
+		mux.Handle("/mcp", s.mcpHandler)
+		mux.Handle("/mcp/", s.mcpHandler)
+	}
 
 	return mux
 }
@@ -289,7 +311,6 @@ func (s *Server) processHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
-
 func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 	s.mu.RLock()
 	requests := s.requests
@@ -298,9 +319,9 @@ func (s *Server) statusHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"requests":  requests,
-		"uptime":    uptime.String(),
-		"executor":  s.executor.Stats(),
+		"requests": requests,
+		"uptime":   uptime.String(),
+		"executor": s.executor.Stats(),
 	})
 }
 
@@ -594,8 +615,8 @@ func (s *Server) filesMoveHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"success":    true,
-		"source":     source,
+		"success":     true,
+		"source":      source,
 		"destination": destination,
 	})
 }
