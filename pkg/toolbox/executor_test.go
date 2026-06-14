@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 // ---------- isBlacklisted ----------
@@ -238,4 +239,34 @@ func TestExecutorHealthCheck_StructFieldsAreBool(t *testing.T) {
 	var _ bool = result.Docker
 	var _ bool = result.Python
 	var _ bool = result.Node
+}
+
+// HealthCheck spawns `python3 --version` and `node --version` on every call
+// (~28ms). These tests pin the TTL cache that collapses repeated probes.
+
+func TestExecutorHealthCheck_CachesWithinTTL(t *testing.T) {
+	e := NewExecutor()
+	r1 := e.HealthCheck()
+	r2 := e.HealthCheck()
+	if e.healthProbes != 1 {
+		t.Fatalf("expected exactly 1 probe within TTL, got %d", e.healthProbes)
+	}
+	if r1 != r2 {
+		t.Fatalf("cached result differs from first: %+v vs %+v", r1, r2)
+	}
+}
+
+func TestExecutorHealthCheck_ReprobesAfterTTLExpiry(t *testing.T) {
+	e := NewExecutor()
+	_ = e.HealthCheck() // probe #1, populates cache
+
+	// Force the cache to expire without sleeping the full TTL.
+	e.healthMu.Lock()
+	e.healthExpiry = time.Now().Add(-time.Second)
+	e.healthMu.Unlock()
+
+	_ = e.HealthCheck() // should re-probe
+	if e.healthProbes != 2 {
+		t.Fatalf("expected re-probe after TTL expiry, got %d probes", e.healthProbes)
+	}
 }

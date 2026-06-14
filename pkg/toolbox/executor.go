@@ -34,7 +34,21 @@ type Executor struct {
 	// desktop consent prompt). Nil = legacy behavior (system blacklist only).
 	// Set via SetPermissionManager — typically once during agent startup.
 	permMgr *permission.Manager
+
+	// Health-check cache. HealthCheck() probes the runtime by spawning
+	// `python3 --version` and `node --version` (~28ms combined); a short TTL
+	// collapses repeated probes (e.g. docker-compose healthcheck polling) into
+	// one spawn per healthCacheTTL while still re-probing periodically so a
+	// broken runtime is eventually surfaced. Guarded by healthMu, independent
+	// of mu so the spawn never blocks execution accounting.
+	healthMu     sync.Mutex
+	healthCache  HealthCheckResult
+	healthExpiry time.Time
+	healthProbes int // count of real probes (cache misses); observability + tests
 }
+
+// healthCacheTTL bounds how stale a cached HealthCheck result may be.
+const healthCacheTTL = 10 * time.Second
 
 // SetPermissionManager installs (or replaces) the permission manager.
 // Pass nil to disable interactive permission gating entirely. Safe to call
@@ -378,7 +392,27 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 }
 
 // HealthCheck verifies that required runtimes are available
+// HealthCheck reports runtime availability (Docker/Python/Node). The result is
+// cached for healthCacheTTL because probing spawns external processes; rapid
+// callers (health-check pollers) reuse the cached result, while the cache still
+// refreshes periodically so a runtime that breaks is eventually reflected.
 func (e *Executor) HealthCheck() HealthCheckResult {
+	e.healthMu.Lock()
+	defer e.healthMu.Unlock()
+
+	if !e.healthExpiry.IsZero() && time.Now().Before(e.healthExpiry) {
+		return e.healthCache
+	}
+
+	e.healthCache = probeHealth()
+	e.healthExpiry = time.Now().Add(healthCacheTTL)
+	e.healthProbes++
+	return e.healthCache
+}
+
+// probeHealth performs the actual (cold) runtime probe by spawning version
+// checks. Callers should go through HealthCheck to benefit from the TTL cache.
+func probeHealth() HealthCheckResult {
 	result := HealthCheckResult{
 		Docker: true,
 	}
