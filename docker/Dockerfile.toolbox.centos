@@ -66,11 +66,23 @@ RUN python3 -m pip install --upgrade pip && \
         pydantic \
         python-dotenv
 
+# uv + uvx: de-facto launcher for Python MCP servers (e.g. uvx mcp-server-git).
+# Static binaries from the official image; run on glibc (CentOS) too.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
 WORKDIR /workspace
+
+# MCP bridge config location — same path as the alpine image so the
+# register-mcp skill resolves identically across both. Editable by in-sandbox
+# agents; the bridge hot-reloads on change and serves new tools at /mcp.
+ENV SANDRPOD_MCP_CONFIG=/workspace/.sandrpod/mcp.json
+RUN mkdir -p /workspace/.sandrpod
 
 COPY --from=builder /toolbox /app/toolbox
 
 EXPOSE 8080
 
+# MCP bridge enabled by default (-mcp-enabled); npx + uvx cover Node and Python
+# MCP servers, jq lets agents safely edit mcp.json.
 ENTRYPOINT ["/app/toolbox"]
 CMD ["-port=8080"]

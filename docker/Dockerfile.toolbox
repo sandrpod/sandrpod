@@ -17,14 +17,30 @@ RUN CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=auto go build -o /toolbox ./cmd/toolbox
 # 最终镜像
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates tzdata python3 nodejs npm bash git curl
+# Runtime deps. nodejs+npm provide `npx`, which the MCP bridge uses to spawn
+# npx-based MCP servers (and the `mcp-remote` shim for remote HTTP servers).
+# jq lets in-sandbox agents safely read-modify-write mcp.json (see the
+# register-mcp skill). python3/bash/git/curl support code execution.
+RUN apk add --no-cache ca-certificates tzdata python3 nodejs npm bash git curl jq
+
+# uv + uvx: the de-facto launcher for Python MCP servers (e.g. uvx mcp-server-git).
+# Shipped as static binaries from the official image — no Python build deps.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
 
 WORKDIR /workspace
+
+# MCP bridge config location. Placed under /workspace so an in-sandbox agent
+# can edit it directly; the bridge hot-reloads on change and exposes the new
+# tools at /mcp. The dir is pre-created so the first write needs no mkdir.
+ENV SANDRPOD_MCP_CONFIG=/workspace/.sandrpod/mcp.json
+RUN mkdir -p /workspace/.sandrpod
 
 # 复制二进制
 COPY --from=builder /toolbox /app/toolbox
 
 EXPOSE 8080
 
+# MCP bridge is enabled by default (-mcp-enabled); it starts cleanly even when
+# mcp.json is absent and picks it up on create.
 ENTRYPOINT ["/app/toolbox"]
 CMD ["-port=8080"]
