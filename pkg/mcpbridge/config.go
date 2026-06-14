@@ -18,14 +18,51 @@ type Config struct {
 	McpServers map[string]ServerConfig `json:"mcpServers"`
 }
 
-// ServerConfig describes a single stdio MCP server entry.
+// ServerConfig describes a single MCP server entry. A server is either:
+//   - stdio: set Command (+ Args/Env) — spawned as a subprocess, or
+//   - HTTP:  set URL (+ Type/Headers) — connected over Streamable-HTTP or SSE.
+//
+// Exactly one of Command / URL must be set. The HTTP fields (url/type/headers)
+// mirror Claude Code's remote-server shape for config compatibility. OAuth
+// HTTP servers are not handled here — bridge them with the stdio `mcp-remote`
+// shim instead.
 type ServerConfig struct {
-	Command string            `json:"command"`
+	// stdio transport
+	Command string            `json:"command,omitempty"`
 	Args    []string          `json:"args,omitempty"`
 	Env     map[string]string `json:"env,omitempty"`
 
+	// HTTP transport
+	URL     string            `json:"url,omitempty"`     // remote MCP endpoint
+	Type    string            `json:"type,omitempty"`    // "streamable-http" (default) | "http" | "sse"
+	Headers map[string]string `json:"headers,omitempty"` // request headers; values support ${ENV} expansion
+
 	// Sandrpod holds bridge-specific options. Optional; nil means defaults.
 	Sandrpod *SandrpodOpts `json:"sandrpod,omitempty"`
+}
+
+// IsHTTP reports whether this entry is an HTTP (url-based) server.
+func (s ServerConfig) IsHTTP() bool { return strings.TrimSpace(s.URL) != "" }
+
+// Target returns a human-readable target (command or url) for logs/manifest.
+func (s ServerConfig) Target() string {
+	if s.IsHTTP() {
+		return s.URL
+	}
+	return s.Command
+}
+
+// Validate checks that exactly one transport is configured.
+func (s ServerConfig) Validate() error {
+	hasCmd := strings.TrimSpace(s.Command) != ""
+	hasURL := s.IsHTTP()
+	switch {
+	case hasCmd && hasURL:
+		return fmt.Errorf("both command and url set; specify exactly one")
+	case !hasCmd && !hasURL:
+		return fmt.Errorf("neither command nor url set")
+	}
+	return nil
 }
 
 // SandrpodOpts carries sandrpod-specific runtime options for a server.

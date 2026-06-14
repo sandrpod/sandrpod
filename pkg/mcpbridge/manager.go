@@ -318,7 +318,7 @@ func (m *ChildManager) spawnLocked(ctx context.Context, name string, sc ServerCo
 	dec, gateErr := m.opts.Permission.Check(ctx, PermissionEvent{
 		Source:  "mcp.spawn",
 		Server:  name,
-		Command: sc.Command,
+		Command: sc.Target(),
 		Args:    sc.Args,
 		EnvKeys: envKeys,
 	})
@@ -447,7 +447,7 @@ func (m *ChildManager) Snapshot() []ChildSnapshot {
 			Name:      c.Name,
 			Alias:     c.Alias,
 			State:     string(c.state),
-			Command:   c.Cfg.Command,
+			Command:   c.Cfg.Target(),
 			ToolCount: len(c.tools),
 			StartedAt: c.startedAt,
 			Restarts:  c.restarts,
@@ -534,9 +534,13 @@ func (m *ChildManager) supervisorLoop(ctx context.Context) {
 func (m *ChildManager) healthSweep(ctx context.Context) {
 	m.mu.RLock()
 	probes := make([]*Child, 0, len(m.children))
+	var failed []*Child
 	for _, c := range m.children {
-		if c.State() == StateReady {
+		switch c.State() {
+		case StateReady:
 			probes = append(probes, c)
+		case StateFailed:
+			failed = append(failed, c)
 		}
 	}
 	m.mu.RUnlock()
@@ -551,11 +555,50 @@ func (m *ChildManager) healthSweep(ctx context.Context) {
 		m.opts.Logger.Printf("mcpbridge: child %q ping failed: %v", c.Name, err)
 		m.handleChildDeath(ctx, c, err)
 	}
+
+	// Retry children stuck in StateFailed — e.g. an HTTP upstream that wasn't
+	// listening yet at first start, or a stdio server whose package was still
+	// downloading. Without this, a child that fails its initial start stays
+	// down until the config changes. Honors restart_policy (never = stay down)
+	// and the per-minute rate limit; the sweep interval spaces the attempts.
+	for _, c := range failed {
+		m.recoverFailedChild(ctx, c)
+	}
 }
 
-func (m *ChildManager) handleChildDeath(ctx context.Context, c *Child, cause error) {
-	policy := defaultRestartPolicy
-	limit := defaultMaxRestartPerMin
+// recoverFailedChild re-attempts a child currently in StateFailed. Honors
+// restart_policy and the per-minute restart limit. Safe against a concurrent
+// Reload: it only respawns if the same Child instance is still registered.
+func (m *ChildManager) recoverFailedChild(ctx context.Context, c *Child) {
+	policy, limit := resolveRestartPolicy(c)
+	if policy == RestartNever {
+		return
+	}
+	if !c.recordRestartAttempt(limit) {
+		return // over the per-minute limit; try again on a later sweep
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if cur, ok := m.children[c.Name]; !ok || cur != c {
+		return // removed or replaced by a reload; nothing to recover
+	}
+	m.opts.Logger.Printf("mcpbridge: retrying failed %q (attempt %d)", c.Name, c.restarts+1)
+	delete(m.children, c.Name)
+	m.spawnLocked(ctx, c.Name, c.Cfg)
+	if next, ok := m.children[c.Name]; ok {
+		next.mu.Lock()
+		next.restarts = c.restarts + 1
+		next.restartTimes = c.restartTimes
+		next.mu.Unlock()
+	}
+	m.rebuildIndexLocked()
+}
+
+// resolveRestartPolicy returns the effective restart policy + per-minute limit
+// for a child, applying defaults when the sandrpod options are unset.
+func resolveRestartPolicy(c *Child) (policy string, limit int) {
+	policy, limit = defaultRestartPolicy, defaultMaxRestartPerMin
 	if c.Cfg.Sandrpod != nil {
 		if c.Cfg.Sandrpod.RestartPolicy != "" {
 			policy = c.Cfg.Sandrpod.RestartPolicy
@@ -564,6 +607,11 @@ func (m *ChildManager) handleChildDeath(ctx context.Context, c *Child, cause err
 			limit = c.Cfg.Sandrpod.MaxRestartPerMin
 		}
 	}
+	return
+}
+
+func (m *ChildManager) handleChildDeath(ctx context.Context, c *Child, cause error) {
+	policy, limit := resolveRestartPolicy(c)
 
 	// Tear down the dead one.
 	_ = c.Stop(ctx)
@@ -733,6 +781,9 @@ func hashServerConfig(sc ServerConfig) string {
 		Command  string
 		Args     []string
 		EnvKV    [][2]string // sorted
+		URL      string
+		Type     string
+		HeaderKV [][2]string // sorted
 		Sandrpod *SandrpodOpts
 	}
 	kv := make([][2]string, 0, len(sc.Env))
@@ -741,10 +792,19 @@ func hashServerConfig(sc ServerConfig) string {
 	}
 	sort.Slice(kv, func(i, j int) bool { return kv[i][0] < kv[j][0] })
 
+	hkv := make([][2]string, 0, len(sc.Headers))
+	for k, v := range sc.Headers {
+		hkv = append(hkv, [2]string{k, v})
+	}
+	sort.Slice(hkv, func(i, j int) bool { return hkv[i][0] < hkv[j][0] })
+
 	b, _ := json.Marshal(stable{
 		Command:  sc.Command,
 		Args:     sc.Args,
 		EnvKV:    kv,
+		URL:      sc.URL,
+		Type:     sc.Type,
+		HeaderKV: hkv,
 		Sandrpod: sc.Sandrpod,
 	})
 	sum := sha256.Sum256(b)

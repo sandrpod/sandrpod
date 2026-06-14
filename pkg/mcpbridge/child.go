@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/mark3labs/mcp-go/client"
+	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
@@ -52,11 +55,19 @@ func (r *realChildTransport) CallTool(ctx context.Context, req mcp.CallToolReque
 	return r.c.CallTool(ctx, req)
 }
 func (r *realChildTransport) Ping(ctx context.Context) error { return r.c.Ping(ctx) }
-func (r *realChildTransport) Close() error                    { return r.c.Close() }
+func (r *realChildTransport) Close() error                   { return r.c.Close() }
 
-// newRealChildTransport spawns a stdio MCP child and returns the wrapped client.
+// newRealChildTransport builds the MCP client for a server entry: a spawned
+// stdio subprocess (Command set) or an HTTP connection (URL set).
 // Kept as a package var so tests can override it.
 var newRealChildTransport = func(cfg ServerConfig) (childTransport, error) {
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if cfg.IsHTTP() {
+		return newHTTPChildTransport(cfg)
+	}
+
 	envSlice := make([]string, 0, len(cfg.Env))
 	for k, v := range cfg.Env {
 		envSlice = append(envSlice, k+"="+v)
@@ -68,6 +79,53 @@ var newRealChildTransport = func(cfg ServerConfig) (childTransport, error) {
 		return nil, fmt.Errorf("spawn stdio child: %w", err)
 	}
 	return &realChildTransport{c: cli}, nil
+}
+
+// newHTTPChildTransport connects to a remote MCP server over Streamable-HTTP
+// (default) or SSE. Header values support ${ENV} / $ENV expansion so secrets
+// can be referenced from the environment rather than stored in mcp.json.
+func newHTTPChildTransport(cfg ServerConfig) (childTransport, error) {
+	url := expandEnv(cfg.URL, cfg.Env)
+	headers := make(map[string]string, len(cfg.Headers))
+	for k, v := range cfg.Headers {
+		headers[k] = expandEnv(v, cfg.Env)
+	}
+
+	var (
+		cli *client.Client
+		err error
+	)
+	switch strings.ToLower(strings.TrimSpace(cfg.Type)) {
+	case "sse":
+		var opts []transport.ClientOption
+		if len(headers) > 0 {
+			opts = append(opts, transport.WithHeaders(headers))
+		}
+		cli, err = client.NewSSEMCPClient(url, opts...)
+	case "", "http", "streamable-http", "streamable_http", "streamablehttp":
+		var opts []transport.StreamableHTTPCOption
+		if len(headers) > 0 {
+			opts = append(opts, transport.WithHTTPHeaders(headers))
+		}
+		cli, err = client.NewStreamableHttpClient(url, opts...)
+	default:
+		return nil, fmt.Errorf("unknown transport type %q (use streamable-http|http|sse)", cfg.Type)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("create http MCP client: %w", err)
+	}
+	return &realChildTransport{c: cli}, nil
+}
+
+// expandEnv expands ${VAR} / $VAR in s, preferring the per-server env map and
+// falling back to the process environment.
+func expandEnv(s string, env map[string]string) string {
+	return os.Expand(s, func(k string) string {
+		if v, ok := env[k]; ok {
+			return v
+		}
+		return os.Getenv(k)
+	})
 }
 
 // Child wraps a single stdio MCP server subprocess.
