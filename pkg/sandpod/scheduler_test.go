@@ -121,7 +121,7 @@ func TestScheduler_ScheduleSandboxCreation_HappyPath(t *testing.T) {
 		},
 	}
 
-	scheduler := NewScheduler(mock, "http://localhost:8080")
+	scheduler := NewScheduler(mock, "http://localhost:8080", "")
 
 	req := &CreateSandboxRequest{
 		Name:         "my-sandbox",
@@ -171,7 +171,7 @@ func TestScheduler_ScheduleSandboxCreation_NoAvailableLocalPoder(t *testing.T) {
 		},
 	}
 
-	scheduler := NewScheduler(mock, "http://localhost:8080")
+	scheduler := NewScheduler(mock, "http://localhost:8080", "")
 
 	req := &CreateSandboxRequest{
 		Name:         "my-sandbox",
@@ -197,7 +197,7 @@ func TestScheduler_ScheduleSandboxCreation_NoAvailableDockerPoder(t *testing.T) 
 		},
 	}
 
-	scheduler := NewScheduler(mock, "http://localhost:8080")
+	scheduler := NewScheduler(mock, "http://localhost:8080", "")
 
 	req := &CreateSandboxRequest{
 		Name:         "my-sandbox",
@@ -223,7 +223,7 @@ func TestScheduler_ScheduleSandboxCreation_EmptyProviderDefaultsToLocal(t *testi
 		},
 	}
 
-	scheduler := NewScheduler(mock, "http://localhost:8080")
+	scheduler := NewScheduler(mock, "http://localhost:8080", "")
 
 	req := &CreateSandboxRequest{
 		Name:   "my-sandbox",
@@ -250,7 +250,7 @@ func TestNewScheduler_DefaultAPIURL(t *testing.T) {
 	}
 
 	// Empty apiURL should use DefaultAPIURL
-	scheduler := NewScheduler(mock, "")
+	scheduler := NewScheduler(mock, "", "")
 	if scheduler.apiURL != DefaultAPIURL {
 		t.Errorf("expected default API URL %s, got %s", DefaultAPIURL, scheduler.apiURL)
 	}
@@ -264,7 +264,7 @@ func TestNewScheduler_CustomAPIURL(t *testing.T) {
 	}
 
 	customURL := "https://api.example.com"
-	scheduler := NewScheduler(mock, customURL)
+	scheduler := NewScheduler(mock, customURL, "")
 	if scheduler.apiURL != customURL {
 		t.Errorf("expected custom API URL %s, got %s", customURL, scheduler.apiURL)
 	}
@@ -281,7 +281,7 @@ func TestScheduler_SelectBestIsCalledWithCorrectArgs(t *testing.T) {
 		},
 	}
 
-	scheduler := NewScheduler(mock, "http://localhost:8080")
+	scheduler := NewScheduler(mock, "http://localhost:8080", "")
 	req := &CreateSandboxRequest{
 		Name:         "test-sandbox",
 		Region:       "ap-southeast-1",

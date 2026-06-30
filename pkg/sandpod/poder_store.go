@@ -11,16 +11,17 @@ import (
 
 // PoderInfo holds metadata for a registered Poder node.
 type PoderInfo struct {
-	ID            string                 `json:"id"`
-	Name          string                 `json:"name"`
-	URL           string                 `json:"url"`                   // Poder API URL (e.g., http://poder1:8081)
-	Region        string                 `json:"region"`
-	ProviderType  string                 `json:"provider_type"`        // aws, aliyun, local, docker
-	State         PoderState             `json:"state"`
-	Resources     PoderResources         `json:"resources"`
-	Usage         PoderUsage             `json:"usage"`
-	LastHeartbeat time.Time             `json:"last_heartbeat"`
-	CreatedAt     time.Time             `json:"created_at"`
+	ID            string         `json:"id"`
+	Name          string         `json:"name"`
+	URL           string         `json:"url"` // Poder API URL (e.g., http://poder1:8081)
+	Region        string         `json:"region"`
+	ProviderType  string         `json:"provider_type"`   // aws, aliyun, local, docker
+	VMID          string         `json:"vm_id,omitempty"` // cloud VM instance ID (aws/aliyun); empty for local/docker
+	State         PoderState     `json:"state"`
+	Resources     PoderResources `json:"resources"`
+	Usage         PoderUsage     `json:"usage"`
+	LastHeartbeat time.Time      `json:"last_heartbeat"`
+	CreatedAt     time.Time      `json:"created_at"`
 }
 
 // PoderState represents the online/offline state of a Poder node.
@@ -36,26 +37,27 @@ type PoderResources struct {
 	CPUCores      int    `json:"cpu_cores"`
 	MemoryBytes   int64  `json:"memory_bytes"`
 	MaxContainers int    `json:"max_containers"`
-	Arch          string `json:"arch,omitempty"`       // e.g. amd64, arm64
-	OS            string `json:"os,omitempty"`         // e.g. linux, darwin
-	OSVersion     string `json:"os_version,omitempty"` // e.g. Ubuntu 22.04.3 LTS
+	Arch          string `json:"arch,omitempty"`           // e.g. amd64, arm64
+	OS            string `json:"os,omitempty"`             // e.g. linux, darwin
+	OSVersion     string `json:"os_version,omitempty"`     // e.g. Ubuntu 22.04.3 LTS
 	KernelVersion string `json:"kernel_version,omitempty"` // e.g. 5.15.0-91-generic
 }
 
 // PoderUsage holds current resource utilization for a Poder node.
 type PoderUsage struct {
-	Containers   int     `json:"containers"`    // current container count
-	CPUUsage      float64 `json:"cpu_usage"`    // CPU utilization 0-1
-	MemoryUsage   float64 `json:"memory_usage"` // memory utilization 0-1
+	Containers  int     `json:"containers"`   // current container count
+	CPUUsage    float64 `json:"cpu_usage"`    // CPU utilization 0-1
+	MemoryUsage float64 `json:"memory_usage"` // memory utilization 0-1
 }
 
 // RegisterPoderRequest is the payload for registering a new Poder node.
 type RegisterPoderRequest struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
-	URL          string `json:"url"`
-	Region       string `json:"region"`
-	ProviderType string `json:"provider_type"` // aws, aliyun, local, docker
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	URL          string         `json:"url"`
+	Region       string         `json:"region"`
+	ProviderType string         `json:"provider_type"`   // aws, aliyun, local, docker
+	VMID         string         `json:"vm_id,omitempty"` // cloud VM instance ID (aws/aliyun); empty for local/docker
 	Resources    PoderResources `json:"resources"`
 }
 
@@ -92,6 +94,7 @@ func (s *PoderStore) Register(req *RegisterPoderRequest) (*PoderInfo, error) {
 		// Update the existing Poder entry.
 		existing.URL = req.URL
 		existing.Region = req.Region
+		existing.VMID = req.VMID
 		existing.Resources = req.Resources
 		existing.LastHeartbeat = time.Now()
 		existing.State = PoderStateOnline
@@ -104,11 +107,12 @@ func (s *PoderStore) Register(req *RegisterPoderRequest) (*PoderInfo, error) {
 		URL:          req.URL,
 		Region:       req.Region,
 		ProviderType: req.ProviderType,
+		VMID:         req.VMID,
 		State:        PoderStateOnline,
 		Resources:    req.Resources,
 		Usage: PoderUsage{
-			Containers: 0,
-			CPUUsage:   0,
+			Containers:  0,
+			CPUUsage:    0,
 			MemoryUsage: 0,
 		},
 		LastHeartbeat: time.Now(),
@@ -131,7 +135,7 @@ func (s *PoderStore) Heartbeat(id string, usage *HeartbeatRequest) error {
 
 	poder.Usage = PoderUsage{
 		Containers:  usage.Containers,
-		CPUUsage:   usage.CPUUsage,
+		CPUUsage:    usage.CPUUsage,
 		MemoryUsage: usage.MemoryUsage,
 	}
 	poder.LastHeartbeat = time.Now()

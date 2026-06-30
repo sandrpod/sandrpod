@@ -21,20 +21,20 @@ func (r *poderRepo) Register(req *sandpod.RegisterPoderRequest) (*sandpod.PoderI
 	// Upsert: update resources on re-register, preserve created_at if already exists.
 	_, err := r.db.Exec(`
 		INSERT INTO poders
-		  (id, name, url, region, provider_type, state,
+		  (id, name, url, region, provider_type, vm_id, state,
 		   cpu_cores, memory_bytes, max_containers, arch, os, os_version, kernel_version,
 		   usage_containers, usage_cpu, usage_memory,
 		   last_heartbeat, created_at)
-		VALUES (?,?,?,?,?,'ONLINE',?,?,?,?,?,?,?,0,0,0,?,?)
+		VALUES (?,?,?,?,?,?,'ONLINE',?,?,?,?,?,?,?,0,0,0,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 		  name=excluded.name, url=excluded.url, region=excluded.region,
-		  provider_type=excluded.provider_type, state='ONLINE',
+		  provider_type=excluded.provider_type, vm_id=excluded.vm_id, state='ONLINE',
 		  cpu_cores=excluded.cpu_cores, memory_bytes=excluded.memory_bytes,
 		  max_containers=excluded.max_containers, arch=excluded.arch,
 		  os=excluded.os, os_version=excluded.os_version,
 		  kernel_version=excluded.kernel_version,
 		  last_heartbeat=excluded.last_heartbeat`,
-		req.ID, req.Name, req.URL, req.Region, req.ProviderType,
+		req.ID, req.Name, req.URL, req.Region, req.ProviderType, req.VMID,
 		req.Resources.CPUCores, req.Resources.MemoryBytes, req.Resources.MaxContainers,
 		req.Resources.Arch, req.Resources.OS, req.Resources.OSVersion, req.Resources.KernelVersion,
 		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
@@ -170,7 +170,7 @@ func (r *poderRepo) Delete(id string) error {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-const poderColumns = `id, name, url, region, provider_type, state,
+const poderColumns = `id, name, url, region, provider_type, vm_id, state,
     cpu_cores, memory_bytes, max_containers, arch, os, os_version, kernel_version,
     usage_containers, usage_cpu, usage_memory,
     last_heartbeat, created_at`
@@ -187,13 +187,13 @@ func (r *poderRepo) getByIDTx(tx *sql.Tx, id string) (*sandpod.PoderInfo, bool, 
 
 func scanPoder(row *sql.Row) (*sandpod.PoderInfo, bool, error) {
 	var (
-		p             sandpod.PoderInfo
-		state         string
-		heartbeatStr  string
-		createdStr    string
+		p            sandpod.PoderInfo
+		state        string
+		heartbeatStr string
+		createdStr   string
 	)
 	err := row.Scan(
-		&p.ID, &p.Name, &p.URL, &p.Region, &p.ProviderType, &state,
+		&p.ID, &p.Name, &p.URL, &p.Region, &p.ProviderType, &p.VMID, &state,
 		&p.Resources.CPUCores, &p.Resources.MemoryBytes, &p.Resources.MaxContainers,
 		&p.Resources.Arch, &p.Resources.OS, &p.Resources.OSVersion, &p.Resources.KernelVersion,
 		&p.Usage.Containers, &p.Usage.CPUUsage, &p.Usage.MemoryUsage,
@@ -215,13 +215,13 @@ func scanPoders(rows *sql.Rows) []*sandpod.PoderInfo {
 	var out []*sandpod.PoderInfo
 	for rows.Next() {
 		var (
-			p             sandpod.PoderInfo
-			state         string
-			heartbeatStr  string
-			createdStr    string
+			p            sandpod.PoderInfo
+			state        string
+			heartbeatStr string
+			createdStr   string
 		)
 		if err := rows.Scan(
-			&p.ID, &p.Name, &p.URL, &p.Region, &p.ProviderType, &state,
+			&p.ID, &p.Name, &p.URL, &p.Region, &p.ProviderType, &p.VMID, &state,
 			&p.Resources.CPUCores, &p.Resources.MemoryBytes, &p.Resources.MaxContainers,
 			&p.Resources.Arch, &p.Resources.OS, &p.Resources.OSVersion, &p.Resources.KernelVersion,
 			&p.Usage.Containers, &p.Usage.CPUUsage, &p.Usage.MemoryUsage,

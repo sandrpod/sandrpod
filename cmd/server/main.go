@@ -38,6 +38,7 @@ var (
 	help           = flag.Bool("help", false, "Show help")
 	token          = flag.String("token", os.Getenv("SANDRPOD_TOKEN"), "API token for authentication (env: SANDRPOD_TOKEN)")
 	offlineTimeout = flag.Duration("offline-timeout", 30*time.Second, "Poder offline timeout")
+	reapTimeout    = flag.Duration("reap-timeout", 10*time.Minute, "OFFLINE poder reclamation timeout (terminates cloud VM and deletes record)")
 	dbDSN          = flag.String("db", "", `persistence backend: empty=in-memory (default), sqlite:<path>=SQLite file (e.g. sqlite:./data/sandrpod.db)`)
 	publicURL      = flag.String("public-url", os.Getenv("SANDRPOD_PUBLIC_URL"), "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
 )
@@ -55,7 +56,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 	jobStore := stores.Jobs
 	sandboxStore := stores.Sandboxes
 	poderStore := stores.Poders
-	scheduler := podpkg.NewScheduler(poderStore, cfg.APIURL)
+	scheduler := podpkg.NewScheduler(poderStore, cfg.APIURL, cfg.Token)
 
 	mux := http.NewServeMux()
 
@@ -164,6 +165,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			URL:          "tunnel://" + poderID, // Marks this as tunnel mode; not used for direct HTTP
 			Region:       r.Header.Get("X-Poder-Region"),
 			ProviderType: r.Header.Get("X-Poder-Provider-Type"),
+			VMID:         r.Header.Get("X-Poder-VM-ID"),
 			Resources: podpkg.PoderResources{
 				CPUCores:      cpuCores,
 				MemoryBytes:   memBytes,
@@ -303,7 +305,8 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		// DELETE /api/v1/poders/{id} — delete a Poder record
 		if !strings.Contains(path, "/") && r.Method == http.MethodDelete {
 			pID := path
-			if _, ok := poderStore.Get(pID); !ok {
+			poder, ok := poderStore.Get(pID)
+			if !ok {
 				http.Error(w, "poder not found", http.StatusNotFound)
 				return
 			}
@@ -333,8 +336,23 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				http.Error(w, fmt.Sprintf("failed to delete poder: %v", err), http.StatusInternalServerError)
 				return
 			}
+			// Terminate the underlying cloud VM for aws/aliyun poders unless the
+			// caller opted out with ?keep_vm=true. Failures are logged only.
+			vmTerminated := false
+			if isCloudProvider(poder.ProviderType) && poder.VMID != "" && r.URL.Query().Get("keep_vm") != "true" {
+				if p, err := provider.GetFactory().Get(poder.ProviderType); err == nil {
+					if err := p.DeleteVM(r.Context(), poder.VMID); err != nil {
+						log.Printf("DELETE poder %s: failed to terminate VM %s: %v", pID, poder.VMID, err)
+					} else {
+						vmTerminated = true
+						log.Printf("DELETE poder %s: terminated VM %s", pID, poder.VMID)
+					}
+				} else {
+					log.Printf("DELETE poder %s: provider %q unavailable, VM %s not terminated: %v", pID, poder.ProviderType, poder.VMID, err)
+				}
+			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
+			json.NewEncoder(w).Encode(map[string]any{"status": "ok", "vm_terminated": vmTerminated})
 			return
 		}
 
@@ -1204,6 +1222,7 @@ func main() {
 	}()
 
 	go cleanupOfflinePoders(rootCtx, stores.Poders, *offlineTimeout)
+	go reapOfflinePoders(rootCtx, stores.Poders, *reapTimeout)
 
 	log.Printf("API server listening on %s (Control Plane + Tunnel Mode)", addr)
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
@@ -1427,6 +1446,57 @@ func cleanupOfflinePoders(ctx context.Context, ps podpkg.PoderRepository, timeou
 					ps.SetOffline(p.ID)
 					log.Printf("Poder %s marked OFFLINE (no heartbeat for %v)", p.ID, now.Sub(p.LastHeartbeat))
 				}
+			}
+		}
+	}
+}
+
+// isCloudProvider reports whether a provider type backs each Poder with a
+// dedicated cloud VM that should be terminated on reclamation.
+func isCloudProvider(providerType string) bool {
+	switch providerType {
+	case "aws", "aliyun":
+		return true
+	default:
+		return false
+	}
+}
+
+// reapOfflinePoders reclaims poders that have been OFFLINE longer than timeout.
+// Cloud poders (aws/aliyun) with a known VM ID have their VM terminated before
+// the record is deleted; if termination fails the record is kept so the next
+// tick retries. Local/docker poders have no VM and are deleted directly.
+// Exits when ctx is cancelled.
+func reapOfflinePoders(ctx context.Context, ps podpkg.PoderRepository, timeout time.Duration) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now()
+			for _, p := range ps.List() {
+				if p.State != podpkg.PoderStateOffline || now.Sub(p.LastHeartbeat) <= timeout {
+					continue
+				}
+				if isCloudProvider(p.ProviderType) && p.VMID != "" {
+					prov, err := provider.GetFactory().Get(p.ProviderType)
+					if err != nil {
+						log.Printf("reap poder %s: provider %q unavailable, retrying next tick: %v", p.ID, p.ProviderType, err)
+						continue
+					}
+					if err := prov.DeleteVM(ctx, p.VMID); err != nil {
+						log.Printf("reap poder %s: failed to terminate VM %s, retrying next tick: %v", p.ID, p.VMID, err)
+						continue
+					}
+					log.Printf("reap poder %s: terminated VM %s", p.ID, p.VMID)
+				}
+				if err := ps.Delete(p.ID); err != nil {
+					log.Printf("reap poder %s: failed to delete record: %v", p.ID, err)
+					continue
+				}
+				log.Printf("reap poder %s: reclaimed (OFFLINE for %v)", p.ID, now.Sub(p.LastHeartbeat))
 			}
 		}
 	}

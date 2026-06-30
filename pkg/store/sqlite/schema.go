@@ -1,6 +1,9 @@
 package sqlite
 
-import "database/sql"
+import (
+	"database/sql"
+	"strings"
+)
 
 // ddl is the schema definition. All statements use IF NOT EXISTS so Migrate
 // is idempotent and safe to call on every server startup.
@@ -41,6 +44,7 @@ CREATE TABLE IF NOT EXISTS poders (
     url              TEXT    NOT NULL DEFAULT '',
     region           TEXT    NOT NULL DEFAULT '',
     provider_type    TEXT    NOT NULL DEFAULT '',
+    vm_id            TEXT    NOT NULL DEFAULT '',
     state            TEXT    NOT NULL DEFAULT 'OFFLINE',
     -- PoderResources (inline for SQL scoring)
     cpu_cores        INTEGER NOT NULL DEFAULT 0,
@@ -86,11 +90,24 @@ CREATE INDEX IF NOT EXISTS idx_sandboxes_poder  ON sandboxes(poder_id);
 CREATE INDEX IF NOT EXISTS idx_poders_state     ON poders(state, region, provider_type);
 `
 
+// columnMigrations lists ADD COLUMN statements applied to existing databases
+// whose tables predate a column added to the CREATE TABLE DDL above. They run
+// after the idempotent DDL; "duplicate column name" errors are ignored so the
+// migration is safe to re-run on already-migrated databases.
+var columnMigrations = []string{
+	`ALTER TABLE poders ADD COLUMN vm_id TEXT NOT NULL DEFAULT ''`,
+}
+
 // Migrate applies the DDL to db. It is idempotent (uses IF NOT EXISTS) and
 // safe to call on every startup.
 func Migrate(db *sql.DB) error {
 	if _, err := db.Exec(ddl); err != nil {
 		return err
+	}
+	for _, stmt := range columnMigrations {
+		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+			return err
+		}
 	}
 	return nil
 }

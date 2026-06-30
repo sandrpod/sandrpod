@@ -8,6 +8,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/provider"
@@ -20,16 +22,20 @@ var DefaultAPIURL = "http://localhost:8080"
 type Scheduler struct {
 	poderStore PoderRepository
 	apiURL     string
+	token      string // API bearer token, forwarded to provisioned Poders
 }
 
-// NewScheduler creates a new Scheduler
-func NewScheduler(poderStore PoderRepository, apiURL string) *Scheduler {
+// NewScheduler creates a new Scheduler. token is the API Server bearer token
+// (empty = no auth); it is forwarded to Poders started on provisioned VMs so
+// they can authenticate to the tunnel endpoint.
+func NewScheduler(poderStore PoderRepository, apiURL, token string) *Scheduler {
 	if apiURL == "" {
 		apiURL = DefaultAPIURL
 	}
 	return &Scheduler{
 		poderStore: poderStore,
 		apiURL:     apiURL,
+		token:      token,
 	}
 }
 
@@ -72,7 +78,7 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 
 	// 5. Install Docker and start Poder on the VM
 	log.Printf("[Scheduler] Setting up poder on VM %s", vm.ID)
-	if err := s.setupPoderOnVM(ctx, providerType, vm); err != nil {
+	if err := s.setupPoderOnVM(ctx, providerType, req.Region, vm); err != nil {
 		return nil, fmt.Errorf("failed to setup poder: %w", err)
 	}
 
@@ -105,6 +111,7 @@ func (s *Scheduler) createVMWithProvider(ctx context.Context, providerType strin
 			"CreatedBy": "sandrpod",
 			"Sandbox":   req.Name,
 		},
+		NetworkConfig: vmNetworkConfig(),
 		RunnerConfig: &provider.RunnerBootstrapConfig{
 			APIURL: s.apiURL,
 		},
@@ -148,8 +155,11 @@ func (s *Scheduler) waitForVMReady(ctx context.Context, providerType, vmID strin
 	return fmt.Errorf("timeout waiting for VM %s", vmID)
 }
 
-// setupPoderOnVM installs Docker and starts the Poder container on a VM
-func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType string, vm *provider.VMInfo) error {
+// setupPoderOnVM installs Docker and starts the Poder container on a VM.
+// region is the scheduler-facing region (not the AZ) and providerType is
+// forwarded so the Poder registers under the same (region, provider_type)
+// the scheduler waits on.
+func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType, region string, vm *provider.VMInfo) error {
 	p, err := provider.GetFactory().Get(providerType)
 	if err != nil {
 		return err
@@ -170,6 +180,23 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType string, vm 
 	// 2. Start the Poder container.
 	// PROXY_HOST should be the VM's public IP so services inside the container can reach the outside.
 	// Single-quote all variable values to prevent shell metacharacter injection.
+	// Forward the toolbox image so the remote Poder pulls the same one we use
+	// locally; otherwise it falls back to its built-in default.
+	toolboxEnv := ""
+	if tb := strings.TrimSpace(os.Getenv("SANDRPOD_TOOLBOX_IMAGE")); tb != "" {
+		toolboxEnv = fmt.Sprintf(` -e SANDRPOD_TOOLBOX_IMAGE='%s'`, shellQuoteSingleValue(tb))
+	}
+	// Forward the API token so the Poder can authenticate to the tunnel
+	// endpoint; without it a token-protected server rejects the handshake.
+	if s.token != "" {
+		toolboxEnv += fmt.Sprintf(` -e SANDRPOD_TOKEN='%s'`, shellQuoteSingleValue(s.token))
+	}
+	// Forward the VM instance ID so the Poder reports it on registration; the
+	// server uses it to terminate the underlying cloud VM on poder reclamation.
+	if vm.ID != "" {
+		toolboxEnv += fmt.Sprintf(` -e VM_INSTANCE_ID='%s'`, shellQuoteSingleValue(vm.ID))
+	}
+
 	poderStartCmd := fmt.Sprintf(
 		`docker run -d`+
 			` --name sandrpod-poder`+
@@ -177,11 +204,16 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType string, vm 
 			` -e API_URL='%s'`+
 			` -e PROXY_HOST='%s'`+
 			` -e REGION='%s'`+
+			` -e PROVIDER_TYPE='%s'`+
+			`%s`+
 			` -v /var/run/docker.sock:/var/run/docker.sock`+
-			` sandrpod/poder:latest`,
+			` '%s'`,
 		shellQuoteSingleValue(s.apiURL),
 		shellQuoteSingleValue(vm.PublicIP),
-		shellQuoteSingleValue(vm.Region),
+		shellQuoteSingleValue(region),
+		shellQuoteSingleValue(providerType),
+		toolboxEnv,
+		shellQuoteSingleValue(poderImage()),
 	)
 
 	log.Printf("[Scheduler] Starting poder container on VM %s", vm.ID)
@@ -243,6 +275,41 @@ func (s *Scheduler) createJobForPoder(req *CreateSandboxRequest, poder *PoderInf
 
 // shellQuoteSingleValue escapes a value for safe use inside a shell single-quoted string.
 // Single quotes are replaced with the '\” pattern so the string can be embedded without shell injection.
+// vmNetworkConfig builds the network configuration for provisioned cloud VMs.
+// A public IP is enabled by default so the VM can reach the API Server and pull
+// images; disable with SANDRPOD_VM_PUBLIC_IP=false for NAT/private-subnet
+// setups. Subnet and security group are optional overrides.
+func vmNetworkConfig() *provider.NetworkConfig {
+	return &provider.NetworkConfig{
+		PublicIP:      envBoolDefault("SANDRPOD_VM_PUBLIC_IP", true),
+		SubnetID:      strings.TrimSpace(os.Getenv("SANDRPOD_VM_SUBNET_ID")),
+		SecurityGroup: strings.TrimSpace(os.Getenv("SANDRPOD_VM_SECURITY_GROUP")),
+	}
+}
+
+// envBoolDefault parses a boolean env var, returning def when unset/unrecognized.
+func envBoolDefault(key string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
+}
+
+// poderImage returns the Poder container image to run on provisioned cloud
+// VMs. Override via SANDRPOD_PODER_IMAGE (e.g. ghcr.io/<owner>/poder:<tag>);
+// it defaults to the unqualified dev image, which only resolves if it has been
+// pushed to a registry the VM can reach.
+func poderImage() string {
+	if img := strings.TrimSpace(os.Getenv("SANDRPOD_PODER_IMAGE")); img != "" {
+		return img
+	}
+	return "sandrpod/poder:latest"
+}
+
 func shellQuoteSingleValue(s string) string {
 	result := ""
 	for _, r := range s {
