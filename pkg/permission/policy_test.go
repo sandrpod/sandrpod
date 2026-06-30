@@ -74,10 +74,10 @@ func TestCheckCommandPolicy_DenyWinsOverWarn(t *testing.T) {
 
 func TestNormalizeCommandName_StripsExe(t *testing.T) {
 	cases := map[string]string{
-		"scp":         "scp",
-		"scp.exe":     "scp",
-		"./scp":       "scp",
-		`.\scp.exe`:   "scp",
+		"scp":            "scp",
+		"scp.exe":        "scp",
+		"./scp":          "scp",
+		`.\scp.exe`:      "scp",
 		"powershell.EXE": "powershell",
 	}
 	for in, want := range cases {
