@@ -28,11 +28,11 @@ type Session struct {
 
 // SessionCommand represents a single command executed within a session.
 type SessionCommand struct {
-	ID       string
-	Command  string
-	ExitCode *int
-	LogFile  string
-	ExitFile string
+	ID        string
+	Command   string
+	ExitCode  *int
+	LogFile   string
+	ExitFile  string
 	CreatedAt time.Time
 }
 
@@ -223,6 +223,12 @@ type SessionError struct {
 
 func (e *SessionError) Error() string {
 	return e.Op + ": " + e.Err.Error()
+}
+
+// Unwrap exposes the wrapped error so errors.Is/As can match sentinels like
+// ErrSessionNotFound (and os.ErrNotExist) through the SessionError envelope.
+func (e *SessionError) Unwrap() error {
+	return e.Err
 }
 
 // Sentinel errors for common session failure cases.

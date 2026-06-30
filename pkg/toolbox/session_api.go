@@ -5,6 +5,7 @@ package toolbox
 
 import (
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"strings"
@@ -35,6 +36,18 @@ func (s *Server) sessionHandler(w http.ResponseWriter, r *http.Request) {
 		// Ensure this is not a sub-path.
 		if !strings.Contains(sessionId, "/") {
 			s.sessionDeleteHandler(w, r, sessionId)
+			return
+		}
+	}
+
+	// GET /process/session/{id}/command/{cmdId} - retrieve command result.
+	// MUST precede the generic GET branch below, which would otherwise treat
+	// "{id}/command/{cmdId}" as "{sandboxName}/{sessionId}" and swallow it.
+	if r.Method == http.MethodGet && strings.HasPrefix(path, "/process/session/") {
+		rest := strings.TrimPrefix(path, "/process/session/")
+		parts := strings.SplitN(rest, "/", 3)
+		if len(parts) >= 3 && parts[1] == "command" {
+			s.sessionCommandHandler(w, r, parts[0], parts[2])
 			return
 		}
 	}
@@ -84,18 +97,6 @@ func (s *Server) sessionHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// GET /process/session/{id}/command/{cmdId} - retrieve command result
-	if r.Method == http.MethodGet && strings.HasPrefix(path, "/process/session/") {
-		rest := strings.TrimPrefix(path, "/process/session/")
-		parts := strings.SplitN(rest, "/", 3)
-		if len(parts) >= 3 && parts[1] == "command" {
-			sessionId := parts[0]
-			cmdId := parts[2]
-			s.sessionCommandHandler(w, r, sessionId, cmdId)
-			return
-		}
-	}
-
 	http.NotFound(w, r)
 }
 
@@ -135,7 +136,7 @@ func (s *Server) sessionListHandler(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) sessionDeleteHandler(w http.ResponseWriter, r *http.Request, sessionId string) {
 	err := s.sessionManager.Delete(sessionId)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, ErrSessionNotFound) {
 			http.NotFound(w, r)
 			return
 		}
@@ -198,7 +199,7 @@ func (s *Server) sessionExecHandler(w http.ResponseWriter, r *http.Request, sess
 func (s *Server) sessionCommandHandler(w http.ResponseWriter, r *http.Request, sessionId, cmdId string) {
 	cmd, err := s.sessionManager.GetCommand(sessionId, cmdId)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, ErrSessionNotFound) {
 			http.NotFound(w, r)
 			return
 		}
@@ -214,10 +215,10 @@ func (s *Server) sessionCommandHandler(w http.ResponseWriter, r *http.Request, s
 	}
 
 	response := struct {
-		CommandId string  `json:"cmd_id"`
-		Command   string  `json:"command"`
-		ExitCode  *int    `json:"exit_code,omitempty"`
-		Output    string  `json:"output"`
+		CommandId string `json:"cmd_id"`
+		Command   string `json:"command"`
+		ExitCode  *int   `json:"exit_code,omitempty"`
+		Output    string `json:"output"`
 	}{
 		CommandId: cmd.ID,
 		Command:   cmd.Command,
@@ -228,4 +229,3 @@ func (s *Server) sessionCommandHandler(w http.ResponseWriter, r *http.Request, s
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
-

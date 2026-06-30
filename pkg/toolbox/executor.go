@@ -351,8 +351,13 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 
 	select {
 	case <-ctx.Done():
+		// Kill the process, then wait for the single Wait()er goroutine to
+		// finish. Blocking on `done` (rather than calling cmd.Wait() again
+		// here) avoids a double cmd.Wait — which is undefined — and also
+		// guarantees the io.Copy goroutines have stopped writing to the
+		// buffers before we read them below.
 		killProcess(cmd)
-		cmd.Wait() //nolint:errcheck
+		<-done
 		return &ProcessResult{
 			ExitCode:  124,
 			Stdout:    stdout.String(),
