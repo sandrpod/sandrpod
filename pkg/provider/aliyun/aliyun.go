@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	aliyunerrors "github.com/aliyun/alibaba-cloud-sdk-go/sdk/errors"
 	"github.com/aliyun/alibaba-cloud-sdk-go/sdk/requests"
 	"github.com/aliyun/alibaba-cloud-sdk-go/services/ecs"
 
@@ -17,14 +18,13 @@ import (
 
 // AliyunProvider is the Alibaba Cloud implementation of the Provider interface.
 type AliyunProvider struct {
-	region      string
-	accessKey   string
-	secretKey   string
-	ecsClient   *ecs.Client
-	mu          sync.RWMutex
-	vms         map[string]*provider.VMInfo
-	imageCache  map[string]string
-	instanceCache map[string]string // instance type -> id mapping
+	region     string
+	accessKey  string
+	secretKey  string
+	ecsClient  *ecs.Client
+	mu         sync.RWMutex
+	vms        map[string]*provider.VMInfo
+	imageCache map[string]string
 }
 
 // Config holds Alibaba Cloud credentials and region settings.
@@ -42,13 +42,12 @@ func NewAliyunProvider(cfg *Config) (*AliyunProvider, error) {
 	}
 
 	return &AliyunProvider{
-		region:       cfg.Region,
-		accessKey:    cfg.AccessKey,
-		secretKey:    cfg.SecretKey,
-		ecsClient:    client,
-		vms:          make(map[string]*provider.VMInfo),
-		imageCache:   make(map[string]string),
-		instanceCache: make(map[string]string),
+		region:     cfg.Region,
+		accessKey:  cfg.AccessKey,
+		secretKey:  cfg.SecretKey,
+		ecsClient:  client,
+		vms:        make(map[string]*provider.VMInfo),
+		imageCache: make(map[string]string),
 	}, nil
 }
 
@@ -88,6 +87,16 @@ func mapEcsInstanceToVM(instance ecs.Instance) *provider.VMInfo {
 		privateIP = instance.InnerIpAddress.IpAddress[0]
 	}
 
+	// CreationTime is an RFC3339 timestamp (e.g. "2024-01-02T03:04:05Z"). Leave
+	// CreatedAt zero if it's missing or malformed rather than failing the
+	// whole mapping.
+	createdAt := time.Time{}
+	if instance.CreationTime != "" {
+		if t, err := time.Parse(time.RFC3339, instance.CreationTime); err == nil {
+			createdAt = t
+		}
+	}
+
 	return &provider.VMInfo{
 		ID:           instance.InstanceId,
 		Name:         instance.InstanceName,
@@ -96,20 +105,28 @@ func mapEcsInstanceToVM(instance ecs.Instance) *provider.VMInfo {
 		State:        mapInstanceState(instance.Status),
 		PublicIP:     publicIP,
 		PrivateIP:    privateIP,
-		CreatedAt:    time.Time{},
+		CreatedAt:    createdAt,
 	}
 }
 
+// createVMIPPollInterval/Timeout bound how long CreateVM waits for
+// DescribeInstances to report an assigned public IP after StartInstance.
+const (
+	createVMIPPollInterval = 5 * time.Second
+	createVMIPPollTimeout  = 90 * time.Second
+)
+
 // CreateVM creates an ECS instance on Alibaba Cloud.
 func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMRequest) (*provider.VMInfo, error) {
-	// Resolve image ID
+	// Resolve image ID. Fail loudly rather than silently falling back to a
+	// hard-coded, region-specific image ID that may not exist or be stale.
 	imageID := req.ImageID
 	if imageID == "" {
-		var err error
-		imageID, err = p.GetDefaultImage(ctx, req.Region)
+		resolved, err := p.GetDefaultImage(ctx, req.Region)
 		if err != nil {
-			imageID = "ubuntu_22_04_64_20G_alibase_20230920.vhd" // default Ubuntu image
+			return nil, fmt.Errorf("no image specified and default image lookup failed: %w", err)
 		}
+		imageID = resolved
 	}
 
 	// Build the create instance request
@@ -124,11 +141,11 @@ func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMReq
 		createReq.SecurityGroupId = req.NetworkConfig.SecurityGroup
 	}
 
-	// VPC configuration - using VSwitchId
-	if req.NetworkConfig != nil && req.NetworkConfig.VpcID != "" {
-		if req.NetworkConfig.SubnetID != "" {
-			createReq.VSwitchId = req.NetworkConfig.SubnetID
-		}
+	// VSwitch (subnet). The scheduler only ever populates SubnetID (never
+	// VpcID), so gating this on VpcID being set meant VSwitchId was never
+	// applied and instances landed in a default/random vswitch.
+	if req.NetworkConfig != nil && req.NetworkConfig.SubnetID != "" {
+		createReq.VSwitchId = req.NetworkConfig.SubnetID
 	}
 
 	// Public IP
@@ -161,11 +178,14 @@ func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMReq
 		delReq := ecs.CreateDeleteInstanceRequest()
 		delReq.InstanceId = instanceID
 		delReq.Force = "true"
-		p.ecsClient.DeleteInstance(delReq)
+		if _, delErr := p.ecsClient.DeleteInstance(delReq); delErr != nil {
+			return nil, fmt.Errorf("failed to start instance: %w (cleanup also failed: %v)", err, delErr)
+		}
 		return nil, fmt.Errorf("failed to start instance: %w", err)
 	}
 
-	// Build VMInfo
+	// Build a baseline VMInfo in case the IP-polling below never observes a
+	// ready instance — callers (the scheduler) still get a usable record.
 	vmInfo := &provider.VMInfo{
 		ID:           instanceID,
 		Name:         req.Name,
@@ -174,11 +194,54 @@ func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMReq
 		State:        provider.VMStatePending,
 	}
 
+	// Poll DescribeInstances until the instance is Running and/or has a
+	// public IP assigned, or the bounded timeout/context expires. The
+	// scheduler uses vm.PublicIP to bootstrap Poder over SSH, so returning
+	// before the IP is assigned would leave it with nothing to connect to.
+	if vm, ok := p.pollForRunningVM(ctx, instanceID); ok {
+		vmInfo = vm
+		if vmInfo.Name == "" {
+			vmInfo.Name = req.Name
+		}
+	}
+
 	p.mu.Lock()
 	p.vms[instanceID] = vmInfo
 	p.mu.Unlock()
 
 	return vmInfo, nil
+}
+
+// pollForRunningVM polls DescribeInstances for up to createVMIPPollTimeout,
+// returning the most recently observed VMInfo once the instance is Running
+// or has a public IP, whichever comes first. The bool return reports whether
+// at least one successful describe call was made (so callers can fall back
+// to a baseline VMInfo on total failure).
+func (p *AliyunProvider) pollForRunningVM(ctx context.Context, instanceID string) (*provider.VMInfo, bool) {
+	pollCtx, cancel := context.WithTimeout(ctx, createVMIPPollTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(createVMIPPollInterval)
+	defer ticker.Stop()
+
+	var lastSeen *provider.VMInfo
+	for {
+		req := ecs.CreateDescribeInstancesRequest()
+		req.InstanceIds = fmt.Sprintf(`["%s"]`, instanceID)
+		if resp, err := p.ecsClient.DescribeInstances(req); err == nil && len(resp.Instances.Instance) > 0 {
+			vm := mapEcsInstanceToVM(resp.Instances.Instance[0])
+			lastSeen = vm
+			if vm.PublicIP != "" || vm.State == provider.VMStateRunning {
+				return vm, true
+			}
+		}
+
+		select {
+		case <-pollCtx.Done():
+			return lastSeen, lastSeen != nil
+		case <-ticker.C:
+		}
+	}
 }
 
 // DeleteVM terminates and removes the specified ECS instance.
@@ -199,17 +262,11 @@ func (p *AliyunProvider) DeleteVM(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// GetVM retrieves information about a VM instance, checking the local cache first.
+// GetVM retrieves information about a VM instance.
 func (p *AliyunProvider) GetVM(ctx context.Context, vmID string) (*provider.VMInfo, error) {
-	// Check local cache first
-	p.mu.RLock()
-	if vm, ok := p.vms[vmID]; ok {
-		p.mu.RUnlock()
-		return vm, nil
-	}
-	p.mu.RUnlock()
-
-	// Query Alibaba Cloud ECS
+	// Always query ECS for live state. A read-through cache here would
+	// return the stale Pending snapshot recorded at create time, so health
+	// checks (VMReady) would never succeed.
 	req := ecs.CreateDescribeInstancesRequest()
 	req.InstanceIds = fmt.Sprintf(`["%s"]`, vmID)
 
@@ -222,7 +279,11 @@ func (p *AliyunProvider) GetVM(ctx context.Context, vmID string) (*provider.VMIn
 		return nil, fmt.Errorf("instance %s not found", vmID)
 	}
 
-	return mapEcsInstanceToVM(resp.Instances.Instance[0]), nil
+	vm := mapEcsInstanceToVM(resp.Instances.Instance[0])
+	p.mu.Lock()
+	p.vms[vmID] = vm
+	p.mu.Unlock()
+	return vm, nil
 }
 
 // ListVMs lists all SandrPod-managed ECS instances in the configured region.
@@ -248,62 +309,134 @@ func (p *AliyunProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error
 	return vms, nil
 }
 
-// ExecuteCommand runs a shell command on the instance via the Alibaba Cloud CloudAssist service.
-// Note: CloudAssist requires the CloudAssist client to be installed on the instance.
-// This implementation simplifies the CloudAssist flow; refer to the Alibaba Cloud SDK docs for production usage.
+// cloudAssistExecTimeout bounds how long ExecuteCommand waits for a
+// CloudAssist invocation to reach a terminal state when the caller's
+// context carries no deadline of its own. Bootstrap commands (e.g. Docker
+// install) can run for minutes.
+const cloudAssistExecTimeout = 5 * time.Minute
+
+// cloudAssistRegistrationTimeout bounds how long we retry RunCommand while a
+// freshly launched instance's CloudAssist agent is still starting up.
+const cloudAssistRegistrationTimeout = 3 * time.Minute
+
+// cloudAssistNotReadyErrorCodes are the Alibaba Cloud API error codes
+// returned by RunCommand/InvokeCommand when the target instance's
+// CloudAssist agent has not finished registering yet.
+var cloudAssistNotReadyErrorCodes = map[string]bool{
+	"InvalidInstance.NotActive":   true,
+	"InstanceNotReady":            true,
+	"InvalidParameter.InstanceId": true,
+}
+
+// invocationTerminalStatuses are the InvocationStatus values that indicate a
+// CloudAssist command has finished running (successfully or not) and its
+// result (ExitCode/Output) is final.
+var invocationTerminalStatuses = map[string]bool{
+	"Finished": true,
+	"Success":  true,
+	"Failed":   true,
+	"Stopped":  true,
+	"Timeout":  true,
+}
+
+// ExecuteCommand runs a shell command on the instance via the Alibaba Cloud
+// CloudAssist service and waits for the result.
 func (p *AliyunProvider) ExecuteCommand(ctx context.Context, vmID, command string) (*provider.CommandResult, error) {
-	// Create a CloudAssist command
-	cmdReq := ecs.CreateCreateCommandRequest()
-	cmdReq.RegionId = p.region
-	cmdReq.Type = "RunShellScript"
-	cmdReq.CommandContent = command
-	cmdReq.Name = fmt.Sprintf("sandrpod-%d", time.Now().Unix())
-
-	cmdResp, err := p.ecsClient.CreateCommand(cmdReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create command: %w", err)
+	// A just-launched instance's CloudAssist agent needs time to register.
+	// Until then RunCommand/InvokeCommand returns an instance-not-ready
+	// error code; retry until accepted or the deadline passes.
+	sendCtx := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		sendCtx, cancel = context.WithTimeout(ctx, cloudAssistRegistrationTimeout)
+		defer cancel()
 	}
 
-	// Invoke the command
-	execReq := ecs.CreateInvokeCommandRequest()
-	execReq.InstanceId = &[]string{vmID}
-	execReq.CommandId = cmdResp.CommandId
+	runReq := ecs.CreateRunCommandRequest()
+	runReq.RegionId = p.region
+	runReq.Type = "RunShellScript"
+	runReq.CommandContent = command
+	runReq.Name = fmt.Sprintf("sandrpod-%d", time.Now().Unix())
+	runReq.InstanceId = &[]string{vmID}
+	// Don't keep the command definition around after it finishes — we
+	// create a fresh one per ExecuteCommand call, so retaining them would
+	// leak against the CloudAssist command quota.
+	runReq.KeepCommand = requests.NewBoolean(false)
 
-	execResp, err := p.ecsClient.InvokeCommand(execReq)
-	if err != nil {
-		return nil, fmt.Errorf("failed to invoke command: %w", err)
+	var runResp *ecs.RunCommandResponse
+	for {
+		var err error
+		runResp, err = p.ecsClient.RunCommand(runReq)
+		if err == nil {
+			break
+		}
+		if isCloudAssistNotReady(err) {
+			select {
+			case <-sendCtx.Done():
+				return nil, fmt.Errorf("instance %s not CloudAssist-ready before timeout: %w", vmID, err)
+			case <-time.After(5 * time.Second):
+				continue
+			}
+		}
+		return nil, fmt.Errorf("failed to run command: %w", err)
+	}
+	invokeID := runResp.InvokeId
+
+	// Bound the wait: honor an existing context deadline, otherwise apply a
+	// default long enough for slow bootstrap commands.
+	waitCtx := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, cloudAssistExecTimeout)
+		defer cancel()
 	}
 
-	// Poll for the execution result
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
+	for {
+		select {
+		case <-waitCtx.Done():
+			return nil, fmt.Errorf("command %s on %s did not finish before timeout: %w", invokeID, vmID, waitCtx.Err())
+		case <-ticker.C:
+		}
 
-	for range 30 { // wait up to 60 seconds
-		<-ticker.C
-
-		// Query invocation results
 		outputReq := ecs.CreateDescribeInvocationResultsRequest()
 		outputReq.InstanceId = vmID
-		outputReq.InvokeId = execResp.InvokeId
+		outputReq.InvokeId = invokeID
 
 		outputResp, err := p.ecsClient.DescribeInvocationResults(outputReq)
 		if err != nil {
+			// The invocation may not be registered for a moment right after
+			// RunCommand; keep polling until the deadline.
+			continue
+		}
+		if outputResp == nil || len(outputResp.Invocation.InvocationResults.InvocationResult) == 0 {
 			continue
 		}
 
-		// Check if results are available - InvocationResults is nested under outputResp.Invocation.InvocationResults
-		if outputResp != nil && outputResp.Invocation.InvocationResults.InvocationResult != nil && len(outputResp.Invocation.InvocationResults.InvocationResult) > 0 {
-			result := outputResp.Invocation.InvocationResults.InvocationResult[0]
-			return &provider.CommandResult{
-				Output:     result.Output,
-				ExitCode:  int(result.ExitCode),
-				Stderr:    "",
-				ExecutedAt: time.Now(),
-			}, nil
+		result := outputResp.Invocation.InvocationResults.InvocationResult[0]
+		if !invocationTerminalStatuses[result.InvocationStatus] {
+			// Still Running/Pending — Output/ExitCode aren't final yet.
+			continue
 		}
-	}
 
-	return nil, fmt.Errorf("command execution timeout")
+		stderr := result.ErrorInfo
+		return &provider.CommandResult{
+			Output:     result.Output,
+			ExitCode:   int(result.ExitCode),
+			Stderr:     stderr,
+			ExecutedAt: time.Now(),
+		}, nil
+	}
+}
+
+// isCloudAssistNotReady reports whether err is an Alibaba Cloud API error
+// indicating the target instance's CloudAssist agent isn't ready yet.
+func isCloudAssistNotReady(err error) bool {
+	if apiErr, ok := err.(aliyunerrors.Error); ok {
+		return cloudAssistNotReadyErrorCodes[apiErr.ErrorCode()]
+	}
+	return false
 }
 
 // WaitUntilRunning blocks until the VM reaches the Running state or the timeout expires.
@@ -403,10 +536,13 @@ func (p *AliyunProvider) ListInstanceTypes(ctx context.Context, region string) (
 	return types, nil
 }
 
-// GetDefaultImage returns the default system image ID for the given region.
+// GetDefaultImage returns the default (most recently created) system image
+// ID for the given region.
 func (p *AliyunProvider) GetDefaultImage(ctx context.Context, region string) (string, error) {
-	// Check the image cache first
-	if img, ok := p.imageCache[region]; ok {
+	p.mu.RLock()
+	img, ok := p.imageCache[region]
+	p.mu.RUnlock()
+	if ok {
 		return img, nil
 	}
 
@@ -419,14 +555,24 @@ func (p *AliyunProvider) GetDefaultImage(ctx context.Context, region string) (st
 		return "", fmt.Errorf("failed to describe images: %w", err)
 	}
 
-	if len(resp.Images.Image) > 0 {
-		imageID := resp.Images.Image[0].ImageId
-		p.imageCache[region] = imageID
-		return imageID, nil
+	if len(resp.Images.Image) == 0 {
+		return "", fmt.Errorf("no system image found in region %s", region)
 	}
 
-	// Fall back to a default Ubuntu image
-	return "ubuntu_22_04_64_20G_alibase_20230920.vhd", nil
+	// DescribeImages does not guarantee ordering, so pick the newest by
+	// CreationTime explicitly rather than trusting Images[0].
+	newest := resp.Images.Image[0]
+	for _, candidate := range resp.Images.Image[1:] {
+		if candidate.CreationTime > newest.CreationTime {
+			newest = candidate
+		}
+	}
+
+	p.mu.Lock()
+	p.imageCache[region] = newest.ImageId
+	p.mu.Unlock()
+
+	return newest.ImageId, nil
 }
 
 // Cleanup removes all SandrPod-managed VMs.
