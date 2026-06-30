@@ -1,18 +1,20 @@
 name: Release
 
-# Build CGO-free release binaries and publish them on a tagged release.
-# CGO binaries (sandrpod-tray) are intentionally excluded — they need
-# platform toolchains and are built/distributed separately.
+# On a v* tag: publish CGO-free release binaries AND multi-arch container
+# images to GHCR (ghcr.io/<owner>/{poder,toolbox,toolbox-centos}).
+# CGO binaries (sandrpod-tray) are excluded — they need platform toolchains
+# and are built/distributed separately.
 on:
   push:
     tags:
       - "v*"
 
 permissions:
-  contents: write # required to create the GitHub Release
+  contents: write # create the GitHub Release
+  packages: write # push images to GHCR
 
 jobs:
-  release:
+  binaries:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -57,3 +59,52 @@ jobs:
             dist/sandrpod-agent-*
             dist/SHA256SUMS.txt
           generate_release_notes: true
+
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: poder
+            dockerfile: docker/Dockerfile.poder
+            platforms: linux/amd64,linux/arm64
+          - name: toolbox
+            dockerfile: docker/Dockerfile.toolbox
+            platforms: linux/amd64,linux/arm64
+          # CentOS image is amd64-only here: building it for arm64 under QEMU
+          # emulation is slow enough to risk CI timeouts.
+          - name: toolbox-centos
+            dockerfile: docker/Dockerfile.toolbox.centos
+            platforms: linux/amd64
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image ref (GHCR requires a lowercase path)
+        id: ref
+        run: |
+          owner="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          echo "image=ghcr.io/${owner}/${{ matrix.name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: ${{ matrix.platforms }}
+          push: true
+          tags: |
+            ${{ steps.ref.outputs.image }}:${{ github.ref_name }}
+            ${{ steps.ref.outputs.image }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
