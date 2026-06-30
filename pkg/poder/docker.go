@@ -9,12 +9,15 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
+	"log"
 	"os"
 	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -72,7 +75,6 @@ func (p *DockerPoder) EnsureNetwork(ctx context.Context) error {
 	return err
 }
 
-
 // CreatePod creates a new sandbox container pod.
 func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*PodInfo, error) {
 	// Only ensure the network exists when a custom network is specified
@@ -100,6 +102,17 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 		labels = make(map[string]string)
 	}
 	labels["sandrpod/sandbox-name"] = req.Name
+
+	// ContainerCreate (unlike `docker run`) does not pull a missing image, so
+	// a fresh host needs an explicit pull. Best-effort: if the image already
+	// exists locally this is a no-op; a genuine pull failure is surfaced by the
+	// ContainerCreate below with a clear "No such image" error.
+	if rc, perr := p.dockerClient.ImagePull(ctx, imageName, image.PullOptions{}); perr == nil {
+		_, _ = io.Copy(io.Discard, rc)
+		_ = rc.Close()
+	} else {
+		log.Printf("poder: pull image %q failed (continuing, may exist locally): %v", imageName, perr)
+	}
 
 	containerConfig := &container.Config{
 		Image: imageName,
@@ -208,9 +221,9 @@ func (p *DockerPoder) GetPod(ctx context.Context, podID string) (*PodInfo, error
 		}
 		// Build PodInfo from the Docker inspect response
 		pod = &PodInfo{
-			ID:        info.ID,
-			Name:      info.Name,
-			State:     PodStateStopped,
+			ID:    info.ID,
+			Name:  info.Name,
+			State: PodStateStopped,
 		}
 		// Resolve IP from network settings
 		if p.networkName != "" {
@@ -351,9 +364,9 @@ func (p *DockerPoder) ExecuteCommand(ctx context.Context, podID, command string)
 	}
 
 	return &CommandResult{
-		Output:    stdout.String(),
-		Stderr:    stderr.String(),
-		ExitCode:  int(info.ExitCode),
+		Output:     stdout.String(),
+		Stderr:     stderr.String(),
+		ExitCode:   int(info.ExitCode),
 		ExecutedAt: time.Now(),
 	}, nil
 }
