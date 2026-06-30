@@ -5,6 +5,7 @@ package aws
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,20 +17,24 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	"github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ssm"
+	ssmtypes "github.com/aws/aws-sdk-go-v2/service/ssm/types"
+	"github.com/aws/smithy-go"
 
 	"github.com/sandrpod/sandrpod/pkg/provider"
 )
 
 // AWSProvider AWS Provider
 type AWSProvider struct {
-	region       string
-	accessKey    string
-	secretKey    string
-	ec2Client    *ec2.Client
-	ssmClient    *ssm.Client
-	mu           sync.RWMutex
-	vms          map[string]*provider.VMInfo
-	instanceCache map[string]string
+	region    string
+	accessKey string
+	secretKey string
+	// iamInstanceProfile is attached to launched instances so they become
+	// SSM-managed (required for ExecuteCommand). Empty disables it.
+	iamInstanceProfile string
+	ec2Client          *ec2.Client
+	ssmClient          *ssm.Client
+	mu                 sync.RWMutex
+	vms                map[string]*provider.VMInfo
 }
 
 // Config AWS configuration
@@ -37,6 +42,9 @@ type Config struct {
 	Region    string // Region, e.g. "us-east-1"
 	AccessKey string // Access Key ID
 	SecretKey string // Access Key Secret
+	// IAMInstanceProfile is the instance-profile name attached to new VMs so
+	// SSM can run commands on them. Without it, ExecuteCommand cannot work.
+	IAMInstanceProfile string
 }
 
 // NewAWSProvider creates a new AWS Provider
@@ -62,13 +70,13 @@ func NewAWSProvider(cfg *Config) (*AWSProvider, error) {
 	}
 
 	return &AWSProvider{
-		region:       cfg.Region,
-		accessKey:    cfg.AccessKey,
-		secretKey:    cfg.SecretKey,
-		ec2Client:    ec2.NewFromConfig(awsCfg),
-		ssmClient:    ssm.NewFromConfig(awsCfg),
-		vms:          make(map[string]*provider.VMInfo),
-		instanceCache: make(map[string]string),
+		region:             cfg.Region,
+		accessKey:          cfg.AccessKey,
+		secretKey:          cfg.SecretKey,
+		iamInstanceProfile: cfg.IAMInstanceProfile,
+		ec2Client:          ec2.NewFromConfig(awsCfg),
+		ssmClient:          ssm.NewFromConfig(awsCfg),
+		vms:                make(map[string]*provider.VMInfo),
 	}, nil
 }
 
@@ -118,6 +126,11 @@ func mapEC2ToVMInfo(instance types.Instance) *provider.VMInfo {
 		}
 	}
 
+	createdAt := time.Time{}
+	if instance.LaunchTime != nil {
+		createdAt = *instance.LaunchTime
+	}
+
 	return &provider.VMInfo{
 		ID:           *instance.InstanceId,
 		Name:         name,
@@ -126,20 +139,21 @@ func mapEC2ToVMInfo(instance types.Instance) *provider.VMInfo {
 		State:        mapInstanceState(state),
 		PublicIP:     publicIP,
 		PrivateIP:    privateIP,
-		CreatedAt:    time.Time{},
+		CreatedAt:    createdAt,
 	}
 }
 
 // CreateVM creates a new EC2 VM instance
 func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMRequest) (*provider.VMInfo, error) {
-	// Resolve image ID
+	// Resolve image ID. Fail loudly rather than falling back to a hard-coded
+	// AMI that is region-specific and likely deregistered.
 	imageID := req.ImageID
 	if imageID == "" {
-		var err error
-		imageID, err = p.GetDefaultImage(ctx, req.Region)
+		resolved, err := p.GetDefaultImage(ctx, req.Region)
 		if err != nil {
-			imageID = "ami-0c55b159cbfafe1f0" // Default Ubuntu 22.04
+			return nil, fmt.Errorf("no image specified and default image lookup failed: %w", err)
 		}
+		imageID = resolved
 	}
 
 	// Build tag list
@@ -165,23 +179,38 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 		},
 	}
 
-	// VPC configuration
-	if req.NetworkConfig != nil {
-		if req.NetworkConfig.VpcID != "" {
-			input.SubnetId = aws.String(req.NetworkConfig.SubnetID)
-		}
-		if req.NetworkConfig.SecurityGroup != "" {
-			input.SecurityGroupIds = []string{req.NetworkConfig.SecurityGroup}
+	// IAM instance profile so the instance becomes SSM-managed (required by
+	// ExecuteCommand). Without it, SSM SendCommand has no target to run on.
+	if p.iamInstanceProfile != "" {
+		input.IamInstanceProfile = &types.IamInstanceProfileSpecification{
+			Name: aws.String(p.iamInstanceProfile),
 		}
 	}
 
-	// Public IP - configured via NetworkInterfaces
-	if req.NetworkConfig != nil && req.NetworkConfig.PublicIP {
-		input.NetworkInterfaces = []types.InstanceNetworkInterfaceSpecification{
-			{
+	// Network configuration. A requested public IP MUST be set on a network
+	// interface, and AWS forbids combining top-level SubnetId/SecurityGroupIds
+	// with NetworkInterfaces — so in that case the subnet and security group
+	// move INTO the interface.
+	if nc := req.NetworkConfig; nc != nil {
+		if nc.PublicIP {
+			ni := types.InstanceNetworkInterfaceSpecification{
 				AssociatePublicIpAddress: aws.Bool(true),
-				DeviceIndex:             aws.Int32(0),
-			},
+				DeviceIndex:              aws.Int32(0),
+			}
+			if nc.SubnetID != "" {
+				ni.SubnetId = aws.String(nc.SubnetID)
+			}
+			if nc.SecurityGroup != "" {
+				ni.Groups = []string{nc.SecurityGroup}
+			}
+			input.NetworkInterfaces = []types.InstanceNetworkInterfaceSpecification{ni}
+		} else {
+			if nc.SubnetID != "" {
+				input.SubnetId = aws.String(nc.SubnetID)
+			}
+			if nc.SecurityGroup != "" {
+				input.SecurityGroupIds = []string{nc.SecurityGroup}
+			}
 		}
 	}
 
@@ -211,22 +240,34 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 	instance := resp.Instances[0]
 	instanceID := *instance.InstanceId
 
-	// Wait for the instance to reach running state
+	// Wait for the instance to reach running state.
 	waiter := ec2.NewInstanceRunningWaiter(p.ec2Client)
-	err = waiter.Wait(ctx, &ec2.DescribeInstancesInput{
+	waitErr := waiter.Wait(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: []string{instanceID},
 	}, 5*time.Minute)
-	if err != nil {
-		// The instance may have been created even if the waiter timed out
-		fmt.Printf("warning: instance %s may not be running yet: %v\n", instanceID, err)
-	}
 
+	// Re-describe to capture the assigned public/private IPs and the real
+	// state — the scheduler needs PublicIP to bootstrap Poder, so a bare
+	// instance ID with a hard-coded Pending state isn't enough.
 	vmInfo := &provider.VMInfo{
 		ID:           instanceID,
 		Name:         req.Name,
 		Region:       p.region,
 		InstanceType: req.InstanceType,
 		State:        provider.VMStatePending,
+	}
+	desc, derr := p.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+		InstanceIds: []string{instanceID},
+	})
+	if derr == nil && len(desc.Reservations) > 0 && len(desc.Reservations[0].Instances) > 0 {
+		vmInfo = mapEC2ToVMInfo(desc.Reservations[0].Instances[0])
+		if vmInfo.Name == "" {
+			vmInfo.Name = req.Name
+		}
+	} else if waitErr != nil {
+		// Couldn't confirm the instance is up — surface the failure instead
+		// of returning a VM that looks ready but isn't.
+		return vmInfo, fmt.Errorf("instance %s created but not confirmed running: %w", instanceID, waitErr)
 	}
 
 	p.mu.Lock()
@@ -254,15 +295,9 @@ func (p *AWSProvider) DeleteVM(ctx context.Context, vmID string) error {
 
 // GetVM retrieves a VM by ID
 func (p *AWSProvider) GetVM(ctx context.Context, vmID string) (*provider.VMInfo, error) {
-	// Check local cache first
-	p.mu.RLock()
-	if vm, ok := p.vms[vmID]; ok {
-		p.mu.RUnlock()
-		return vm, nil
-	}
-	p.mu.RUnlock()
-
-	// Query EC2
+	// Always query EC2 for live state. A read-through cache here would return
+	// the stale Pending snapshot recorded at create time, so health checks
+	// (VMReady) would never succeed.
 	resp, err := p.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: []string{vmID},
 	})
@@ -274,7 +309,11 @@ func (p *AWSProvider) GetVM(ctx context.Context, vmID string) (*provider.VMInfo,
 		return nil, fmt.Errorf("instance %s not found", vmID)
 	}
 
-	return mapEC2ToVMInfo(resp.Reservations[0].Instances[0]), nil
+	vm := mapEC2ToVMInfo(resp.Reservations[0].Instances[0])
+	p.mu.Lock()
+	p.vms[vmID] = vm
+	p.mu.Unlock()
+	return vm, nil
 }
 
 // ListVMs returns all VMs tagged with sandrpod
@@ -298,68 +337,94 @@ func (p *AWSProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error) {
 	return vms, nil
 }
 
-// ExecuteCommand runs a shell command on a VM via SSM
-func (p *AWSProvider) ExecuteCommand(ctx context.Context, vmID, command string) (*provider.CommandResult, error) {
-	// Use SSM SendCommand
-	input := &ssm.SendCommandInput{
-		DocumentName: aws.String("AWS-RunShellScript"),
-		InstanceIds:  []string{vmID},
-		Parameters: map[string][]string{
-			"commands": {command},
-		},
-	}
+// ssmExecTimeout bounds how long ExecuteCommand waits for an SSM command to
+// finish when the caller's context carries no deadline of its own.
+const ssmExecTimeout = 5 * time.Minute
 
-	cmdResp, err := p.ssmClient.SendCommand(ctx, input)
-	if err != nil {
+// ssmRegistrationTimeout bounds how long we retry SendCommand while a freshly
+// launched instance is still registering with SSM (InvalidInstanceId).
+const ssmRegistrationTimeout = 3 * time.Minute
+
+// ExecuteCommand runs a shell command on a VM via SSM and waits for the result.
+func (p *AWSProvider) ExecuteCommand(ctx context.Context, vmID, command string) (*provider.CommandResult, error) {
+	// A just-launched instance isn't an SSM-managed instance until its agent
+	// registers (~1-2 min after boot). Until then SendCommand returns
+	// InvalidInstanceId; retry until it's accepted or the deadline passes.
+	sendCtx := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		sendCtx, cancel = context.WithTimeout(ctx, ssmRegistrationTimeout)
+		defer cancel()
+	}
+	var cmdResp *ssm.SendCommandOutput
+	for {
+		var err error
+		cmdResp, err = p.ssmClient.SendCommand(sendCtx, &ssm.SendCommandInput{
+			DocumentName: aws.String("AWS-RunShellScript"),
+			InstanceIds:  []string{vmID},
+			Parameters:   map[string][]string{"commands": {command}},
+		})
+		if err == nil {
+			break
+		}
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "InvalidInstanceId" {
+			select {
+			case <-sendCtx.Done():
+				return nil, fmt.Errorf("instance %s not SSM-ready before timeout: %w", vmID, err)
+			case <-time.After(5 * time.Second):
+				continue
+			}
+		}
 		return nil, fmt.Errorf("failed to send command: %w", err)
 	}
+	commandID := aws.ToString(cmdResp.Command.CommandId)
 
-	commandID := *cmdResp.Command.CommandId
-
-	// Poll until the command finishes
-	describeInput := &ssm.ListCommandInvocationsInput{
-		CommandId:  aws.String(commandID),
-		InstanceId: aws.String(vmID),
+	// Bound the wait: honor an existing context deadline, otherwise apply a
+	// default. Without this, a long command (e.g. a Docker install that runs
+	// for minutes) used to fall out of a fixed 30-iteration loop and be
+	// reported as exit 0 — a false success.
+	waitCtx := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(ctx, ssmExecTimeout)
+		defer cancel()
 	}
 
-	var output string
-	var exitCode int
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-waitCtx.Done():
+			return nil, fmt.Errorf("command %s on %s did not finish before timeout: %w", commandID, vmID, waitCtx.Err())
+		case <-ticker.C:
+		}
 
-	for range 30 {
-		time.Sleep(2 * time.Second)
-
-		resp, err := p.ssmClient.ListCommandInvocations(ctx, describeInput)
+		inv, err := p.ssmClient.GetCommandInvocation(waitCtx, &ssm.GetCommandInvocationInput{
+			CommandId:  aws.String(commandID),
+			InstanceId: aws.String(vmID),
+		})
 		if err != nil {
+			// The invocation may not be registered for a moment right after
+			// SendCommand; keep polling until the deadline.
 			continue
 		}
 
-		if len(resp.CommandInvocations) > 0 {
-			invocation := resp.CommandInvocations[0]
-			if invocation.Status != "Pending" && invocation.Status != "InProgress" {
-				// Retrieve command output
-				outputResp, _ := p.ssmClient.GetCommandInvocation(ctx, &ssm.GetCommandInvocationInput{
-					CommandId: aws.String(commandID),
-					InstanceId: aws.String(vmID),
-				})
-				if outputResp != nil {
-					output = *outputResp.StandardOutputContent
-				}
-				if invocation.Status == "Success" {
-					exitCode = 0
-				} else {
-					exitCode = 1
-				}
-				break
-			}
+		switch inv.Status {
+		case ssmtypes.CommandInvocationStatusPending,
+			ssmtypes.CommandInvocationStatusInProgress,
+			ssmtypes.CommandInvocationStatusDelayed:
+			continue
 		}
-	}
 
-	return &provider.CommandResult{
-		Output:     strings.TrimSpace(output),
-		ExitCode:   exitCode,
-		Stderr:     "",
-		ExecutedAt: time.Now(),
-	}, nil
+		// Terminal state — ResponseCode is the command's real exit code.
+		return &provider.CommandResult{
+			Output:     strings.TrimSpace(aws.ToString(inv.StandardOutputContent)),
+			Stderr:     strings.TrimSpace(aws.ToString(inv.StandardErrorContent)),
+			ExitCode:   int(inv.ResponseCode),
+			ExecutedAt: time.Now(),
+		}, nil
+	}
 }
 
 // WaitUntilRunning blocks until the VM reaches the running state
@@ -448,12 +513,18 @@ func (p *AWSProvider) GetDefaultImage(ctx context.Context, region string) (strin
 	}
 
 	if len(resp.Images) > 0 {
-		// Return the most recent image
-		return *resp.Images[0].ImageId, nil
+		// DescribeImages does not guarantee ordering, so pick the newest by
+		// CreationDate explicitly rather than trusting Images[0].
+		newest := resp.Images[0]
+		for _, img := range resp.Images[1:] {
+			if aws.ToString(img.CreationDate) > aws.ToString(newest.CreationDate) {
+				newest = img
+			}
+		}
+		return aws.ToString(newest.ImageId), nil
 	}
 
-	// Fall back to a known default image
-	return "ami-0c55b159cbfafe1f0", nil
+	return "", fmt.Errorf("no Ubuntu 22.04 AMI found in region %s", region)
 }
 
 // Cleanup removes all VMs managed by this provider
