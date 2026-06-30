@@ -71,7 +71,7 @@ type Uploader struct {
 	mu     sync.Mutex
 	cursor cursorState
 
-	stop   chan struct{}
+	stop    chan struct{}
 	stopped chan struct{}
 }
 
@@ -183,11 +183,20 @@ func (u *Uploader) cycle(ctx context.Context) error {
 		}
 		if fileToFinish != "" {
 			// Rotated file fully drained — delete it so the dir doesn't grow.
-			_ = os.Remove(fileToFinish)
+			// A failed remove only leaks disk (no data loss); log so an
+			// operator can notice a growing audit dir.
+			if err := os.Remove(fileToFinish); err != nil && !os.IsNotExist(err) {
+				fmt.Fprintf(os.Stderr, "audit upload: remove drained file %s: %v\n", fileToFinish, err)
+			}
 			u.mu.Lock()
 			u.cursor = cursorState{}
 			u.mu.Unlock()
-			_ = u.saveCursor()
+			// A failed cursor reset means the next run may re-upload this
+			// file's events (delivery is at-least-once, so dupes are safe),
+			// but it should not pass silently.
+			if err := u.saveCursor(); err != nil {
+				fmt.Fprintf(os.Stderr, "audit upload: reset cursor after %s: %v\n", fileToFinish, err)
+			}
 		}
 	}
 }
