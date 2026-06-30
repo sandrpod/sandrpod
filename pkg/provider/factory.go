@@ -64,15 +64,6 @@ func (f *Factory) Get(name string) (Provider, error) {
 	return p, nil
 }
 
-// MustGet retrieves a provider by name and panics if not found.
-func (f *Factory) MustGet(name string) Provider {
-	p, err := f.Get(name)
-	if err != nil {
-		panic(err)
-	}
-	return p
-}
-
 // List returns all registered providers.
 func (f *Factory) List() []Provider {
 	f.mu.RLock()

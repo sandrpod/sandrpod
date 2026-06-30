@@ -91,7 +91,10 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 
 // createVMWithProvider provisions a VM through the specified cloud provider
 func (s *Scheduler) createVMWithProvider(ctx context.Context, providerType string, req *CreateSandboxRequest) (*provider.VMInfo, error) {
-	p := provider.GetFactory().MustGet(providerType)
+	p, err := provider.GetFactory().Get(providerType)
+	if err != nil {
+		return nil, err
+	}
 
 	createReq := &provider.CreateVMRequest{
 		Name:         fmt.Sprintf("sandrpod-%s", req.Name),
@@ -118,7 +121,10 @@ func (s *Scheduler) createVMWithProvider(ctx context.Context, providerType strin
 
 // waitForVMReady polls until the VM reports a healthy status or the deadline passes
 func (s *Scheduler) waitForVMReady(ctx context.Context, providerType, vmID string) error {
-	p := provider.GetFactory().MustGet(providerType)
+	p, err := provider.GetFactory().Get(providerType)
+	if err != nil {
+		return err
+	}
 
 	timeout := 5 * time.Minute
 	deadline := time.Now().Add(timeout)
@@ -144,7 +150,10 @@ func (s *Scheduler) waitForVMReady(ctx context.Context, providerType, vmID strin
 
 // setupPoderOnVM installs Docker and starts the Poder container on a VM
 func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType string, vm *provider.VMInfo) error {
-	p := provider.GetFactory().MustGet(providerType)
+	p, err := provider.GetFactory().Get(providerType)
+	if err != nil {
+		return err
+	}
 
 	// 1. Install Docker
 	installDocker := `curl -fsSL https://get.docker.com | sh`
@@ -233,7 +242,7 @@ func (s *Scheduler) createJobForPoder(req *CreateSandboxRequest, poder *PoderInf
 }
 
 // shellQuoteSingleValue escapes a value for safe use inside a shell single-quoted string.
-// Single quotes are replaced with the '\'' pattern so the string can be embedded without shell injection.
+// Single quotes are replaced with the '\” pattern so the string can be embedded without shell injection.
 func shellQuoteSingleValue(s string) string {
 	result := ""
 	for _, r := range s {
