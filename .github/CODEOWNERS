@@ -1,0 +1,32 @@
+# Code owners — automatically requested for review on matching paths.
+# Replace @sandrpod/maintainers with the real GitHub team or usernames
+# (e.g. @your-handle) before relying on auto-assignment.
+
+# Default owner for everything in the repo.
+*                       @sandrpod/maintainers
+
+# Control plane & worker.
+/cmd/server/            @sandrpod/maintainers
+/cmd/poder/             @sandrpod/maintainers
+/pkg/tunnel/            @sandrpod/maintainers
+/pkg/sandpod/           @sandrpod/maintainers
+/pkg/store/             @sandrpod/maintainers
+
+# Sandbox runtime & MCP bridge.
+/pkg/toolbox/           @sandrpod/maintainers
+/pkg/mcpbridge/         @sandrpod/maintainers
+/cmd/toolbox/           @sandrpod/maintainers
+/cmd/agent/             @sandrpod/maintainers
+
+# Security-sensitive: employee-PC permission gate & audit.
+/pkg/permission/        @sandrpod/maintainers
+/pkg/audit/             @sandrpod/maintainers
+/pkg/notify/            @sandrpod/maintainers
+
+# Cloud providers.
+/pkg/provider/          @sandrpod/maintainers
+
+# Release & CI plumbing.
+/.github/               @sandrpod/maintainers
+/docker/                @sandrpod/maintainers
+/Makefile               @sandrpod/maintainers
