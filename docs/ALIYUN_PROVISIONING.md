@@ -58,10 +58,14 @@ Add pure-function unit tests mirroring `pkg/provider/aws/aws_test.go`
 Static AccessKey is the simplest:
 
 ```bash
-ALIYUN_ACCESS_KEY_ID=LTAI...
-ALIYUN_ACCESS_KEY_SECRET=...
-ALIYUN_REGION=cn-hangzhou          # confirm the exact env var name in config.go
+ALIYUN_ACCESS_KEY=LTAI...          # RAM user AccessKey ID
+ALIYUN_SECRET_KEY=...              # RAM user AccessKey Secret
+ALIYUN_REGION=cn-hangzhou          # default cn-hangzhou
 ```
+
+> Setting `ALIYUN_ACCESS_KEY` + `ALIYUN_SECRET_KEY` is what **enables** the
+> provider — `aliyun.Register()` skips registration when either is empty
+> (`pkg/provider/aliyun/register.go`).
 
 The RAM principal needs at least: `ecs:RunInstances`/`CreateInstance`,
 `ecs:StartInstance`, `ecs:DeleteInstance`, `ecs:DescribeInstances`,
@@ -113,7 +117,7 @@ so the server must be reachable from the ECS VM.
 
 | Variable | Required | Purpose |
 |----------|----------|---------|
-| `ALIYUN_ACCESS_KEY_ID` / `ALIYUN_ACCESS_KEY_SECRET` | **yes** | Aliyun API auth |
+| `ALIYUN_ACCESS_KEY` / `ALIYUN_SECRET_KEY` | **yes** | Aliyun API auth (RAM user AccessKey) |
 | `ALIYUN_REGION` | yes | target region (e.g. `cn-hangzhou`) |
 | `SANDRPOD_VM_SUBNET_ID` | **yes** | VSwitch ID |
 | `SANDRPOD_VM_SECURITY_GROUP` | **yes** | security group ID |

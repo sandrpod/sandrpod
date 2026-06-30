@@ -6,6 +6,7 @@ package aliyun
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
@@ -129,60 +130,55 @@ func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMReq
 		imageID = resolved
 	}
 
-	// Build the create instance request
-	createReq := ecs.CreateCreateInstanceRequest()
-	createReq.RegionId = req.Region
-	createReq.ImageId = imageID
-	createReq.InstanceType = req.InstanceType
-	createReq.InstanceName = req.Name
+	// RunInstances both creates and auto-starts the instance in a single call.
+	// The older CreateInstance leaves the instance Stopped, and a separate
+	// StartInstance races its initialization (IncorrectInstanceStatus), so we
+	// mirror the AWS provider's RunInstances flow here.
+	runReq := ecs.CreateRunInstancesRequest()
+	runReq.RegionId = req.Region
+	runReq.ImageId = imageID
+	runReq.InstanceType = req.InstanceType
+	runReq.InstanceName = req.Name
+	runReq.Amount = requests.NewInteger(1)
+
+	// Tag instances so ListVMs and Cleanup can find them.
+	tags := []ecs.RunInstancesTag{{Key: "sandrpod", Value: "true"}}
+	for k, v := range req.Tags {
+		tags = append(tags, ecs.RunInstancesTag{Key: k, Value: v})
+	}
+	runReq.Tag = &tags
 
 	// Security group
 	if req.NetworkConfig != nil && req.NetworkConfig.SecurityGroup != "" {
-		createReq.SecurityGroupId = req.NetworkConfig.SecurityGroup
+		runReq.SecurityGroupId = req.NetworkConfig.SecurityGroup
 	}
 
 	// VSwitch (subnet). The scheduler only ever populates SubnetID (never
 	// VpcID), so gating this on VpcID being set meant VSwitchId was never
 	// applied and instances landed in a default/random vswitch.
 	if req.NetworkConfig != nil && req.NetworkConfig.SubnetID != "" {
-		createReq.VSwitchId = req.NetworkConfig.SubnetID
+		runReq.VSwitchId = req.NetworkConfig.SubnetID
 	}
 
 	// Public IP
 	if req.NetworkConfig != nil && req.NetworkConfig.PublicIP {
-		createReq.InternetMaxBandwidthOut = requests.NewInteger(10) // 10 Mbps
+		runReq.InternetMaxBandwidthOut = requests.NewInteger(10) // 10 Mbps
 	}
 
 	// Disk configuration
-	if req.DiskConfig != nil {
-		if req.DiskConfig.SizeGiB > 0 {
-			createReq.SystemDiskSize = requests.NewInteger(req.DiskConfig.SizeGiB)
-			createReq.SystemDiskCategory = req.DiskConfig.VolumeType
-		}
+	if req.DiskConfig != nil && req.DiskConfig.SizeGiB > 0 {
+		runReq.SystemDiskSize = strconv.Itoa(req.DiskConfig.SizeGiB)
+		runReq.SystemDiskCategory = req.DiskConfig.VolumeType
 	}
 
-	// Create the instance
-	resp, err := p.ecsClient.CreateInstance(createReq)
+	resp, err := p.ecsClient.RunInstances(runReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create instance: %w", err)
+		return nil, fmt.Errorf("failed to run instance: %w", err)
 	}
-
-	instanceID := resp.InstanceId
-
-	// Start the instance
-	startReq := ecs.CreateStartInstanceRequest()
-	startReq.InstanceId = instanceID
-	_, err = p.ecsClient.StartInstance(startReq)
-	if err != nil {
-		// If start fails, clean up the instance
-		delReq := ecs.CreateDeleteInstanceRequest()
-		delReq.InstanceId = instanceID
-		delReq.Force = "true"
-		if _, delErr := p.ecsClient.DeleteInstance(delReq); delErr != nil {
-			return nil, fmt.Errorf("failed to start instance: %w (cleanup also failed: %v)", err, delErr)
-		}
-		return nil, fmt.Errorf("failed to start instance: %w", err)
+	if len(resp.InstanceIdSets.InstanceIdSet) == 0 {
+		return nil, fmt.Errorf("RunInstances returned no instance id")
 	}
+	instanceID := resp.InstanceIdSets.InstanceIdSet[0]
 
 	// Build a baseline VMInfo in case the IP-polling below never observes a
 	// ready instance — callers (the scheduler) still get a usable record.
