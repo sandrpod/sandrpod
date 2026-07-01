@@ -36,7 +36,7 @@ go run ./cmd/server -port 8080
 # Run API Server with SQLite persistence
 go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
 
-# Run API Server for cloud providers (AWS/Aliyun) — public-url is sent to cloud VMs for callback
+# Run API Server for cloud providers (AWS/Aliyun/Azure/GCP) — public-url is sent to cloud VMs for callback
 go run ./cmd/server -port 8080 -public-url https://api.example.com -db sqlite:./data/sandrpod.db
 
 # Run Poder (requires Docker socket; -network 指定容器网络，默认 bridge)
@@ -108,7 +108,7 @@ Client → API Server (Control Plane)
 
 ### Key Packages
 
-- `pkg/provider/`: Cloud provider abstraction layer (AWS, Aliyun). Factory pattern for dynamic provider registration.
+- `pkg/provider/`: Cloud provider abstraction layer (AWS, Aliyun, Azure, GCP). Factory pattern for dynamic provider registration. AWS/Aliyun/Azure use managed run-command APIs for remote exec (SSM / CloudAssist / Run Command); GCP has no such API so it uses an SSH executor with a per-VM ephemeral key (`pkg/provider/gcp/ssh.go`).
 - `pkg/poder/`: Pod executor implementations. Docker implementation for local development.
 - `pkg/sandpod/`: SandPod core types, state machine, Repository interfaces (`repo.go`), memory-backed store implementations, Scheduler.
 - `pkg/store/`: Repository implementations — in-memory adapter (`memory.go`) and SQLite backend (`sqlite/`). Plug-in via `store.Stores` aggregate.

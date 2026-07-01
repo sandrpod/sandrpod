@@ -165,8 +165,13 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType, region str
 		return err
 	}
 
-	// 1. Install Docker
-	installDocker := `curl -fsSL https://get.docker.com | sh`
+	// 1. Install Docker. Wait for cloud-init to finish first: GCE Ubuntu images
+	// rewrite the apt mirror in /etc/apt/sources.list during early boot, and
+	// running apt-get (inside the Docker install) mid-rewrite hits a torn file
+	// ("Type '...' is not known on line N"). `cloud-init status --wait` blocks
+	// until first-boot config is done; it's a no-op (or absent → `|| true`) on
+	// images where cloud-init has already finished, so it's safe for all clouds.
+	installDocker := `cloud-init status --wait >/dev/null 2>&1 || true; curl -fsSL https://get.docker.com | sh`
 	log.Printf("[Scheduler] Installing Docker on VM %s", vm.ID)
 
 	result, err := p.ExecuteCommand(ctx, vm.ID, installDocker)

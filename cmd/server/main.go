@@ -27,6 +27,8 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/provider"
 	"github.com/sandrpod/sandrpod/pkg/provider/aliyun"
 	"github.com/sandrpod/sandrpod/pkg/provider/aws"
+	"github.com/sandrpod/sandrpod/pkg/provider/azure"
+	"github.com/sandrpod/sandrpod/pkg/provider/gcp"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/store"
 	sqlitestore "github.com/sandrpod/sandrpod/pkg/store/sqlite"
@@ -341,7 +343,14 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			vmTerminated := false
 			if isCloudProvider(poder.ProviderType) && poder.VMID != "" && r.URL.Query().Get("keep_vm") != "true" {
 				if p, err := provider.GetFactory().Get(poder.ProviderType); err == nil {
-					if err := p.DeleteVM(r.Context(), poder.VMID); err != nil {
+					// VM termination can take minutes (e.g. a GCP instance delete
+					// waits ~90s for the operation). Use a detached context so a
+					// client disconnect doesn't cancel the delete mid-flight —
+					// otherwise the VM leaks and the log shows "context canceled".
+					delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+					err := p.DeleteVM(delCtx, poder.VMID)
+					cancel()
+					if err != nil {
 						log.Printf("DELETE poder %s: failed to terminate VM %s: %v", pID, poder.VMID, err)
 					} else {
 						vmTerminated = true
@@ -1162,6 +1171,16 @@ func main() {
 	} else {
 		log.Printf("Aliyun provider registered")
 	}
+	if err := azure.Register(); err != nil {
+		log.Printf("Warning: Failed to register Azure provider: %v", err)
+	} else {
+		log.Printf("Azure provider registered")
+	}
+	if err := gcp.Register(); err != nil {
+		log.Printf("Warning: Failed to register GCP provider: %v", err)
+	} else {
+		log.Printf("GCP provider registered")
+	}
 
 	factory := provider.GetFactory()
 	log.Printf("Registered providers: %v", factory.Names())
@@ -1455,7 +1474,7 @@ func cleanupOfflinePoders(ctx context.Context, ps podpkg.PoderRepository, timeou
 // dedicated cloud VM that should be terminated on reclamation.
 func isCloudProvider(providerType string) bool {
 	switch providerType {
-	case "aws", "aliyun":
+	case "aws", "aliyun", "azure", "gcp":
 		return true
 	default:
 		return false
