@@ -108,7 +108,7 @@ Client → API Server (Control Plane)
 
 ### Key Packages
 
-- `pkg/provider/`: Cloud provider abstraction layer (AWS, Aliyun, Azure, GCP). Factory pattern for dynamic provider registration. AWS/Aliyun/Azure use managed run-command APIs for remote exec (SSM / CloudAssist / Run Command); GCP has no such API so it uses an SSH executor with a per-VM ephemeral key (`pkg/provider/gcp/ssh.go`).
+- `pkg/provider/`: Cloud provider abstraction layer (AWS, Aliyun, Azure, GCP, Tencent, DigitalOcean, Hetzner, Oracle). Factory pattern for dynamic provider registration. Two remote-exec backends: **managed run-command** (AWS SSM / Aliyun CloudAssist / Azure Run Command / Tencent TAT / Oracle Instance Agent) and **SSH** for clouds with no such API (GCP, DigitalOcean, Hetzner). The SSH path uses a per-VM ephemeral ed25519 key — GCP injects it via instance metadata + sudo (`pkg/provider/gcp/ssh.go`), while DigitalOcean/Hetzner inject it via cloud-init as root and share `pkg/provider/sshexec`.
 - `pkg/poder/`: Pod executor implementations. Docker implementation for local development.
 - `pkg/sandpod/`: SandPod core types, state machine, Repository interfaces (`repo.go`), memory-backed store implementations, Scheduler.
 - `pkg/store/`: Repository implementations — in-memory adapter (`memory.go`) and SQLite backend (`sqlite/`). Plug-in via `store.Stores` aggregate.

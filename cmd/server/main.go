@@ -28,7 +28,11 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/provider/aliyun"
 	"github.com/sandrpod/sandrpod/pkg/provider/aws"
 	"github.com/sandrpod/sandrpod/pkg/provider/azure"
+	"github.com/sandrpod/sandrpod/pkg/provider/digitalocean"
 	"github.com/sandrpod/sandrpod/pkg/provider/gcp"
+	"github.com/sandrpod/sandrpod/pkg/provider/hetzner"
+	"github.com/sandrpod/sandrpod/pkg/provider/oracle"
+	"github.com/sandrpod/sandrpod/pkg/provider/tencent"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/store"
 	sqlitestore "github.com/sandrpod/sandrpod/pkg/store/sqlite"
@@ -1190,6 +1194,26 @@ func main() {
 	} else {
 		log.Printf("GCP provider registered")
 	}
+	if err := tencent.Register(); err != nil {
+		log.Printf("Warning: Failed to register Tencent provider: %v", err)
+	} else {
+		log.Printf("Tencent provider registered")
+	}
+	if err := digitalocean.Register(); err != nil {
+		log.Printf("Warning: Failed to register DigitalOcean provider: %v", err)
+	} else {
+		log.Printf("DigitalOcean provider registered")
+	}
+	if err := hetzner.Register(); err != nil {
+		log.Printf("Warning: Failed to register Hetzner provider: %v", err)
+	} else {
+		log.Printf("Hetzner provider registered")
+	}
+	if err := oracle.Register(); err != nil {
+		log.Printf("Warning: Failed to register Oracle provider: %v", err)
+	} else {
+		log.Printf("Oracle provider registered")
+	}
 
 	factory := provider.GetFactory()
 	log.Printf("Registered providers: %v", factory.Names())
@@ -1483,7 +1507,7 @@ func cleanupOfflinePoders(ctx context.Context, ps podpkg.PoderRepository, timeou
 // dedicated cloud VM that should be terminated on reclamation.
 func isCloudProvider(providerType string) bool {
 	switch providerType {
-	case "aws", "aliyun", "azure", "gcp":
+	case "aws", "aliyun", "azure", "gcp", "tencent", "digitalocean", "hetzner", "oracle":
 		return true
 	default:
 		return false
