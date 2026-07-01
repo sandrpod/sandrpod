@@ -167,15 +167,22 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 源码：`pkg/sdk/python/cli/`，已安装到本机（开发模式，改源码即时生效）：
 
 ```bash
-# Sandbox 操作
+# Sandbox 操作（--provider: local | aws | aliyun | azure | gcp）
 sandrpod-cli list
+sandrpod-cli create <name> --provider gcp --region asia-east1-a --instance-type e2-medium
 sandrpod-cli create <name> --provider local --image sandrpod/toolbox:latest
+sandrpod-cli create <name> --poder <poder-id>          # 指定 poder 直建（跳过调度器）
 sandrpod-cli delete <name>
-sandrpod-cli exec <name> "ls /workspace"
+sandrpod-cli execute <name> "ls /workspace"            # 一次性执行
+sandrpod-cli stream <name> "for i in 1 2 3; do echo $i; sleep 1; done"  # 流式输出
 
-# Poder 管理（新）
+# Poder 管理
 sandrpod-cli poder list
-sandrpod-cli poder delete <poder-id> [-y]
+sandrpod-cli poder get <poder-id>
+sandrpod-cli poder delete <poder-id> [-y] [--keep-vm]  # --keep-vm: 只删记录不终止云 VM
+
+# 文件操作（fs replace 等）
+sandrpod-cli fs replace <name> <file> <pattern> <new-value>
 ```
 
 ### langchain-sandrpod（Python SDK for deepagents）

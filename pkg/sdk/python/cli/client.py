@@ -101,7 +101,7 @@ class CLIClient:
         Args:
             name: 名称
             region: 区域
-            provider_type: Provider 类型 (aws, aliyun, local)
+            provider_type: Provider 类型 (local, aws, aliyun, azure, gcp)
             instance_type: 实例类型 (可选)
             image: 容器镜像 ID (可选，空则使用 Poder 默认镜像)
 
@@ -186,6 +186,58 @@ class CLIClient:
         }
         resp = self._request("POST", f"/api/v1/sandboxes/execute?sandbox={name}", json=data, timeout=timeout)
         return resp.json()
+
+    def stream_execute(
+        self,
+        name: str,
+        language: str,
+        code: str,
+        timeout: int = 30,
+    ):
+        """
+        流式执行代码，逐个 yield 解析后的 SSE 事件。
+
+        server 的 /api/v1/sandboxes/stream 通过 query 参数接收 language/code/timeout，
+        并以 SSE 回传（`event: <type>\\ndata: <data>\\n\\n`，type ∈ stdout/stderr/
+        error/exit）。这里按行解析，屏蔽 SSE 协议噪声。
+
+        Yields:
+            dict: {"event": stdout|stderr|error|exit, "data": str}
+        """
+        params = {
+            "sandbox": name,
+            "language": language,
+            "code": code,
+            "timeout": str(timeout),
+        }
+        url = f"{self.api_url}/api/v1/sandboxes/stream"
+        with self.session.get(url, params=params, stream=True, timeout=timeout) as resp:
+            self._handle_error(resp)
+            yield from self._iter_sse_events(resp.iter_lines(decode_unicode=True))
+
+    @staticmethod
+    def _iter_sse_events(lines):
+        """
+        把 SSE 文本行流解析成 {"event", "data"} 事件。
+
+        Toolbox 的格式为 `event: <type>\\ndata: <data>\\n\\n`；多行输出块的
+        续行没有 `data:` 前缀，按当前 event 的续行处理。
+        """
+        event = None
+        for line in lines:
+            if line is None or line == "":
+                event = None  # blank line ends the current SSE event
+                continue
+            if line.startswith("event:"):
+                event = line[len("event:"):].strip()
+            elif line.startswith("data:"):
+                data = line[len("data:"):]
+                if data.startswith(" "):
+                    data = data[1:]
+                yield {"event": event or "stdout", "data": data}
+            else:
+                # Continuation line of a multi-line data block.
+                yield {"event": event or "stdout", "data": line}
 
     # ========== 文件操作 ==========
 
@@ -293,9 +345,46 @@ class CLIClient:
         resp = self._request("GET", "/api/v1/poders")
         return resp.json().get("poders", [])
 
-    def delete_poder(self, poder_id: str) -> None:
-        """删除 Poder 记录（若在线则同时断开 tunnel）"""
-        self._request("DELETE", f"/api/v1/poders/{poder_id}")
+    def get_poder(self, poder_id: str) -> Dict[str, Any]:
+        """获取单个 Poder 信息"""
+        resp = self._request("GET", f"/api/v1/poders/{poder_id}")
+        return resp.json()
+
+    def delete_poder(self, poder_id: str, keep_vm: bool = False) -> None:
+        """
+        删除 Poder 记录（若在线则同时断开 tunnel）。
+
+        对云 provider（aws/aliyun/azure/gcp），默认同时终止其底层 VM；
+        keep_vm=True 时只删记录、保留 VM。
+        """
+        path = f"/api/v1/poders/{poder_id}"
+        if keep_vm:
+            path += "?keep_vm=true"
+        self._request("DELETE", path)
+
+    def create_sandbox_on_poder(
+        self,
+        poder_id: str,
+        name: str,
+        region: str = "local",
+        provider_type: str = "local",
+        instance_type: str = "",
+        image: str = "",
+    ) -> Dict[str, Any]:
+        """
+        在指定 Poder 上直接创建 Sandbox（跳过调度器），返回 sandbox 记录。
+        """
+        data: Dict[str, Any] = {
+            "name": name,
+            "region": region,
+            "provider_type": provider_type,
+        }
+        if instance_type:
+            data["instance_type"] = instance_type
+        if image:
+            data["image_id"] = image
+        resp = self._request("POST", f"/api/v1/poders/{poder_id}/sandboxes", json=data)
+        return resp.json()
 
     # ========== Session 操作 ==========
 

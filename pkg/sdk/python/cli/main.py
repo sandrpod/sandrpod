@@ -166,14 +166,26 @@ def list(ctx):
 @click.argument("name")
 @click.option("--region", default="local", help="Region")
 @click.option("--provider", "--provider-type", "provider_type", default="local",
-              help="Provider type: aws, aliyun, local")
+              help="Provider type: local, aws, aliyun, azure, gcp")
 @click.option("--instance-type", default="", help="Instance type (optional)")
 @click.option("--image", default="", help="Container image ID (optional, uses Poder default if omitted)")
+@click.option("--poder", default=None, help="Target a specific Poder ID (bypasses the scheduler)")
 @click.pass_context
-def create(ctx, name, region, provider_type, instance_type, image):
+def create(ctx, name, region, provider_type, instance_type, image, poder):
     """Create a sandbox"""
     client = ctx.obj["client"]
     try:
+        # --poder: create directly on a specific Poder (returns a sandbox record,
+        # not a scheduler job).
+        if poder:
+            sb = client.create_sandbox_on_poder(
+                poder, name, region, provider_type, instance_type, image
+            )
+            click.echo(f"Sandbox:  {sb.get('name', name)}")
+            click.echo(f"State:    {sb.get('state', 'N/A')}")
+            click.echo(f"Poder ID: {sb.get('poder_id', poder)}")
+            click.echo(f"IP:       {sb.get('ip', 'N/A')}")
+            return
         resp = client.create_sandbox(name, region, provider_type, instance_type, image)
         job_id = resp.get("job_id", "N/A")
         status = resp.get("status", "N/A")
@@ -308,6 +320,36 @@ def execute(ctx, name, code, language, timeout):
             click.echo(f"{result.get('stdout')}")
         if exit_code != 0 and result.get("stderr"):
             click.echo(f"Stderr: {result.get('stderr')}", err=True)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("name")
+@click.argument("code")
+@click.option("--language", "-l", default="bash", help="Language (python, node, bash)")
+@click.option("--timeout", default=30, help="Timeout in seconds")
+@click.pass_context
+def stream(ctx, name, code, language, timeout):
+    """Execute code and stream output live as it is produced"""
+    client = ctx.obj["client"]
+    exit_code = 0
+    try:
+        for ev in client.stream_execute(name, language, code, timeout):
+            kind, data = ev.get("event"), ev.get("data", "")
+            if kind == "exit":
+                try:
+                    exit_code = int(data.strip())
+                except ValueError:
+                    pass
+            elif kind == "error":
+                click.echo(f"Error: {data}", err=True)
+                exit_code = exit_code or 1
+            else:  # stdout / stderr
+                click.echo(data, err=(kind == "stderr"))
+        if exit_code != 0:
+            sys.exit(exit_code)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -459,6 +501,23 @@ def fs_grep(ctx, name, pattern, path):
             line = m.get("line", "?")
             content = m.get("content", "").strip()
             click.echo(f"{m.get('file')}:{line}: {content}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@fs_group.command(name="replace")
+@click.argument("name")
+@click.argument("file")
+@click.argument("pattern")
+@click.argument("new_value")
+@click.pass_context
+def fs_replace(ctx, name, file, pattern, new_value):
+    """Replace text in a file. Usage: fs replace SANDBOX FILE PATTERN NEW_VALUE"""
+    client = ctx.parent.parent.obj["client"]
+    try:
+        result = client.replace_in_files(name, [file], pattern, new_value)
+        click.echo(f"Replaced in {file}: {result}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -682,18 +741,46 @@ def poder_list(ctx):
         sys.exit(1)
 
 
+@poder.command("get")
+@click.argument("poder_id")
+@click.pass_context
+def poder_get(ctx, poder_id):
+    """Get a single poder's info by ID"""
+    client = ctx.obj["client"]
+    try:
+        p = client.get_poder(poder_id)
+        res = p.get("resources", {})
+        click.echo(f"ID:            {p.get('id')}")
+        click.echo(f"Name:          {p.get('name')}")
+        click.echo(f"State:         {p.get('state')}")
+        click.echo(f"Provider Type: {p.get('provider_type')}")
+        click.echo(f"Region:        {p.get('region')}")
+        click.echo(f"VM ID:         {p.get('vm_id', 'N/A')}")
+        click.echo(f"URL:           {p.get('url')}")
+        click.echo(f"Arch:          {res.get('arch', 'N/A')}")
+        click.echo(f"OS Version:    {res.get('os_version', 'N/A')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 @poder.command("delete")
 @click.argument("poder_id")
 @click.option("--yes", "-y", is_flag=True, help="Skip confirmation prompt")
+@click.option("--keep-vm", is_flag=True,
+              help="Delete only the poder record; do not terminate its cloud VM")
 @click.pass_context
-def poder_delete(ctx, poder_id, yes):
+def poder_delete(ctx, poder_id, yes, keep_vm):
     """Delete a poder worker node by ID"""
     client = ctx.obj["client"]
     if not yes:
-        click.confirm(f"Delete poder '{poder_id}'?", abort=True)
+        prompt = f"Delete poder '{poder_id}'?"
+        if not keep_vm:
+            prompt += " (its cloud VM, if any, will be terminated)"
+        click.confirm(prompt, abort=True)
     try:
-        client.delete_poder(poder_id)
-        click.echo(f"Poder '{poder_id}' deleted.")
+        client.delete_poder(poder_id, keep_vm=keep_vm)
+        click.echo(f"Poder '{poder_id}' deleted." + (" (VM kept)" if keep_vm else ""))
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
