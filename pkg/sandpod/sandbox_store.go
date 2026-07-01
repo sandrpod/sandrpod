@@ -11,33 +11,33 @@ import (
 
 // SandboxInfo holds metadata about a sandbox instance.
 type SandboxInfo struct {
-	ID            string            `json:"id"`
-	Name          string            `json:"name"`
-	Region        string            `json:"region"`
-	ProviderType  string            `json:"provider_type,omitempty"`  // provider type: aws, aliyun, local
-	InstanceType  string            `json:"instance_type"`
-	ImageID       string            `json:"image_id,omitempty"`
-	State         State             `json:"state"`
-	IP            string            `json:"ip,omitempty"`
-	PoderID       string            `json:"poder_id,omitempty"`        // owning Poder ID
-	PoderURL      string            `json:"poder_url,omitempty"`        // Poder API URL
-	ContainerID   string            `json:"container_id,omitempty"`    // actual container ID
-	ProxyURL      string            `json:"proxy_url,omitempty"`       // Toolbox proxy URL
-	APIURL        string            `json:"api_url,omitempty"`
+	ID           string `json:"id"`
+	Name         string `json:"name"`
+	Region       string `json:"region"`
+	ProviderType string `json:"provider_type,omitempty"` // provider type: local, aws, aliyun, azure, gcp
+	InstanceType string `json:"instance_type"`
+	ImageID      string `json:"image_id,omitempty"`
+	State        State  `json:"state"`
+	IP           string `json:"ip,omitempty"`
+	PoderID      string `json:"poder_id,omitempty"`     // owning Poder ID
+	PoderURL     string `json:"poder_url,omitempty"`    // Poder API URL
+	ContainerID  string `json:"container_id,omitempty"` // actual container ID
+	ProxyURL     string `json:"proxy_url,omitempty"`    // Toolbox proxy URL
+	APIURL       string `json:"api_url,omitempty"`
 	// Runtime environment info (for AI-generated executable scripts)
-	Arch          string            `json:"arch,omitempty"`       // e.g. amd64, arm64 (inherited from Poder host)
-	OS            string            `json:"os,omitempty"`         // e.g. linux
-	OSVersion     string            `json:"os_version,omitempty"` // e.g. Ubuntu 22.04.3 LTS
-	CreatedAt     time.Time         `json:"created_at"`
-	LastActivity  time.Time         `json:"last_activity"`
-	Labels        map[string]string `json:"labels,omitempty"`
+	Arch         string            `json:"arch,omitempty"`       // e.g. amd64, arm64 (inherited from Poder host)
+	OS           string            `json:"os,omitempty"`         // e.g. linux
+	OSVersion    string            `json:"os_version,omitempty"` // e.g. Ubuntu 22.04.3 LTS
+	CreatedAt    time.Time         `json:"created_at"`
+	LastActivity time.Time         `json:"last_activity"`
+	Labels       map[string]string `json:"labels,omitempty"`
 }
 
 // CreateSandboxRequest is the request body for creating a sandbox.
 type CreateSandboxRequest struct {
 	Name         string `json:"name"`
 	Region       string `json:"region"`
-	ProviderType string `json:"provider_type"`  // provider type: aws, aliyun, local
+	ProviderType string `json:"provider_type"` // provider type: local, aws, aliyun, azure, gcp
 	InstanceType string `json:"instance_type"`
 	ImageID      string `json:"image_id,omitempty"`
 }
@@ -57,7 +57,7 @@ type ExecuteCodeRequest struct {
 
 // SandboxStore is the in-memory sandbox store.
 type SandboxStore struct {
-	mu       sync.RWMutex
+	mu        sync.RWMutex
 	sandboxes map[string]*SandboxInfo
 }
 

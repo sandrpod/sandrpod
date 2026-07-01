@@ -438,15 +438,24 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				}
 				json.Unmarshal(respBody, &poderResp)
 				poderArch, poderOS, poderOSVersion := "", "", ""
+				// The sandbox runs on this poder, so the poder's provider type is
+				// authoritative — prefer it over the request's (which may carry a
+				// client default like "local"). Fall back to the request only when
+				// the poder has no provider type recorded.
+				providerType := req.ProviderType
 				if pi, ok := poderStore.Get(pID); ok {
 					poderArch = pi.Resources.Arch
 					poderOS = pi.Resources.OS
 					poderOSVersion = pi.Resources.OSVersion
+					if pi.ProviderType != "" {
+						providerType = pi.ProviderType
+					}
 				}
 				sandbox := &podpkg.SandboxInfo{
 					ID:           poderResp.ID,
 					Name:         req.Name,
 					Region:       req.Region,
+					ProviderType: providerType,
 					InstanceType: req.InstanceType,
 					State:        podpkg.StateRunning,
 					IP:           poderResp.IP,
