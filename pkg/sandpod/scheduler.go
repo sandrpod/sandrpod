@@ -111,7 +111,7 @@ func (s *Scheduler) createVMWithProvider(ctx context.Context, providerType strin
 			"CreatedBy": "sandrpod",
 			"Sandbox":   req.Name,
 		},
-		NetworkConfig: vmNetworkConfig(),
+		NetworkConfig: vmNetworkConfig(providerType),
 		RunnerConfig: &provider.RunnerBootstrapConfig{
 			APIURL: s.apiURL,
 		},
@@ -183,7 +183,7 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType, region str
 	// Forward the toolbox image so the remote Poder pulls the same one we use
 	// locally; otherwise it falls back to its built-in default.
 	toolboxEnv := ""
-	if tb := strings.TrimSpace(os.Getenv("SANDRPOD_TOOLBOX_IMAGE")); tb != "" {
+	if tb := providerEnv("SANDRPOD_TOOLBOX_IMAGE", providerType); tb != "" {
 		toolboxEnv = fmt.Sprintf(` -e SANDRPOD_TOOLBOX_IMAGE='%s'`, shellQuoteSingleValue(tb))
 	}
 	// Forward the API token so the Poder can authenticate to the tunnel
@@ -213,7 +213,7 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType, region str
 		shellQuoteSingleValue(region),
 		shellQuoteSingleValue(providerType),
 		toolboxEnv,
-		shellQuoteSingleValue(poderImage()),
+		shellQuoteSingleValue(poderImage(providerType)),
 	)
 
 	log.Printf("[Scheduler] Starting poder container on VM %s", vm.ID)
@@ -275,16 +275,46 @@ func (s *Scheduler) createJobForPoder(req *CreateSandboxRequest, poder *PoderInf
 
 // shellQuoteSingleValue escapes a value for safe use inside a shell single-quoted string.
 // Single quotes are replaced with the '\” pattern so the string can be embedded without shell injection.
-// vmNetworkConfig builds the network configuration for provisioned cloud VMs.
-// A public IP is enabled by default so the VM can reach the API Server and pull
-// images; disable with SANDRPOD_VM_PUBLIC_IP=false for NAT/private-subnet
-// setups. Subnet and security group are optional overrides.
-func vmNetworkConfig() *provider.NetworkConfig {
+// vmNetworkConfig builds the network configuration for provisioned cloud VMs
+// of the given provider. Each value is read from a provider-scoped env var
+// (e.g. SANDRPOD_VM_SUBNET_ID_AWS) first and falls back to the unscoped form
+// (SANDRPOD_VM_SUBNET_ID), so a single server can drive several clouds at once
+// without their subnet/SG values colliding. A public IP is enabled by default
+// so the VM can reach the API Server and pull images; disable with
+// SANDRPOD_VM_PUBLIC_IP[_<PROVIDER>]=false for NAT/private-subnet setups.
+func vmNetworkConfig(providerType string) *provider.NetworkConfig {
 	return &provider.NetworkConfig{
-		PublicIP:      envBoolDefault("SANDRPOD_VM_PUBLIC_IP", true),
-		SubnetID:      strings.TrimSpace(os.Getenv("SANDRPOD_VM_SUBNET_ID")),
-		SecurityGroup: strings.TrimSpace(os.Getenv("SANDRPOD_VM_SECURITY_GROUP")),
+		PublicIP:      providerEnvBool("SANDRPOD_VM_PUBLIC_IP", providerType, true),
+		SubnetID:      providerEnv("SANDRPOD_VM_SUBNET_ID", providerType),
+		SecurityGroup: providerEnv("SANDRPOD_VM_SECURITY_GROUP", providerType),
 	}
+}
+
+// providerEnv returns a provider-scoped env var (KEY_<PROVIDER>, e.g.
+// SANDRPOD_VM_SUBNET_ID_ALIYUN), falling back to the unscoped KEY. providerType
+// is upper-cased for the suffix. This lets one server configure different
+// networks/images per cloud while keeping the unscoped form as a shared default.
+func providerEnv(key, providerType string) string {
+	if providerType != "" {
+		if v := strings.TrimSpace(os.Getenv(key + "_" + strings.ToUpper(providerType))); v != "" {
+			return v
+		}
+	}
+	return strings.TrimSpace(os.Getenv(key))
+}
+
+// providerEnvBool parses a provider-scoped boolean env var (KEY_<PROVIDER>),
+// then the unscoped KEY, returning def when neither is set/recognized.
+func providerEnvBool(key, providerType string, def bool) bool {
+	if providerType != "" {
+		switch strings.ToLower(strings.TrimSpace(os.Getenv(key + "_" + strings.ToUpper(providerType)))) {
+		case "1", "true", "yes", "on":
+			return true
+		case "0", "false", "no", "off":
+			return false
+		}
+	}
+	return envBoolDefault(key, def)
 }
 
 // envBoolDefault parses a boolean env var, returning def when unset/unrecognized.
@@ -299,12 +329,13 @@ func envBoolDefault(key string, def bool) bool {
 	}
 }
 
-// poderImage returns the Poder container image to run on provisioned cloud
-// VMs. Override via SANDRPOD_PODER_IMAGE (e.g. ghcr.io/<owner>/poder:<tag>);
+// poderImage returns the Poder container image to run on a provisioned cloud
+// VM of the given provider. Override via SANDRPOD_PODER_IMAGE[_<PROVIDER>]
+// (e.g. ghcr.io/<owner>/poder:<tag>, or a region-local ACR repo for Aliyun);
 // it defaults to the unqualified dev image, which only resolves if it has been
 // pushed to a registry the VM can reach.
-func poderImage() string {
-	if img := strings.TrimSpace(os.Getenv("SANDRPOD_PODER_IMAGE")); img != "" {
+func poderImage(providerType string) string {
+	if img := providerEnv("SANDRPOD_PODER_IMAGE", providerType); img != "" {
 		return img
 	}
 	return "sandrpod/poder:latest"

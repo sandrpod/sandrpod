@@ -128,6 +128,29 @@ so the server must be reachable from the ECS VM.
 Plus server flag `-public-url` reachable from the VMs. Reuse the systemd unit +
 `service.d` drop-in pattern from [AWS_PROVISIONING.md](AWS_PROVISIONING.md).
 
+### Running AWS and Aliyun on one server (per-provider env vars)
+
+`SANDRPOD_VM_SUBNET_ID`, `SANDRPOD_VM_SECURITY_GROUP`, `SANDRPOD_VM_PUBLIC_IP`,
+`SANDRPOD_PODER_IMAGE`, and `SANDRPOD_TOOLBOX_IMAGE` each accept a
+**provider-scoped** form with a `_<PROVIDER>` suffix that overrides the unscoped
+value for that cloud, so one server can drive both clouds without their values
+colliding:
+
+```ini
+# AWS
+Environment=SANDRPOD_VM_SUBNET_ID_AWS=subnet-xxxx
+Environment=SANDRPOD_VM_SECURITY_GROUP_AWS=sg-xxxx
+# Aliyun
+Environment=SANDRPOD_VM_SUBNET_ID_ALIYUN=vsw-xxxx
+Environment=SANDRPOD_VM_SECURITY_GROUP_ALIYUN=sg-xxxx
+# (a region-local ACR image just for Aliyun)
+Environment=SANDRPOD_PODER_IMAGE_ALIYUN=registry.<region>.aliyuncs.com/<ns>/poder:v0.3.1
+Environment=SANDRPOD_TOOLBOX_IMAGE_ALIYUN=registry.<region>.aliyuncs.com/<ns>/toolbox:v0.3.1
+```
+
+The unscoped `SANDRPOD_VM_SUBNET_ID` etc. still work as a shared default when no
+`_<PROVIDER>` form is set.
+
 ---
 
 ## 5. Implementation & validation plan
