@@ -50,6 +50,11 @@ type CreateSandboxRequest struct {
 	// sandbox: it is reaped after this many seconds without activity, even if
 	// the global idle reaper is otherwise disabled.
 	TTLSeconds int64 `json:"ttl_seconds,omitempty"`
+	// CPUCores and MemoryMB, when > 0, cap the sandbox container's resources
+	// (local/docker poders only). Field names match CreatePodRequest so they
+	// pass straight through the server → poder forwarding.
+	CPUCores float64 `json:"cpu_cores,omitempty"`
+	MemoryMB int64   `json:"memory_mb,omitempty"`
 	// Async makes POST /sandboxes return a job id immediately and provision in
 	// the background; poll GET /api/v1/jobs/{id} (or the sandbox state) for
 	// progress. Cloud provisioning takes minutes — long synchronous responses

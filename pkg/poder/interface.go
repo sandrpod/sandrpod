@@ -12,12 +12,12 @@ import (
 type PodState string
 
 const (
-	PodStatePending   PodState = "PENDING"
-	PodStateStarting  PodState = "STARTING"
-	PodStateRunning   PodState = "RUNNING"
-	PodStateStopping  PodState = "STOPPING"
-	PodStateStopped   PodState = "STOPPED"
-	PodStateError     PodState = "ERROR"
+	PodStatePending  PodState = "PENDING"
+	PodStateStarting PodState = "STARTING"
+	PodStateRunning  PodState = "RUNNING"
+	PodStateStopping PodState = "STOPPING"
+	PodStateStopped  PodState = "STOPPED"
+	PodStateError    PodState = "ERROR"
 )
 
 // PodInfo holds information about a running pod.
@@ -43,14 +43,17 @@ type PodInfo struct {
 // field silently stays at its zero value and the Poder docker driver
 // fell back to the default toolbox image regardless of caller intent.
 type CreatePodRequest struct {
-	Name         string            `json:"name"`
-	Region       string            `json:"region,omitempty"`
-	InstanceType string            `json:"instance_type,omitempty"`
-	ImageID      string            `json:"image_id,omitempty"`
-	Provider     string            `json:"provider,omitempty"`
-	NetworkConfig *NetworkConfig   `json:"network_config,omitempty"`
-	DiskConfig   *DiskConfig       `json:"disk_config,omitempty"`
-	Labels       map[string]string `json:"labels,omitempty"`
+	Name          string            `json:"name"`
+	Region        string            `json:"region,omitempty"`
+	InstanceType  string            `json:"instance_type,omitempty"`
+	ImageID       string            `json:"image_id,omitempty"`
+	Provider      string            `json:"provider,omitempty"`
+	NetworkConfig *NetworkConfig    `json:"network_config,omitempty"`
+	DiskConfig    *DiskConfig       `json:"disk_config,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	// CPUCores and MemoryMB, when > 0, cap the container's resources.
+	CPUCores float64 `json:"cpu_cores,omitempty"`
+	MemoryMB int64   `json:"memory_mb,omitempty"`
 	// Bootstrap configuration
 	APIURL       string `json:"api_url,omitempty"`       // Toolbox API URL
 	PoderVersion string `json:"poder_version,omitempty"` // Poder version
@@ -72,9 +75,9 @@ type DiskConfig struct {
 
 // CommandResult holds the output of a remotely executed command.
 type CommandResult struct {
-	Output    string    // Standard output
-	ExitCode  int       // Exit code
-	Stderr    string    // Standard error output
+	Output     string    // Standard output
+	ExitCode   int       // Exit code
+	Stderr     string    // Standard error output
 	ExecutedAt time.Time // Execution timestamp
 }
 

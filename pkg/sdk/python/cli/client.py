@@ -96,6 +96,8 @@ class CLIClient:
         image: str = "",
         async_: bool = False,
         ttl_seconds: int = 0,
+        cpu_cores: float = 0,
+        memory_mb: int = 0,
     ) -> Dict[str, Any]:
         """
         创建 Sandbox
@@ -125,6 +127,10 @@ class CLIClient:
             data["async"] = True
         if ttl_seconds:
             data["ttl_seconds"] = int(ttl_seconds)
+        if cpu_cores:
+            data["cpu_cores"] = float(cpu_cores)
+        if memory_mb:
+            data["memory_mb"] = int(memory_mb)
         resp = self._request("POST", "/api/v1/sandboxes", json=data)
         return resp.json()
 

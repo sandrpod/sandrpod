@@ -128,6 +128,14 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 	if p.networkName != "" {
 		hostConfig.NetworkMode = container.NetworkMode(p.networkName)
 	}
+	// Per-sandbox resource limits (noisy-neighbor isolation). NanoCPUs is CPU
+	// cores × 1e9; Memory is in bytes. Both are ignored by Docker when zero.
+	if req.CPUCores > 0 {
+		hostConfig.NanoCPUs = int64(req.CPUCores * 1e9)
+	}
+	if req.MemoryMB > 0 {
+		hostConfig.Memory = req.MemoryMB * 1024 * 1024
+	}
 
 	resp, err := p.dockerClient.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, podID)
 	if err != nil {
