@@ -3,11 +3,15 @@
 How SandrPod creates Tencent Cloud (CVM) instances on demand, bootstraps a Poder
 on each via **TAT (TencentCloud Automation Tools)**, and runs sandboxes there.
 
-> **Status: implemented, not yet end-to-end validated on a live account.** The
-> provider (`pkg/provider/tencent/`) is real SDK code, builds, and has unit
-> tests, but has not been run against a real Tencent Cloud account. Smoke-test
-> before relying on it. The **AWS** path ([AWS_PROVISIONING.md](AWS_PROVISIONING.md))
-> is the hardened reference for the provider-agnostic plumbing.
+> **Status: validated end-to-end on a live account** (region `ap-singapore`,
+> zone `ap-singapore-1`, `S5.MEDIUM2`, default VPC): create → TAT installs
+> Docker (~50 s, real exit codes over base64) → Poder registers over the
+> cross-cloud tunnel → sandbox RUNNING in under 2 minutes → bash/python code
+> executes → poder reuse confirmed (2nd sandbox in ~3 s, no new VM) → poder
+> delete terminates the CVM (`TerminateInstances` is async — the instance shows
+> STOPPING briefly, then is gone) with no leak. Pulling the poder/toolbox
+> images from **GHCR worked directly in the Singapore region**; the TCR advice
+> below applies to mainland-China regions.
 
 > **TL;DR:** an API key (SecretId/SecretKey) is **necessary but not sufficient**.
 > You also need (1) the **TAT agent** present on the image, (2) the API Server
@@ -173,7 +177,7 @@ take a few minutes. Reuse the systemd unit + `service.d` drop-in pattern from
 |---------|--------------|
 | provider not registered | `TENCENTCLOUD_SECRET_ID`/`SECRET_KEY` unset |
 | `AuthFailure` / `UnauthorizedOperation` | key lacks the CVM/TAT actions |
-| `RunInstances` fails: VPC/subnet required | you set a subnet without a VPC — unset `SANDRPOD_VM_SUBNET_ID_TENCENT` |
+| `tencent VPC placement needs both a VPC and a subnet` | you set a subnet without a VPC — unset `SANDRPOD_VM_SUBNET_ID_TENCENT` (the provider fails fast locally before calling the API) |
 | VM launches, command never runs | TAT agent not present/ready on the image; the provider retries agent-not-ready ~3 min |
 | Docker install / image pull slow or fails | mainland-CN VM pulling `ghcr.io` — use TCR; check SG egress 443 |
 | `poder registration timeout` | API Server not reachable from the VM (`-public-url`) |
@@ -182,11 +186,15 @@ take a few minutes. Reuse the systemd unit + `service.d` drop-in pattern from
 
 ## Known limitations & caveats
 
-- **Not validated on a live account.** Most likely to need verification: TAT
-  agent readiness timing, the base64 output decoding, and the default-image
-  DescribeImages filter.
+- **Validated end-to-end** (`ap-singapore-1`, `S5.MEDIUM2`): TAT agent
+  readiness, base64 command/output round-trip, the default-image
+  DescribeImages filter, poder reuse, and VM reclamation all worked in
+  practice on the first attempt — VM+IP in ~20 s, Docker install ~50 s,
+  sandbox RUNNING in under 2 minutes. Mainland-China regions remain untested
+  (expect the TCR image-registry caveat to matter there).
 - **Subnet plumbing is VPC-incomplete** — leave the subnet env unset (default
-  VPC) until VPC-ID plumbing is added.
+  VPC); setting a subnet without a VPC now fails fast with a clear error
+  instead of an opaque API rejection.
 - **No autoscaling / no idle reclamation.** `Cleanup` deletes instances tagged
   `sandrpod=true`.
 - **Default image is the newest public Ubuntu.** Override per-request with
