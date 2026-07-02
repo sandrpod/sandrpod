@@ -100,3 +100,92 @@ expected and supported).
   re-registration for 10 minutes, so the OFFLINE ghost records that needed a
   manual `poder delete --keep-vm` no longer appear. `keep_vm` deletions are
   exempt (a kept VM's poder legitimately reconnects).
+
+### Auth hardening: hot-reload, rate limiting, TLS
+
+- **Tokens file hot-reload** — no action required. If you use `-tokens-file`,
+  edits are picked up within ~10 s (a bad edit keeps the previous set), so
+  issuing/revoking a token no longer needs a restart.
+- **Per-identity rate limiting** — off by default. Enable with
+  `-rate-limit` / `SANDRPOD_RATE_LIMIT` (requests/second per user token;
+  admins and poders exempt) → `429` when exceeded.
+- **Built-in TLS** — off by default. Set `-tls-cert`/`-tls-key`
+  (`SANDRPOD_TLS_CERT`/`KEY`) to serve HTTPS directly; the CLI/SDKs/console
+  switch to `wss://` automatically. Plain HTTP behavior is unchanged when
+  unset (front with a reverse proxy as before, or adopt this).
+
+### Lifecycle webhooks
+
+- **Off by default.** Set `SANDRPOD_WEBHOOK_URL` to receive fire-and-forget
+  POSTs (`{event, time, data}`) for `sandbox.running|error|deleted|reaped`
+  and `poder.registered|deleted|reclaimed`. Failures are logged and never
+  affect the request flow.
+
+### Preview URLs, snapshots, resource limits (need a fresh toolbox/poder image)
+
+These features live in the **toolbox/poder image**, not the server binary, so
+they only apply to sandboxes provisioned from an image built off this code:
+
+- **Preview URLs** — `GET /api/v1/sandboxes/{name}/toolbox/proxy/{port}/...`
+  (CLI `preview`) reverse-proxies to a service on `127.0.0.1:{port}` inside the
+  sandbox. Sandboxes on an **older toolbox image return 404** for `/proxy` —
+  rebuild/push the toolbox image and provision new sandboxes to get it.
+- **Snapshots** — `POST /api/v1/sandboxes/{name}/snapshot` (CLI `snapshot`) does
+  a `docker commit` on the poder; the poder must run this code.
+- **Per-sandbox CPU/memory** — `cpu_cores`/`memory_mb` on create (CLI
+  `--cpu`/`--memory`, SDK kwargs) apply to local/docker poders. Zero =
+  unlimited, so old callers are unaffected; the poder must run this code to
+  honor them.
+- **To roll out:** `docker buildx ... -f docker/Dockerfile.toolbox` (and
+  `Dockerfile.poder`), push, point `SANDRPOD_TOOLBOX_IMAGE` at the new tag.
+  Existing sandboxes keep working on their current image; new ones pick up the
+  features. No server change required.
+
+### Interactive PTY shell
+
+- **No action required** server-side (it proxies `/sandboxes/{name}/pty` over
+  the existing tunnel). `sandrpod-cli shell <name>` needs the optional
+  `websocket-client` dep: `pip install 'sandrpod-cli[shell]'`.
+
+### SSH key persistence (DigitalOcean / Hetzner)
+
+- **Opt-in, strongly recommended for these providers.** Set
+  `SANDRPOD_SSH_KEY_DIR` to a writable dir (e.g. `/opt/sandrpod/ssh-keys`) so
+  the per-VM ephemeral SSH key is persisted (0600) and survives a server
+  restart. Without it, behavior is unchanged (memory-only): a restart orphans
+  management of existing DO/Hetzner VMs. GCP is unaffected (metadata-injected).
+
+### Observability: /metrics
+
+- **No action required.** `GET /metrics` serves Prometheus text (admin-gated
+  when auth is on; public like `/health` when auth is off). Point a scraper at
+  it; see [SCALING.md](SCALING.md) for the signals to watch. CLI: `metrics`.
+
+### Employee-PC mode: security fixes (rebuild the agent binary)
+
+Applies only to `sandrpod-agent` deployments running `--permission-mode`.
+These are **behavior changes in the local agent binary — rebuild and
+redeploy `sandrpod-agent`** (and `sandrpod-tray`) to pick them up:
+
+- **Path matching now folds case on macOS/Windows** — a hardlock on `~/.ssh`
+  now correctly covers `~/.SSH/...` (case-insensitive filesystems). This
+  *closes* a bypass; it only makes the gate stricter.
+- **Rule paths are canonicalized/cleaned** — a trailing slash or symlinked
+  home no longer makes a rule silently match nothing.
+- **Command policy folds case on Windows** — `SCP.EXE` no longer slips past an
+  `scp` deny.
+- **First-run seeding** — `--permission-mode=strict|prompt` now seeds default
+  hardlocks + command policy itself, so the gate is never a silent no-op just
+  because `sandrpod-tray` was never launched. Existing `permissions.json`
+  files are untouched (seeding only fires when empty).
+- **Audit uploader** now commits its cursor only after a successful POST
+  (at-least-once fix — no silent batch loss on a failed upload), and record
+  errors are logged instead of swallowed.
+
+### New client surfaces (no server action)
+
+- CLI: `job get <id>` (inspect an async-create job) and `metrics`.
+- Python `langchain-sandrpod`: `create_sandbox`/`sandbox()` accept
+  `ttl_seconds`/`cpu_cores`/`memory_mb` (omitted when zero → old-server safe).
+- New TypeScript SDK: `@sandrpod/sdk` (`pkg/sdk/typescript`).
+- Web console at `/console` (static SPA; authenticates with a pasted token).
