@@ -136,8 +136,11 @@ Validated live (ghost records no longer appear).
 - **Upgrade & version management** ◐ — ☑ [UPGRADING.md](UPGRADING.md) with an
   in-place, rehearsed procedure. ☐ Still open: persisted per-poder version
   reporting for rolling-upgrade visibility.
-- **Employee-PC mode review** ☐ — the permission/audit/tray surface hasn't had
-  the same review + live-validation pass the cloud path got.
+- **Employee-PC mode review** ◐ — ☑ security-reviewed; fixed three gate
+  bypasses (case-insensitive-FS path/command matching, trailing-slash/symlink
+  rule paths) + the uploader's at-least-once violation + first-run seeding, all
+  with regression tests. ☐ Still open: live-validation on real macOS/Windows
+  employee machines with the tray.
 - **Horizontal scale** ◐ — ☑ boundary documented in [SCALING.md](SCALING.md)
   (connection-count / single-writer ceiling, Postgres + multi-instance path).
   ☐ Still open: multi-instance tunnel affinity/registry.
