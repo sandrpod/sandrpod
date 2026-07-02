@@ -170,13 +170,16 @@ def list(ctx):
 @click.option("--instance-type", default="", help="Instance type (optional)")
 @click.option("--image", default="", help="Container image ID (optional, uses Poder default if omitted)")
 @click.option("--poder", default=None, help="Target a specific Poder ID (bypasses the scheduler)")
+@click.option("--no-wait", is_flag=True, help="Return immediately with the job id instead of waiting for RUNNING")
+@click.option("--wait-timeout", default=900, help="Seconds to wait for the sandbox to reach RUNNING (default 900)")
 @click.pass_context
-def create(ctx, name, region, provider_type, instance_type, image, poder):
-    """Create a sandbox"""
+def create(ctx, name, region, provider_type, instance_type, image, poder, no_wait, wait_timeout):
+    """Create a sandbox (waits for it to reach RUNNING; cloud provisioning can take minutes)"""
+    import time as _time
     client = ctx.obj["client"]
     try:
-        # --poder: create directly on a specific Poder (returns a sandbox record,
-        # not a scheduler job).
+        # --poder: create directly on a specific Poder (fast, returns a sandbox
+        # record, not a scheduler job).
         if poder:
             sb = client.create_sandbox_on_poder(
                 poder, name, region, provider_type, instance_type, image
@@ -186,17 +189,55 @@ def create(ctx, name, region, provider_type, instance_type, image, poder):
             click.echo(f"Poder ID: {sb.get('poder_id', poder)}")
             click.echo(f"IP:       {sb.get('ip', 'N/A')}")
             return
-        resp = client.create_sandbox(name, region, provider_type, instance_type, image)
-        job_id = resp.get("job_id", "N/A")
-        status = resp.get("status", "N/A")
-        sb_name = resp.get("sandbox", {}).get("name", name)
-        click.echo(f"Sandbox:  {sb_name}")
-        click.echo(f"Job ID:   {job_id}")
-        click.echo(f"Status:   {status}")
-        click.echo(f"Tip: run `sandrpod-cli get {sb_name}` to check state")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+    # Scheduler path: ask for async creation (new servers return a job
+    # immediately; old servers ignore the flag and block synchronously — if the
+    # connection drops mid-way we just fall through to polling).
+    job_id = None
+    try:
+        resp = client.create_sandbox(name, region, provider_type, instance_type, image, async_=True)
+        job_id = resp.get("job_id")
+        click.echo(f"Sandbox:  {resp.get('sandbox', {}).get('name', name)}")
+        click.echo(f"Job ID:   {job_id or 'N/A'}")
+        click.echo(f"Status:   {resp.get('status', 'N/A')}")
+    except Exception as e:
+        click.echo(f"(create request did not return cleanly: {e})", err=True)
+        click.echo("Provisioning may still be running server-side; polling status...")
+
+    if no_wait:
+        click.echo(f"Tip: run `sandrpod-cli get {name}` to check state")
+        return
+
+    # Poll until RUNNING / ERROR / timeout. Tolerate early 404s (record may
+    # appear a moment later on older servers).
+    deadline = _time.time() + wait_timeout
+    last_state = None
+    while _time.time() < deadline:
+        _time.sleep(5)
+        try:
+            state = client.get_sandbox(name).get("state")
+        except Exception:
+            state = None
+        if state != last_state and state:
+            click.echo(f"State:    {state}")
+            last_state = state
+        if state == "RUNNING":
+            click.echo(f"Sandbox '{name}' is ready")
+            return
+        if state == "ERROR":
+            msg = ""
+            if job_id:
+                try:
+                    msg = client.get_job(job_id).get("error_message", "")
+                except Exception:
+                    pass
+            click.echo(f"Error: sandbox entered ERROR state{': ' + msg if msg else ''}", err=True)
+            sys.exit(1)
+    click.echo(f"Error: timed out after {wait_timeout}s waiting for '{name}' (check `sandrpod-cli get {name}`)", err=True)
+    sys.exit(1)
 
 
 @cli.command()

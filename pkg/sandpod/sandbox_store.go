@@ -40,6 +40,11 @@ type CreateSandboxRequest struct {
 	ProviderType string `json:"provider_type"` // provider type: local, aws, aliyun, azure, gcp
 	InstanceType string `json:"instance_type"`
 	ImageID      string `json:"image_id,omitempty"`
+	// Async makes POST /sandboxes return a job id immediately and provision in
+	// the background; poll GET /api/v1/jobs/{id} (or the sandbox state) for
+	// progress. Cloud provisioning takes minutes — long synchronous responses
+	// are routinely killed by intermediate proxies.
+	Async bool `json:"async,omitempty"`
 }
 
 // UpdateJobStatusRequest is the request body for updating a job's status.

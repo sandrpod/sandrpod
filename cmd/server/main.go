@@ -601,122 +601,71 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				req.ProviderType = "local"
 			}
 
-			// Cloud provisioning can take minutes (VM boot + Docker install +
-			// image pulls). Detach it from the request context so a client
-			// disconnect/timeout mid-flight doesn't abort provisioning halfway
-			// and orphan a half-bootstrapped VM — the flow completes, the
-			// Poder registers, and the client can poll `GET /sandboxes/{name}`.
-			schedCtx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
-			job, err := scheduler.ScheduleSandboxCreation(schedCtx, &req)
-			cancel()
-			if err != nil {
-				// Log server-side too: with provisioning detached, the client
-				// has often disconnected by the time this fails — writing the
-				// error only to a dead connection would leave no trace at all.
-				log.Printf("create sandbox %s (provider=%s) failed: %v", req.Name, req.ProviderType, err)
-				http.Error(w, fmt.Sprintf("Failed to create sandbox: %v", err), http.StatusInternalServerError)
+			if _, exists := sandboxStore.Get(req.Name); exists {
+				http.Error(w, fmt.Sprintf("sandbox %s already exists", req.Name), http.StatusConflict)
 				return
 			}
-			if err := jobStore.AddJob(job); err != nil {
+
+			// Async path: register a job + PENDING record, provision in the
+			// background, return immediately. Poll GET /api/v1/jobs/{id} or the
+			// sandbox state. Cloud provisioning takes minutes and long
+			// synchronous responses are routinely killed by intermediate proxies.
+			if req.Async {
+				job := &podpkg.Job{
+					ID:           podpkg.GenerateJobID(),
+					Type:         podpkg.JobTypeCreateSandbox,
+					Status:       podpkg.JobStatusPending,
+					SandboxName:  req.Name,
+					Region:       req.Region,
+					ProviderType: req.ProviderType,
+					InstanceType: req.InstanceType,
+					ImageID:      req.ImageID,
+					CreatedAt:    time.Now(),
+					UpdatedAt:    time.Now(),
+				}
+				if err := jobStore.AddJob(job); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				sandbox := &podpkg.SandboxInfo{
+					ID:           job.ID,
+					Name:         req.Name,
+					Region:       req.Region,
+					ProviderType: req.ProviderType,
+					InstanceType: req.InstanceType,
+					State:        podpkg.StatePending,
+					CreatedAt:    time.Now(),
+					LastActivity: time.Now(),
+				}
+				if err := sandboxStore.Add(sandbox); err != nil {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				go func(req podpkg.CreateSandboxRequest, jobID string) {
+					if _, _, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, jobID); err != nil {
+						log.Printf("async create %s: %v", req.Name, err)
+					}
+				}(req, job.ID)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
+				json.NewEncoder(w).Encode(map[string]any{
+					"job_id":  job.ID,
+					"status":  "provisioning",
+					"sandbox": sandbox,
+				})
+				return
+			}
+
+			// Synchronous path (legacy default): same flow, inline.
+			sandbox, jobID, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, "")
+			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-
-			sbArch, sbOS, sbOSVersion := "", "", ""
-			if pi, ok := poderStore.Get(job.PoderID); ok {
-				sbArch = pi.Resources.Arch
-				sbOS = pi.Resources.OS
-				sbOSVersion = pi.Resources.OSVersion
-			}
-			sandbox := &podpkg.SandboxInfo{
-				ID:           job.ID,
-				Name:         req.Name,
-				Region:       req.Region,
-				ProviderType: req.ProviderType,
-				InstanceType: req.InstanceType,
-				PoderID:      job.PoderID,
-				ProxyURL:     "tunnel://" + job.PoderID,
-				State:        podpkg.StatePending,
-				Arch:         sbArch,
-				OS:           sbOS,
-				OSVersion:    sbOSVersion,
-				CreatedAt:    time.Now(),
-				LastActivity: time.Now(),
-			}
-			sandboxStore.Add(sandbox)
-
-			// Create the sandbox by calling Poder directly through the tunnel
-			t, ok := tunnelStore.Get(job.PoderID)
-			if !ok {
-				jobStore.UpdateJob(job.ID, func(j *podpkg.Job) {
-					j.Status = podpkg.JobStatusFailed
-					j.ErrorMessage = "poder tunnel not available"
-				})
-				sandboxStore.Update(req.Name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateError })
-				http.Error(w, "poder tunnel not available", http.StatusServiceUnavailable)
-				return
-			}
-
-			bodyBytes, _ := json.Marshal(req)
-			// Detached like the scheduling step above: after minutes of VM
-			// provisioning the client has often already disconnected, and this
-			// final container-create must not die on the canceled request
-			// context (it would mark the sandbox ERROR with the VM/poder fine).
-			poderCtx, poderCancel := context.WithTimeout(context.Background(), 2*time.Minute)
-			defer poderCancel()
-			createReq, _ := http.NewRequestWithContext(poderCtx, http.MethodPost, "http://poder/sandboxes", bytes.NewReader(bodyBytes))
-			createReq.Header.Set("Content-Type", "application/json")
-
-			resp, err := t.Client.Do(createReq)
-			if err != nil {
-				jobStore.UpdateJob(job.ID, func(j *podpkg.Job) {
-					j.Status = podpkg.JobStatusFailed
-					j.ErrorMessage = err.Error()
-				})
-				sandboxStore.Update(req.Name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateError })
-				http.Error(w, fmt.Sprintf("Failed to create sandbox: %v", err), http.StatusInternalServerError)
-				return
-			}
-			defer resp.Body.Close()
-
-			respBody, _ := io.ReadAll(resp.Body)
-			if resp.StatusCode != http.StatusCreated {
-				jobStore.UpdateJob(job.ID, func(j *podpkg.Job) {
-					j.Status = podpkg.JobStatusFailed
-					j.ErrorMessage = string(respBody)
-				})
-				sandboxStore.Update(req.Name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateError })
-				http.Error(w, fmt.Sprintf("Poder error: %s", string(respBody)), resp.StatusCode)
-				return
-			}
-
-			var poderResp map[string]any
-			json.Unmarshal(respBody, &poderResp)
-
-			jobStore.UpdateJob(job.ID, func(j *podpkg.Job) {
-				j.Status = podpkg.JobStatusCompleted
-				if v, _ := poderResp["id"].(string); v != "" {
-					j.SandboxID = v
-					j.Result = &podpkg.JobResult{ProxyURL: "tunnel://" + job.PoderID, SandboxID: v}
-				}
-				if v, _ := poderResp["ip"].(string); v != "" && j.Result != nil {
-					j.Result.IP = v
-				}
-			})
-			sandboxStore.Update(req.Name, func(s *podpkg.SandboxInfo) {
-				s.State = podpkg.StateRunning
-				if v, _ := poderResp["id"].(string); v != "" {
-					s.ID = v
-				}
-				if v, _ := poderResp["ip"].(string); v != "" {
-					s.IP = v
-				}
-			})
-
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusCreated)
 			json.NewEncoder(w).Encode(map[string]any{
-				"job_id":  job.ID,
+				"job_id":  jobID,
 				"status":  "created",
 				"sandbox": sandbox,
 			})
@@ -1138,6 +1087,17 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		jobID := r.URL.Path[len("/api/v1/jobs/"):]
 		if jobID == "" {
 			http.NotFound(w, r)
+			return
+		}
+		// GET /api/v1/jobs/{id} — user-facing job status (async create polling).
+		if r.Method == http.MethodGet {
+			job, ok := jobStore.GetJob(jobID)
+			if !ok {
+				http.Error(w, "job not found", http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(job)
 			return
 		}
 		if r.Method != http.MethodPatch {

@@ -94,6 +94,7 @@ class CLIClient:
         provider_type: str = "local",
         instance_type: str = "",
         image: str = "",
+        async_: bool = False,
     ) -> Dict[str, Any]:
         """
         创建 Sandbox
@@ -104,6 +105,8 @@ class CLIClient:
             provider_type: Provider 类型 (local, aws, aliyun, azure, gcp)
             instance_type: 实例类型 (可选)
             image: 容器镜像 ID (可选，空则使用 Poder 默认镜像)
+            async_: True 时 server 立即返回 job，后台完成开通
+                (轮询 get_job/get_sandbox 跟进；旧版 server 会忽略该字段并同步阻塞)
 
         Returns:
             {job_id, status, sandbox} 字典
@@ -117,7 +120,14 @@ class CLIClient:
             data["instance_type"] = instance_type
         if image:
             data["image_id"] = image
+        if async_:
+            data["async"] = True
         resp = self._request("POST", "/api/v1/sandboxes", json=data)
+        return resp.json()
+
+    def get_job(self, job_id: str) -> Dict[str, Any]:
+        """查询 Job 状态（async create 的进度/错误）"""
+        resp = self._request("GET", f"/api/v1/jobs/{job_id}")
         return resp.json()
 
     def delete_sandbox(self, name: str) -> None:
