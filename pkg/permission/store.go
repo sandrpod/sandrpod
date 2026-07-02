@@ -96,6 +96,7 @@ func (s *Store) Snapshot() Snapshot {
 // already exists it is replaced (so a "rw" grant supersedes an earlier "r").
 func (s *Store) AddPermanentRule(r Rule) error {
 	r.Scope = ScopePermanent
+	r.Path = cleanRulePath(r.Path)
 	if r.GrantedAt.IsZero() {
 		r.GrantedAt = time.Now()
 	}
@@ -108,6 +109,7 @@ func (s *Store) AddPermanentRule(r Rule) error {
 // AddSessionRule persists a session-scoped grant tied to a sandbox session.
 func (s *Store) AddSessionRule(r Rule) error {
 	r.Scope = ScopeSession
+	r.Path = cleanRulePath(r.Path)
 	if r.GrantedAt.IsZero() {
 		r.GrantedAt = time.Now()
 	}
@@ -123,12 +125,23 @@ func (s *Store) AddHardlock(path string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.snap.Rules = upsertRule(s.snap.Rules, Rule{
-		Path:      path,
+		Path:      cleanRulePath(path),
 		Mode:      "deny",
 		Scope:     ScopeHardlock,
 		GrantedAt: time.Now(),
 	})
 	return s.flushLocked()
+}
+
+// cleanRulePath normalizes a stored rule path so a trailing slash, `.`, or `..`
+// can't make it silently fail to match children. filepath.Clean leaves a
+// leading "~" intact (it's just a path segment to Clean), so tilde rules stay
+// portable across the employee's home dir.
+func cleanRulePath(p string) string {
+	if p == "" {
+		return p
+	}
+	return filepath.Clean(p)
 }
 
 // RemoveRule deletes the rule at `path` from the permanent table.

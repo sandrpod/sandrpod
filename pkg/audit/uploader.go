@@ -167,7 +167,7 @@ func (u *Uploader) cycle(ctx context.Context) error {
 		default:
 		}
 
-		batch, fileToFinish, err := u.nextBatch()
+		batch, target, endOffset, fileToFinish, err := u.nextBatch()
 		if err != nil {
 			return err
 		}
@@ -176,8 +176,16 @@ func (u *Uploader) cycle(ctx context.Context) error {
 		}
 
 		if err := u.post(ctx, batch); err != nil {
+			// Cursor was NOT advanced past this batch (nextBatch is read-only
+			// w.r.t. the committed offset), so a later retry re-reads and
+			// re-sends it — preserving the at-least-once contract. Advancing
+			// before the POST succeeded would silently drop the batch.
 			return err
 		}
+		// Commit the offset only now that the batch is durably delivered.
+		u.mu.Lock()
+		u.cursor = cursorState{File: target, Offset: endOffset}
+		u.mu.Unlock()
 		if err := u.saveCursor(); err != nil {
 			return fmt.Errorf("save cursor after upload: %w", err)
 		}
@@ -201,19 +209,22 @@ func (u *Uploader) cycle(ctx context.Context) error {
 	}
 }
 
-// nextBatch reads up to BatchSize events from the next pending file.
-// Returns the batch, the path of the file we should DELETE if this batch
-// is its last (i.e. a fully-drained rotated file), and any error.
-func (u *Uploader) nextBatch() (Batch, string, error) {
+// nextBatch reads up to BatchSize events from the next pending file WITHOUT
+// mutating the committed cursor offset. It returns the batch, the target file,
+// the offset the cursor should advance to ONCE the batch is delivered, the path
+// of a fully-drained rotated file to delete (if any), and any error. The caller
+// (cycle) commits endOffset only after a successful POST, so a failed upload is
+// re-read and re-sent rather than silently skipped.
+func (u *Uploader) nextBatch() (batch Batch, target string, endOffset int64, fileToFinish string, err error) {
 	files, err := u.pendingFiles()
 	if err != nil {
-		return Batch{}, "", err
+		return Batch{}, "", 0, "", err
 	}
 	if len(files) == 0 {
-		return Batch{Version: CurrentBatchVersion}, "", nil
+		return Batch{Version: CurrentBatchVersion}, "", 0, "", nil
 	}
 
-	target := files[0]
+	target = files[0]
 	u.mu.Lock()
 	if u.cursor.File != target {
 		u.cursor = cursorState{File: target, Offset: 0}
@@ -223,15 +234,15 @@ func (u *Uploader) nextBatch() (Batch, string, error) {
 
 	f, err := os.Open(target)
 	if err != nil {
-		return Batch{}, "", fmt.Errorf("open %s: %w", target, err)
+		return Batch{}, "", 0, "", fmt.Errorf("open %s: %w", target, err)
 	}
 	defer f.Close()
 
 	if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
-		return Batch{}, "", fmt.Errorf("seek: %w", err)
+		return Batch{}, "", 0, "", fmt.Errorf("seek: %w", err)
 	}
 
-	batch := Batch{Version: CurrentBatchVersion}
+	batch = Batch{Version: CurrentBatchVersion}
 	reader := newLineReader(f)
 	for len(batch.Events) < u.opts.BatchSize {
 		line, advance, err := reader.next()
@@ -239,7 +250,7 @@ func (u *Uploader) nextBatch() (Batch, string, error) {
 			break
 		}
 		if err != nil {
-			return Batch{}, "", err
+			return Batch{}, "", 0, "", err
 		}
 		var ev Event
 		if err := json.Unmarshal(line, &ev); err != nil {
@@ -264,18 +275,18 @@ func (u *Uploader) nextBatch() (Batch, string, error) {
 		startOffset += int64(advance)
 	}
 
-	u.mu.Lock()
-	u.cursor.Offset = startOffset
-	u.mu.Unlock()
+	// startOffset is the offset the caller should commit AFTER a successful
+	// POST — we deliberately do not touch u.cursor here.
+	endOffset = startOffset
 
 	// If we finished a rotated file completely, mark it for deletion.
 	if isRotated(filepath.Base(target)) {
-		stat, err := os.Stat(target)
-		if err == nil && startOffset >= stat.Size() {
-			return batch, target, nil
+		stat, statErr := os.Stat(target)
+		if statErr == nil && startOffset >= stat.Size() {
+			return batch, target, endOffset, target, nil
 		}
 	}
-	return batch, "", nil
+	return batch, target, endOffset, "", nil
 }
 
 // post serializes the batch and POSTs it to the configured URL with bearer auth.

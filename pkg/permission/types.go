@@ -21,8 +21,8 @@ import (
 type Mode string
 
 const (
-	ModeRead    Mode = "r"
-	ModeWrite   Mode = "w"
+	ModeRead      Mode = "r"
+	ModeWrite     Mode = "w"
 	ModeReadWrite Mode = "rw"
 	// ModeExec is reserved for future PTY/exec session-level prompts.
 	ModeExec Mode = "x"
@@ -61,9 +61,9 @@ const (
 
 // Rule is a persisted permission grant or hard-lock entry.
 type Rule struct {
-	Path      string    `json:"path"`            // may include "~"
-	Mode      Mode      `json:"mode"`            // r / w / rw / deny (for hardlock entries we use Mode="deny")
-	Scope     RuleScope `json:"scope"`           // permanent | hardlock | session
+	Path      string    `json:"path"`  // may include "~"
+	Mode      Mode      `json:"mode"`  // r / w / rw / deny (for hardlock entries we use Mode="deny")
+	Scope     RuleScope `json:"scope"` // permanent | hardlock | session
 	GrantedAt time.Time `json:"granted_at,omitempty"`
 	ExpiresAt time.Time `json:"expires_at,omitempty"` // session scope only
 	SessionID string    `json:"session_id,omitempty"` // session scope only
@@ -95,10 +95,10 @@ type Snapshot struct {
 // Path must be absolute and symlink-resolved; the caller (executor) is
 // responsible for that — the manager does not normalize.
 type Request struct {
-	Path     string
-	Mode     Mode
-	Reason   string // optional: human-readable explanation surfaced in the prompt
-	Caller   string // optional: e.g. "files.read", "exec", "pty"
+	Path      string
+	Mode      Mode
+	Reason    string // optional: human-readable explanation surfaced in the prompt
+	Caller    string // optional: e.g. "files.read", "exec", "pty"
 	SessionID string // optional: sandbox session id
 }
 

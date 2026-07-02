@@ -35,9 +35,9 @@ import "time"
 type Source string
 
 const (
-	SourcePathCheck Source = "path"  // permission.Manager.Check
-	SourceExec      Source = "exec"  // permission.Manager.CheckExec
-	SourcePTY       Source = "pty"   // permission.Manager.CheckPTY
+	SourcePathCheck Source = "path" // permission.Manager.Check
+	SourceExec      Source = "exec" // permission.Manager.CheckExec
+	SourcePTY       Source = "pty"  // permission.Manager.CheckPTY
 )
 
 // Event is the wire-format record. We keep field names short (under 16 chars

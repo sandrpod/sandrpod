@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -76,10 +77,10 @@ func (m *Manager) SetAuditSink(s AuditSink) {
 
 // Options configures a new Manager.
 type Options struct {
-	Store    *Store    // required
-	Notifier Notifier  // required (use NopNotifier for fail-close headless mode)
-	WorkDir  string    // sandbox root — silent allow inside this tree
-	HomeDir  string    // employee home dir, used to expand "~" in stored rules
+	Store    *Store   // required
+	Notifier Notifier // required (use NopNotifier for fail-close headless mode)
+	WorkDir  string   // sandbox root — silent allow inside this tree
+	HomeDir  string   // employee home dir, used to expand "~" in stored rules
 }
 
 // NewManager constructs a Manager. The caller owns the Store and Notifier
@@ -405,16 +406,46 @@ var _ = (*Manager).checkInternal
 
 // ---- helpers ----
 
+// caseInsensitiveFS is true on platforms whose default filesystem is
+// case-insensitive (macOS APFS/HFS+, Windows NTFS) — the employee-PC targets.
+// On those, path matching must fold case or a hardlock on ~/.ssh is trivially
+// bypassed by requesting ~/.SSH/id_rsa (same file, different case).
+var caseInsensitiveFS = runtime.GOOS == "darwin" || runtime.GOOS == "windows"
+
 // pathInside reports whether `child` is `parent` itself or a path beneath it.
-// Both inputs must be clean, absolute, and ideally symlink-resolved.
+// Both inputs must be clean and absolute; ruleAbsPath/canonicalize resolve
+// symlinks. Comparison folds case on case-insensitive filesystems.
 func pathInside(child, parent string) bool {
 	if parent == "" {
 		return false
+	}
+	if caseInsensitiveFS {
+		child = strings.ToLower(child)
+		parent = strings.ToLower(parent)
 	}
 	if child == parent {
 		return true
 	}
 	return strings.HasPrefix(child, parent+string(filepath.Separator))
+}
+
+// ruleAbsPath expands a leading ~ and canonicalizes a stored rule path the same
+// way request paths are canonicalized (clean + absolute + symlinks resolved),
+// so rule/request comparison is apples-to-apples. A trailing slash, `..`, or a
+// symlinked home no longer makes a rule silently fail to match. Falls back to a
+// cleaned path when the target does not exist yet.
+func ruleAbsPath(p, home string) string {
+	expanded := expandTilde(p, home)
+	// Only canonicalize genuine filesystem paths. Synthetic keys like
+	// "PTY:<sandbox>" (used by CheckPTY) are non-absolute and must match
+	// verbatim — running filepath.Abs on them would prepend the cwd.
+	if !filepath.IsAbs(expanded) {
+		return expanded
+	}
+	if c, err := canonicalize(expanded); err == nil && c != "" {
+		return c
+	}
+	return filepath.Clean(expanded)
 }
 
 // expandTilde replaces a leading "~" in `p` with `home`.
@@ -471,7 +502,7 @@ func matchHardlock(path string, rules []Rule, home string) *Rule {
 		if r.Scope != ScopeHardlock {
 			continue
 		}
-		rp := expandTilde(r.Path, home)
+		rp := ruleAbsPath(r.Path, home)
 		if pathInside(path, rp) {
 			return r
 		}
@@ -491,7 +522,7 @@ func matchAllow(req Request, rules []Rule, home string) bool {
 		if !r.Mode.Allows(req.Mode) {
 			continue
 		}
-		if pathInside(req.Path, expandTilde(r.Path, home)) {
+		if pathInside(req.Path, ruleAbsPath(r.Path, home)) {
 			return true
 		}
 	}
@@ -510,7 +541,7 @@ func matchSessionAllow(req Request, grants []Rule, home string, now time.Time) b
 		if !r.Mode.Allows(req.Mode) {
 			continue
 		}
-		if pathInside(req.Path, expandTilde(r.Path, home)) {
+		if pathInside(req.Path, ruleAbsPath(r.Path, home)) {
 			return true
 		}
 	}

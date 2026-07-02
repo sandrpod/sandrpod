@@ -54,7 +54,7 @@ func (a *auditAdapter) Record(source, decision, path, mode, caller, sessionID, r
 	if a == nil || a.rec == nil {
 		return
 	}
-	_ = a.rec.Record(audit.Event{
+	if err := a.rec.Record(audit.Event{
 		Source:         audit.Source(source),
 		Decision:       decision,
 		Path:           path,
@@ -63,7 +63,13 @@ func (a *auditAdapter) Record(source, decision, path, mode, caller, sessionID, r
 		SessionID:      sessionID,
 		Reason:         reason,
 		MatchedCommand: matchedCommand,
-	})
+	}); err != nil {
+		// Audit is a compliance control, not best-effort telemetry: a write
+		// failure (disk full, dir went read-only) means decisions are no
+		// longer being logged. Never swallow it silently — surface it so an
+		// operator watching the agent's logs/syslog notices.
+		log.Printf("audit: failed to record %s decision for %q: %v", decision, path, err)
+	}
 }
 
 func envOr(key, defaultVal string) string {
@@ -234,6 +240,22 @@ func installPermissionGate(tb *toolbox.Server) error {
 	store, err := permission.LoadStore(storePath)
 	if err != nil {
 		return fmt.Errorf("load permissions.json (%s): %w", storePath, err)
+	}
+
+	// Seed baseline protections on first run so `--permission-mode=strict|prompt`
+	// never silently runs with zero hardlocks / an empty command policy just
+	// because sandrpod-tray was never launched. The agent must not depend on a
+	// separate binary for its baseline security posture. Both are no-ops once
+	// the store already has entries (the operator's edits are preserved).
+	if n, serr := permission.SeedHardlocksIfEmpty(store); serr != nil {
+		return fmt.Errorf("seed default hardlocks: %w", serr)
+	} else if n > 0 {
+		log.Printf("permission gate: seeded %d default hardlock(s) (first run)", n)
+	}
+	if added, serr := permission.SeedCommandPolicyIfEmpty(store); serr != nil {
+		return fmt.Errorf("seed default command policy: %w", serr)
+	} else if added {
+		log.Printf("permission gate: seeded default command policy (first run)")
 	}
 
 	var notifier permission.Notifier

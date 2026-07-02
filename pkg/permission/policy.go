@@ -40,6 +40,7 @@ package permission
 
 import (
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -128,12 +129,17 @@ func tokenize(code string) []string {
 
 // normalizeCommandName strips an `.exe` suffix (Windows) and any leading
 // `.\` so that `scp.exe`, `scp`, `.\scp.exe` all collapse to `scp` for
-// matching purposes.
+// matching purposes. On Windows the shell is case-insensitive, so command
+// names are folded to lower case there too — otherwise `SCP.EXE` would slip
+// past a `scp` deny rule.
 func normalizeCommandName(s string) string {
 	s = strings.TrimPrefix(s, ".\\")
 	s = strings.TrimPrefix(s, "./")
 	if strings.HasSuffix(strings.ToLower(s), ".exe") {
 		s = s[:len(s)-4]
+	}
+	if runtime.GOOS == "windows" {
+		s = strings.ToLower(s)
 	}
 	return s
 }
@@ -153,10 +159,10 @@ func DefaultCommandPolicy() CommandPolicy {
 			// Credential-adjacent
 			"ssh-keygen", "ssh-add",
 			// Persistence
-			"launchctl",  // macOS
-			"crontab",    // Unix
-			"schtasks",   // Windows
-			"systemctl",  // Linux service
+			"launchctl", // macOS
+			"crontab",   // Unix
+			"schtasks",  // Windows
+			"systemctl", // Linux service
 			// Privilege escalation surface
 			"sudo", "doas", "su",
 			// Disk / firmware (catastrophic mistakes)
