@@ -264,20 +264,34 @@ func (p *TencentProvider) GetVM(ctx context.Context, vmID string) (*provider.VMI
 
 // ListVMs lists SandrPod-tagged instances.
 func (p *TencentProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error) {
-	req := cvm.NewDescribeInstancesRequest()
-	req.Filters = []*cvm.Filter{{
-		Name:   common.StringPtr("tag:" + tagKey),
-		Values: []*string{common.StringPtr("true")},
-	}}
-	req.Limit = common.Int64Ptr(100)
-	resp, err := p.cvmClient.DescribeInstancesWithContext(ctx, req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to list instances: %w", err)
-	}
 	vms := make([]*provider.VMInfo, 0)
-	if resp.Response != nil {
+	var offset int64
+	const limit int64 = 100
+	for {
+		req := cvm.NewDescribeInstancesRequest()
+		req.Filters = []*cvm.Filter{{
+			Name:   common.StringPtr("tag:" + tagKey),
+			Values: []*string{common.StringPtr("true")},
+		}}
+		req.Limit = common.Int64Ptr(limit)
+		req.Offset = common.Int64Ptr(offset)
+		resp, err := p.cvmClient.DescribeInstancesWithContext(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list instances: %w", err)
+		}
+		if resp.Response == nil {
+			break
+		}
 		for _, inst := range resp.Response.InstanceSet {
 			vms = append(vms, mapInstance(inst))
+		}
+		total := int64(0)
+		if resp.Response.TotalCount != nil {
+			total = *resp.Response.TotalCount
+		}
+		offset += int64(len(resp.Response.InstanceSet))
+		if len(resp.Response.InstanceSet) == 0 || offset >= total {
+			break
 		}
 	}
 	return vms, nil

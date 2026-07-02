@@ -284,24 +284,33 @@ func (p *AliyunProvider) GetVM(ctx context.Context, vmID string) (*provider.VMIn
 
 // ListVMs lists all SandrPod-managed ECS instances in the configured region.
 func (p *AliyunProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error) {
-	req := ecs.CreateDescribeInstancesRequest()
-	req.RegionId = p.region
+	vms := make([]*provider.VMInfo, 0)
+	pageNumber := 1
+	const pageSize = 100
+	for {
+		req := ecs.CreateDescribeInstancesRequest()
+		req.RegionId = p.region
+		req.PageNumber = requests.NewInteger(pageNumber)
+		req.PageSize = requests.NewInteger(pageSize)
+		// Filter to only instances created by SandrPod (via tag)
+		req.Tag = &[]ecs.DescribeInstancesTag{
+			{Key: "sandrpod", Value: "true"},
+		}
 
-	// Filter to only instances created by SandrPod (via tag)
-	req.Tag = &[]ecs.DescribeInstancesTag{
-		{Key: "sandrpod", Value: "true"},
+		resp, err := p.ecsClient.DescribeInstances(req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe instances: %w", err)
+		}
+		for _, inst := range resp.Instances.Instance {
+			vms = append(vms, mapEcsInstanceToVM(inst))
+		}
+		// Stop when we've collected everything TotalCount reports, or the last
+		// page returned fewer than a full page.
+		if len(resp.Instances.Instance) < pageSize || len(vms) >= resp.TotalCount {
+			break
+		}
+		pageNumber++
 	}
-
-	resp, err := p.ecsClient.DescribeInstances(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to describe instances: %w", err)
-	}
-
-	vms := make([]*provider.VMInfo, 0, len(resp.Instances.Instance))
-	for _, inst := range resp.Instances.Instance {
-		vms = append(vms, mapEcsInstanceToVM(inst))
-	}
-
 	return vms, nil
 }
 

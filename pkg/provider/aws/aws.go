@@ -318,22 +318,28 @@ func (p *AWSProvider) GetVM(ctx context.Context, vmID string) (*provider.VMInfo,
 
 // ListVMs returns all VMs tagged with sandrpod
 func (p *AWSProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error) {
-	resp, err := p.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
-		Filters: []types.Filter{
-			{Name: aws.String("tag:sandrpod"), Values: []string{"true"}},
-		},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to describe instances: %w", err)
-	}
-
 	vms := make([]*provider.VMInfo, 0)
-	for _, reservation := range resp.Reservations {
-		for _, instance := range reservation.Instances {
-			vms = append(vms, mapEC2ToVMInfo(instance))
+	var nextToken *string
+	for {
+		resp, err := p.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
+			Filters: []types.Filter{
+				{Name: aws.String("tag:sandrpod"), Values: []string{"true"}},
+			},
+			NextToken: nextToken,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to describe instances: %w", err)
 		}
+		for _, reservation := range resp.Reservations {
+			for _, instance := range reservation.Instances {
+				vms = append(vms, mapEC2ToVMInfo(instance))
+			}
+		}
+		if resp.NextToken == nil || *resp.NextToken == "" {
+			break
+		}
+		nextToken = resp.NextToken
 	}
-
 	return vms, nil
 }
 

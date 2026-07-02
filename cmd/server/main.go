@@ -195,6 +195,9 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		})
 	})
 
+	// Prometheus metrics (admin-gated; when auth is off it's public like /health).
+	mux.HandleFunc("/metrics", adminOnly(metricsHandler(&stores)))
+
 	// === Poder tunnel entry point ===
 	// Poder dials this endpoint on startup to register and establish a yamux reverse tunnel
 	mux.HandleFunc("/ws/poder/connect", adminOnly(func(w http.ResponseWriter, r *http.Request) {
