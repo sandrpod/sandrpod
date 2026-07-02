@@ -89,7 +89,9 @@ What makes agent users choose (or leave) a sandbox product.
 The toolbox serves `/proxy/{port}/{path}` (reverse-proxy to `127.0.0.1:{port}`
 inside the sandbox), reachable end-to-end at
 `/api/v1/sandboxes/{name}/toolbox/proxy/{port}/...` and via `sandrpod-cli
-preview`. ☐ Nice-to-have later: vanity `https://<sandbox>.<domain>` hostnames.
+preview`. Live-validated end-to-end (server → tunnel → embedded toolbox →
+in-sandbox web service: 200 with body, subpaths, and 502 for a dead port).
+☐ Nice-to-have later: vanity `https://<sandbox>.<domain>` hostnames.
 
 ### 7. Interactive shell (PTY) ☑
 The server proxies `/sandboxes/{name}/pty` end-to-end over the tunnel and
