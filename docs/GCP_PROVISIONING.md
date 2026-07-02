@@ -3,7 +3,7 @@
 How SandrPod creates Google Compute Engine VMs on demand, bootstraps a Poder on
 each **over SSH**, and runs sandboxes there — and exactly what you must configure.
 
-> **Status: validated end-to-end on a live project** (project `myproject23203`,
+> **Status: validated end-to-end on a live project** (project `your-project-id`,
 > zone `asia-east1-a`, `e2-medium`): create → SSH bootstrap → Docker install →
 > Poder registers over the cross-cloud tunnel → sandbox RUNNING → code executes →
 > poder delete terminates the VM with no leak. Poder **reuse** was also confirmed
@@ -303,7 +303,7 @@ Keep the SA JSON root-readable only (`chmod 600`), owned by the service user.
 
 ## Known limitations & caveats
 
-- **Validated end-to-end** (project `myproject23203`, `asia-east1-a`, `e2-medium`):
+- **Validated end-to-end** (project `your-project-id`, `asia-east1-a`, `e2-medium`):
   create → SSH bootstrap → Poder registers → sandbox RUNNING → code runs → delete
   terminates the VM (no leak); poder reuse confirmed (2nd/3rd sandbox shares the
   VM). SSH first-connect timing, `ssh-keys` propagation, and `InsecureIgnoreHostKey`
