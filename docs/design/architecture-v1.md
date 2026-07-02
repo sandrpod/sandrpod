@@ -1096,9 +1096,9 @@ services:
     container_name: SandrPod-poder
     restart: always
     environment:
-      - FEIBOX_API_URL=https://api.SandrPod.cn
-      - FEIBOX_API_KEY=${RUNNER_API_KEY}
-      - FEIBOX_RUNNER_PORT=3000
+      - SANDRPOD_API_URL=https://api.SandrPod.cn
+      - SANDRPOD_API_KEY=${RUNNER_API_KEY}
+      - SANDRPOD_RUNNER_PORT=3000
       - DOCKER_HOST=unix:///var/run/docker.sock
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
