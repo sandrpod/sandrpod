@@ -94,6 +94,9 @@ class SandrPodClient:
         provider_type: str = "local",
         instance_type: str = "",
         image_id: str = "",
+        ttl_seconds: int = 0,
+        cpu_cores: float = 0,
+        memory_mb: int = 0,
     ) -> "SandrPodSandbox":  # noqa: F821
         """创建 sandbox 并等待其进入 RUNNING 状态后返回。
 
@@ -109,16 +112,22 @@ class SandrPodClient:
         Returns:
             指向新建 sandbox 的 :class:`SandrPodSandbox` 实例。
         """
-        resp = self._http.post(
-            "/api/v1/sandboxes",
-            json={
-                "name": name,
-                "region": region,
-                "provider_type": provider_type,
-                "instance_type": instance_type,
-                "image_id": image_id,
-            },
-        )
+        payload: dict[str, Any] = {
+            "name": name,
+            "region": region,
+            "provider_type": provider_type,
+            "instance_type": instance_type,
+            "image_id": image_id,
+        }
+        # Optional per-sandbox knobs; omitted when zero so older servers that
+        # don't know these fields are unaffected.
+        if ttl_seconds:
+            payload["ttl_seconds"] = int(ttl_seconds)
+        if cpu_cores:
+            payload["cpu_cores"] = float(cpu_cores)
+        if memory_mb:
+            payload["memory_mb"] = int(memory_mb)
+        resp = self._http.post("/api/v1/sandboxes", json=payload)
         self._raise(resp)
         return self._sandbox_from_name(name)
 
@@ -162,6 +171,9 @@ class SandrPodClient:
         provider_type: str = "local",
         instance_type: str = "",
         image_id: str = "",
+        ttl_seconds: int = 0,
+        cpu_cores: float = 0,
+        memory_mb: int = 0,
         auto_delete: bool = True,
     ) -> Generator["SandrPodSandbox", None, None]:  # noqa: F821
         """上下文管理器：自动创建 sandbox，退出时可选删除。
@@ -179,6 +191,9 @@ class SandrPodClient:
             provider_type=provider_type,
             instance_type=instance_type,
             image_id=image_id,
+            ttl_seconds=ttl_seconds,
+            cpu_cores=cpu_cores,
+            memory_mb=memory_mb,
         )
         try:
             yield sb
