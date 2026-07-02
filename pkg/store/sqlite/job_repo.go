@@ -28,13 +28,13 @@ func (r *jobRepo) AddJob(job *sandpod.Job) error {
 		INSERT INTO jobs
 		  (id, type, status, sandbox_name, sandbox_id, region, provider_type,
 		   poder_id, poder_url, vm_id, instance_type, image_id, command, language,
-		   result, error_message, trace_context, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		   result, error_message, trace_context, owner, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		job.ID, string(job.Type), string(job.Status),
 		job.SandboxName, job.SandboxID, job.Region, job.ProviderType,
 		job.PoderID, job.PoderURL, job.VmID, job.InstanceType, job.ImageID,
 		job.Command, job.Language,
-		resultJSON, job.ErrorMessage, string(traceJSON),
+		resultJSON, job.ErrorMessage, string(traceJSON), job.Owner,
 		job.CreatedAt.UTC().Format(time.RFC3339Nano),
 		job.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -160,7 +160,7 @@ func (r *jobRepo) ListJobs() []*sandpod.Job {
 
 const jobColumns = `id, type, status, sandbox_name, sandbox_id, region, provider_type,
     poder_id, poder_url, vm_id, instance_type, image_id, command, language,
-    result, error_message, trace_context, created_at, updated_at`
+    result, error_message, trace_context, owner, created_at, updated_at`
 
 func (r *jobRepo) getByID(id string) (*sandpod.Job, bool, error) {
 	row := r.db.QueryRow(`SELECT `+jobColumns+` FROM jobs WHERE id=?`, id)
@@ -184,8 +184,8 @@ func (r *jobRepo) upsertTx(tx *sql.Tx, j *sandpod.Job) error {
 		INSERT INTO jobs
 		  (id, type, status, sandbox_name, sandbox_id, region, provider_type,
 		   poder_id, poder_url, vm_id, instance_type, image_id, command, language,
-		   result, error_message, trace_context, created_at, updated_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		   result, error_message, trace_context, owner, created_at, updated_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 		  type=excluded.type, status=excluded.status,
 		  sandbox_name=excluded.sandbox_name, sandbox_id=excluded.sandbox_id,
@@ -195,12 +195,12 @@ func (r *jobRepo) upsertTx(tx *sql.Tx, j *sandpod.Job) error {
 		  image_id=excluded.image_id, command=excluded.command,
 		  language=excluded.language, result=excluded.result,
 		  error_message=excluded.error_message, trace_context=excluded.trace_context,
-		  updated_at=excluded.updated_at`,
+		  owner=excluded.owner, updated_at=excluded.updated_at`,
 		j.ID, string(j.Type), string(j.Status),
 		j.SandboxName, j.SandboxID, j.Region, j.ProviderType,
 		j.PoderID, j.PoderURL, j.VmID, j.InstanceType, j.ImageID,
 		j.Command, j.Language,
-		resultJSON, j.ErrorMessage, string(traceJSON),
+		resultJSON, j.ErrorMessage, string(traceJSON), j.Owner,
 		j.CreatedAt.UTC().Format(time.RFC3339Nano),
 		j.UpdatedAt.UTC().Format(time.RFC3339Nano),
 	)
@@ -223,7 +223,7 @@ func scanJob(row *sql.Row) (*sandpod.Job, bool, error) {
 		&j.PoderID, &j.PoderURL, &j.VmID, &j.InstanceType, &j.ImageID,
 		&j.Command, &j.Language,
 		&resultJSON, &j.ErrorMessage, &traceJSON,
-		&createdStr, &updatedStr,
+		&j.Owner, &createdStr, &updatedStr,
 	)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
@@ -261,7 +261,7 @@ func scanJobs(rows *sql.Rows) []*sandpod.Job {
 			&j.PoderID, &j.PoderURL, &j.VmID, &j.InstanceType, &j.ImageID,
 			&j.Command, &j.Language,
 			&resultJSON, &j.ErrorMessage, &traceJSON,
-			&createdStr, &updatedStr,
+			&j.Owner, &createdStr, &updatedStr,
 		); err != nil {
 			continue
 		}

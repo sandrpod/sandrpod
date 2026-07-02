@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
     os             TEXT    NOT NULL DEFAULT '',
     os_version     TEXT    NOT NULL DEFAULT '',
     labels         TEXT    NOT NULL DEFAULT '{}',
+    owner          TEXT    NOT NULL DEFAULT '',
     created_at     DATETIME NOT NULL,
     last_activity  DATETIME NOT NULL
 );
@@ -80,6 +81,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     result         TEXT,
     error_message  TEXT    NOT NULL DEFAULT '',
     trace_context  TEXT    NOT NULL DEFAULT '{}',
+    owner          TEXT    NOT NULL DEFAULT '',
     created_at     DATETIME NOT NULL,
     updated_at     DATETIME NOT NULL
 );
@@ -96,6 +98,8 @@ CREATE INDEX IF NOT EXISTS idx_poders_state     ON poders(state, region, provide
 // migration is safe to re-run on already-migrated databases.
 var columnMigrations = []string{
 	`ALTER TABLE poders ADD COLUMN vm_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sandboxes ADD COLUMN owner TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE jobs ADD COLUMN owner TEXT NOT NULL DEFAULT ''`,
 }
 
 // Migrate applies the DDL to db. It is idempotent (uses IF NOT EXISTS) and

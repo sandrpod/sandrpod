@@ -19,7 +19,11 @@ type SandboxInfo struct {
 	ImageID      string `json:"image_id,omitempty"`
 	State        State  `json:"state"`
 	IP           string `json:"ip,omitempty"`
-	PoderID      string `json:"poder_id,omitempty"`     // owning Poder ID
+	// Owner is the auth-token name that created the sandbox. Empty on records
+	// created before multi-token auth (or with auth disabled); empty-owner
+	// records are visible to every authenticated caller for upgrade smoothness.
+	Owner   string `json:"owner,omitempty"`
+	PoderID string `json:"poder_id,omitempty"` // owning Poder ID
 	PoderURL     string `json:"poder_url,omitempty"`    // Poder API URL
 	ContainerID  string `json:"container_id,omitempty"` // actual container ID
 	ProxyURL     string `json:"proxy_url,omitempty"`    // Toolbox proxy URL

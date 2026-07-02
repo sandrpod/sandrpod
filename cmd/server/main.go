@@ -7,7 +7,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -49,12 +48,28 @@ var (
 	sandboxIdleTTL = flag.Duration("sandbox-idle-timeout", envDuration("SANDRPOD_SANDBOX_IDLE_TIMEOUT"), "Reap sandboxes idle longer than this, e.g. 2h (0 = disabled; env: SANDRPOD_SANDBOX_IDLE_TIMEOUT)")
 	poderIdleTTL   = flag.Duration("poder-idle-timeout", envDuration("SANDRPOD_PODER_IDLE_TIMEOUT"), "Reclaim cloud poders with no sandboxes after this, terminating the VM, e.g. 30m (0 = disabled; env: SANDRPOD_PODER_IDLE_TIMEOUT)")
 	publicURL      = flag.String("public-url", os.Getenv("SANDRPOD_PUBLIC_URL"), "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
+	tokensFile     = flag.String("tokens-file", os.Getenv("SANDRPOD_TOKENS_FILE"), "JSON file of named API tokens [{name,token,role}] adding to -token; role admin|user (env: SANDRPOD_TOKENS_FILE)")
+	maxPerOwner    = flag.Int("max-sandboxes-per-owner", envInt("SANDRPOD_MAX_SANDBOXES_PER_OWNER"), "Max concurrent sandboxes per user token (0 = unlimited, admins exempt; env: SANDRPOD_MAX_SANDBOXES_PER_OWNER)")
 )
 
 // poderTombstones remembers recently-deleted poder IDs so a deleted poder's
 // still-dying container can't re-register and leave a ghost OFFLINE record.
 // 10 minutes comfortably outlives every cloud's VM-termination window.
 var poderTombstones = podpkg.NewTombstones(10 * time.Minute)
+
+// envInt parses an integer env var, returning 0 when unset or malformed.
+func envInt(key string) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		log.Printf("Warning: ignoring invalid %s=%q: %v", key, v, err)
+		return 0
+	}
+	return n
+}
 
 // envDuration parses a duration env var, returning 0 (disabled) when unset or
 // malformed. Used as the flag default so env and flag configure the same knob.
@@ -73,8 +88,12 @@ func envDuration(key string) time.Duration {
 
 // serverConfig holds runtime configuration for the HTTP mux.
 type serverConfig struct {
-	Token  string // API bearer token; empty = no auth
+	Token  string // legacy single API bearer token (implicit admin); empty = none
+	Tokens []NamedToken
 	APIURL string // used by scheduler for bootstrapping
+	// MaxSandboxesPerOwner caps how many sandboxes a user-role token may hold
+	// at once (0 = unlimited; admins are exempt).
+	MaxSandboxesPerOwner int
 }
 
 // buildMux constructs and returns the HTTP mux for the API server.
@@ -115,36 +134,41 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 	//                                          WWW-Authenticate
 	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			if cfg.Token == "" {
-				next(w, r)
+			// Auth disabled: everything runs as an anonymous admin (legacy).
+			if cfg.Token == "" && len(cfg.Tokens) == 0 {
+				next(w, withIdentity(r, identity{Name: "", Role: roleAdmin}))
 				return
 			}
 
-			want := []byte(cfg.Token)
-
-			// Preferred: X-Sandrpod-Token. Constant-time compare prevents
-			// the obvious timing oracle on the secret.
-			if got := r.Header.Get("X-Sandrpod-Token"); got != "" &&
-				subtle.ConstantTimeCompare([]byte(got), want) == 1 {
-				next(w, r)
+			// Resolve the presented credential against the legacy single
+			// token (implicit admin) and the named-tokens file. Constant-time
+			// compares prevent the obvious timing oracle on the secrets.
+			// Header forms: X-Sandrpod-Token (preferred) or Bearer (legacy —
+			// when the Bearer path fires, Authorization reaches the agent as
+			// the platform token, not an MCP Bearer; legacy callers don't use
+			// /mcp so the practical impact is zero).
+			if id, ok := resolveRequest(cfg, r); ok {
+				next(w, withIdentity(r, id))
 				return
-			}
-
-			// Legacy: Authorization: Bearer <cfg.Token>. When this path
-			// fires, Authorization will reach the agent as cfg.Token —
-			// not the MCP Bearer — but legacy callers don't use /mcp,
-			// so the practical impact is zero.
-			if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-				if subtle.ConstantTimeCompare([]byte(auth[len("Bearer "):]), want) == 1 {
-					next(w, r)
-					return
-				}
 			}
 
 			w.Header().Set("WWW-Authenticate",
 				`Bearer realm="sandrpod-api", X-Sandrpod-Token realm="sandrpod-api"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		}
+	}
+
+	// adminOnly gates infrastructure endpoints (poder/agent registration, job
+	// polling, poder management) to admin-role tokens. User tokens only get
+	// the sandbox API, scoped to their own sandboxes.
+	adminOnly := func(next http.HandlerFunc) http.HandlerFunc {
+		return authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			if !identityFrom(r).isAdmin() {
+				http.Error(w, "Forbidden: admin token required", http.StatusForbidden)
+				return
+			}
+			next(w, r)
+		})
 	}
 
 	// Health check endpoint
@@ -160,7 +184,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 
 	// === Poder tunnel entry point ===
 	// Poder dials this endpoint on startup to register and establish a yamux reverse tunnel
-	mux.HandleFunc("/ws/poder/connect", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/ws/poder/connect", adminOnly(func(w http.ResponseWriter, r *http.Request) {
 		poderID := r.Header.Get("X-Poder-ID")
 		if poderID == "" {
 			http.Error(w, "X-Poder-ID header required", http.StatusBadRequest)
@@ -250,7 +274,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 
 	// === Local agent direct-connect entry point (end-user scenario) ===
 	// sandrpod-agent dials this endpoint on startup to register the local machine as a direct sandbox
-	mux.HandleFunc("/ws/sandbox/connect", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/ws/sandbox/connect", adminOnly(func(w http.ResponseWriter, r *http.Request) {
 		sandboxName := r.Header.Get("X-Sandbox-Name")
 		if sandboxName == "" {
 			http.Error(w, "X-Sandbox-Name header required", http.StatusBadRequest)
@@ -323,7 +347,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 
 	// === Poder API ===
 	// GET /api/v1/poders - list all Poder nodes
-	mux.HandleFunc("/api/v1/poders", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/poders", adminOnly(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -334,7 +358,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 	}))
 
 	// /api/v1/poders/* - Poder details, heartbeat, and direct sandbox operations
-	mux.HandleFunc("/api/v1/poders/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/poders/", adminOnly(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path[len("/api/v1/poders/"):]
 
 		// DELETE /api/v1/poders/{id} — delete a Poder record
@@ -584,9 +608,19 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 
 	// === Sandbox API ===
 	mux.HandleFunc("/api/v1/sandboxes", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		ident := identityFrom(r)
 		switch r.Method {
 		case http.MethodGet:
 			sandboxes := sandboxStore.List()
+			if !ident.isAdmin() {
+				visible := make([]*podpkg.SandboxInfo, 0, len(sandboxes))
+				for _, sb := range sandboxes {
+					if canAccessSandbox(ident, sb) {
+						visible = append(visible, sb)
+					}
+				}
+				sandboxes = visible
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"sandboxes": sandboxes})
 
@@ -606,6 +640,20 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				return
 			}
 
+			// Per-owner quota (admins exempt; 0 = unlimited).
+			if !ident.isAdmin() && cfg.MaxSandboxesPerOwner > 0 {
+				owned := 0
+				for _, sb := range sandboxStore.List() {
+					if sb.Owner == ident.Name {
+						owned++
+					}
+				}
+				if owned >= cfg.MaxSandboxesPerOwner {
+					http.Error(w, fmt.Sprintf("sandbox quota reached (%d)", cfg.MaxSandboxesPerOwner), http.StatusTooManyRequests)
+					return
+				}
+			}
+
 			// Async path: register a job + PENDING record, provision in the
 			// background, return immediately. Poll GET /api/v1/jobs/{id} or the
 			// sandbox state. Cloud provisioning takes minutes and long
@@ -620,6 +668,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 					ProviderType: req.ProviderType,
 					InstanceType: req.InstanceType,
 					ImageID:      req.ImageID,
+					Owner:        ident.Name,
 					CreatedAt:    time.Now(),
 					UpdatedAt:    time.Now(),
 				}
@@ -634,6 +683,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 					ProviderType: req.ProviderType,
 					InstanceType: req.InstanceType,
 					State:        podpkg.StatePending,
+					Owner:        ident.Name,
 					CreatedAt:    time.Now(),
 					LastActivity: time.Now(),
 				}
@@ -641,11 +691,11 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 					http.Error(w, err.Error(), http.StatusConflict)
 					return
 				}
-				go func(req podpkg.CreateSandboxRequest, jobID string) {
-					if _, _, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, jobID); err != nil {
+				go func(req podpkg.CreateSandboxRequest, jobID, owner string) {
+					if _, _, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, jobID, owner); err != nil {
 						log.Printf("async create %s: %v", req.Name, err)
 					}
-				}(req, job.ID)
+				}(req, job.ID, ident.Name)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusAccepted)
 				json.NewEncoder(w).Encode(map[string]any{
@@ -657,7 +707,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			// Synchronous path (legacy default): same flow, inline.
-			sandbox, jobID, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, "")
+			sandbox, jobID, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, "", ident.Name)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -677,6 +727,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 
 	// /api/v1/sandboxes/* - per-sandbox operations and proxy
 	mux.HandleFunc("/api/v1/sandboxes/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		ident := identityFrom(r)
 		path := r.URL.Path[len("/api/v1/sandboxes/"):]
 		if path == "" {
 			http.NotFound(w, r)
@@ -692,6 +743,10 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			sandboxName := r.URL.Query().Get("sandbox")
 			if sandboxName == "" {
 				http.Error(w, "sandbox name is required", http.StatusBadRequest)
+				return
+			}
+			if sb, ok := sandboxStore.Get(sandboxName); ok && !canAccessSandbox(ident, sb) {
+				http.Error(w, "sandbox not found", http.StatusNotFound)
 				return
 			}
 			sb, t, ok := sandboxTunnel(sandboxName, sandboxStore, tunnelStore, directStore, w)
@@ -712,6 +767,10 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			sandboxName := r.URL.Query().Get("sandbox")
 			if sandboxName == "" {
 				http.Error(w, "sandbox name is required", http.StatusBadRequest)
+				return
+			}
+			if sb, ok := sandboxStore.Get(sandboxName); ok && !canAccessSandbox(ident, sb) {
+				http.Error(w, "sandbox not found", http.StatusNotFound)
 				return
 			}
 			_, t, ok := sandboxTunnel(sandboxName, sandboxStore, tunnelStore, directStore, w)
@@ -747,6 +806,13 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		action := ""
 		if len(parts) > 1 {
 			action = parts[1]
+		}
+
+		// Ownership: user-role tokens only reach their own sandboxes (missing
+		// records fall through to the per-action 404s).
+		if sb, ok := sandboxStore.Get(name); ok && !canAccessSandbox(ident, sb) {
+			http.Error(w, "sandbox not found", http.StatusNotFound)
+			return
 		}
 
 		// Detect session sub-path
@@ -1069,7 +1135,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 	}))
 
 	// === Job API (called by Poder Agent) ===
-	mux.HandleFunc("/api/v1/jobs/poll", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/jobs/poll", adminOnly(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -1092,7 +1158,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		// GET /api/v1/jobs/{id} — user-facing job status (async create polling).
 		if r.Method == http.MethodGet {
 			job, ok := jobStore.GetJob(jobID)
-			if !ok {
+			if !ok || !canAccessJob(identityFrom(r), job) {
 				http.Error(w, "job not found", http.StatusNotFound)
 				return
 			}
@@ -1102,6 +1168,11 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		}
 		if r.Method != http.MethodPatch {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		// PATCH is the poder agent's job-status report — admin tokens only.
+		if !identityFrom(r).isAdmin() {
+			http.Error(w, "Forbidden: admin token required", http.StatusForbidden)
 			return
 		}
 
@@ -1263,7 +1334,15 @@ func main() {
 	if apiURL == "" {
 		apiURL = fmt.Sprintf("http://localhost:%d", *port)
 	}
-	cfg := serverConfig{Token: *token, APIURL: apiURL}
+	cfg := serverConfig{Token: *token, APIURL: apiURL, MaxSandboxesPerOwner: *maxPerOwner}
+	if *tokensFile != "" {
+		toks, err := loadTokensFile(*tokensFile)
+		if err != nil {
+			log.Fatalf("Failed to load tokens file %q: %v", *tokensFile, err)
+		}
+		cfg.Tokens = toks
+		log.Printf("Loaded %d named token(s) from %s", len(toks), *tokensFile)
+	}
 	handler := buildMux(cfg, stores, tunnelStore, directStore)
 
 	// Start the HTTP server

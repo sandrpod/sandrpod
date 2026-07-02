@@ -19,16 +19,16 @@ import (
 // TestMCPRouteForwardsBearerToAgent is the regression test for the auth
 // header conflict fix (docs/MCP_AUTH_HEADER_CONFLICT_FIX.md):
 //
-//   1. API Server is configured with cfg.Token = api-token-abc.
-//   2. A fake agent is wired in over an in-memory yamux session — it
-//      records the Authorization header of every request it sees.
-//   3. A client calls /api/v1/sandboxes/test-sandbox/mcp/manifest with
-//      BOTH headers: X-Sandrpod-Token (the API auth) and Authorization
-//      (the MCP Bearer meant for the agent).
-//   4. We assert:
-//        - The API Server lets the request through (no 401).
-//        - The agent receives Authorization unchanged — i.e. the MCP
-//          Bearer reached it, not cfg.Token.
+//  1. API Server is configured with cfg.Token = api-token-abc.
+//  2. A fake agent is wired in over an in-memory yamux session — it
+//     records the Authorization header of every request it sees.
+//  3. A client calls /api/v1/sandboxes/test-sandbox/mcp/manifest with
+//     BOTH headers: X-Sandrpod-Token (the API auth) and Authorization
+//     (the MCP Bearer meant for the agent).
+//  4. We assert:
+//     - The API Server lets the request through (no 401).
+//     - The agent receives Authorization unchanged — i.e. the MCP
+//     Bearer reached it, not cfg.Token.
 //
 // Before the fix, step 4b would fail: cfg.Token in Authorization was
 // the only thing that satisfied the API Server, so clients couldn't
@@ -42,9 +42,9 @@ func TestMCPRouteForwardsBearerToAgent(t *testing.T) {
 
 	// --- 1) Fake agent: records Authorization, returns 200. ----------------
 	var (
-		agentMu          sync.Mutex
-		seenAuth         string
-		seenSandrpodTok  string
+		agentMu         sync.Mutex
+		seenAuth        string
+		seenSandrpodTok string
 	)
 	fakeAgent := http.NewServeMux()
 	fakeAgent.HandleFunc("/mcp/manifest", func(w http.ResponseWriter, r *http.Request) {

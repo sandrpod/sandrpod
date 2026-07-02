@@ -34,6 +34,7 @@ func runSandboxCreate(
 	tunnelStore *tunnel.TunnelStore,
 	req *podpkg.CreateSandboxRequest,
 	preJobID string,
+	owner string,
 ) (*podpkg.SandboxInfo, string, error) {
 	failBoth := func(jobID, msg string) {
 		if jobID != "" {
@@ -60,6 +61,7 @@ func runSandboxCreate(
 	jobID := preJobID
 	if jobID == "" {
 		jobID = schedJob.ID
+		schedJob.Owner = owner
 		if err := jobStore.AddJob(schedJob); err != nil {
 			return nil, jobID, err
 		}
@@ -94,6 +96,7 @@ func runSandboxCreate(
 			Region:       req.Region,
 			ProviderType: req.ProviderType,
 			InstanceType: req.InstanceType,
+			Owner:        owner,
 			PoderID:      schedJob.PoderID,
 			ProxyURL:     "tunnel://" + schedJob.PoderID,
 			State:        podpkg.StatePending,

@@ -46,6 +46,8 @@ type Job struct {
 	Language      string            `json:"language,omitempty"` // language: python, node, bash
 	Result        *JobResult        `json:"result,omitempty"`
 	ErrorMessage  string            `json:"error_message,omitempty"`
+	// Owner is the auth-token name that initiated the job (see SandboxInfo.Owner).
+	Owner string `json:"owner,omitempty"`
 	TraceContext  map[string]string `json:"trace_context,omitempty"`
 	CreatedAt     time.Time         `json:"created_at"`
 	UpdatedAt     time.Time         `json:"updated_at"`
