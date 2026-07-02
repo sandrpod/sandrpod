@@ -56,6 +56,10 @@ capacity is a trust problem, not just a feature gap.
 - ☑ **Empty-poder reclamation** (opt-in): a cloud poder with zero containers
   for longer than a configurable window is deleted and its VM terminated.
 - ☑ Per-sandbox TTL override at create time (`ttl_seconds` request field).
+- ☑ Full chain **live-validated end-to-end on GCP** (short TTLs on EC2): idle
+  sandbox auto-deleted → poder emptied → VM terminated + tombstoned + record
+  removed; confirmed 0 orphan VMs in GCP afterward. Loop logic also has
+  deterministic unit tests (`reapEmptyPodersOnce`).
 
 ### 3. Async create + job status API ☑
 `POST /sandboxes` for a cloud provider blocks 2–5 minutes; intermediate proxies
