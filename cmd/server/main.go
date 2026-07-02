@@ -1690,31 +1690,36 @@ func reapOfflinePoders(ctx context.Context, ps podpkg.PoderRepository, timeout t
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			now := time.Now()
-			for _, p := range ps.List() {
-				if p.State != podpkg.PoderStateOffline || now.Sub(p.LastHeartbeat) <= timeout {
-					continue
-				}
-				if isCloudProvider(p.ProviderType) && p.VMID != "" {
-					prov, err := provider.GetFactory().Get(p.ProviderType)
-					if err != nil {
-						log.Printf("reap poder %s: provider %q unavailable, retrying next tick: %v", p.ID, p.ProviderType, err)
-						continue
-					}
-					if err := prov.DeleteVM(ctx, p.VMID); err != nil {
-						log.Printf("reap poder %s: failed to terminate VM %s, retrying next tick: %v", p.ID, p.VMID, err)
-						continue
-					}
-					log.Printf("reap poder %s: terminated VM %s", p.ID, p.VMID)
-				}
-				// Tombstone so a lingering container can't re-register a ghost.
-				poderTombstones.Add(p.ID)
-				if err := ps.Delete(p.ID); err != nil {
-					log.Printf("reap poder %s: failed to delete record: %v", p.ID, err)
-					continue
-				}
-				log.Printf("reap poder %s: reclaimed (OFFLINE for %v)", p.ID, now.Sub(p.LastHeartbeat))
-			}
+			reapOfflinePodersOnce(ctx, time.Now(), timeout, ps, factoryVMTerminator)
 		}
+	}
+}
+
+// reapOfflinePodersOnce runs one liveness sweep: it reclaims any poder that has
+// been OFFLINE (no heartbeat) longer than timeout — terminating the cloud VM
+// (only for cloud poders with a VM; local/docker poders have none), tombstoning
+// the ID, and deleting the record. This is liveness cleanup of dead poders, not
+// idle/cost reclamation: an ONLINE poder is never touched here, and a local
+// poder loses only its stale record (there is no VM to terminate). Pure w.r.t.
+// time and the cloud API so it is directly unit-testable.
+func reapOfflinePodersOnce(ctx context.Context, now time.Time, timeout time.Duration, ps podpkg.PoderRepository, terminate vmTerminator) {
+	for _, p := range ps.List() {
+		if p.State != podpkg.PoderStateOffline || now.Sub(p.LastHeartbeat) <= timeout {
+			continue
+		}
+		if isCloudProvider(p.ProviderType) && p.VMID != "" {
+			if err := terminate(ctx, p.ProviderType, p.VMID); err != nil {
+				log.Printf("reap poder %s: failed to terminate VM %s, retrying next tick: %v", p.ID, p.VMID, err)
+				continue
+			}
+			log.Printf("reap poder %s: terminated VM %s", p.ID, p.VMID)
+		}
+		// Tombstone so a lingering container can't re-register a ghost.
+		poderTombstones.Add(p.ID)
+		if err := ps.Delete(p.ID); err != nil {
+			log.Printf("reap poder %s: failed to delete record: %v", p.ID, err)
+			continue
+		}
+		log.Printf("reap poder %s: reclaimed (OFFLINE for %v)", p.ID, now.Sub(p.LastHeartbeat))
 	}
 }
