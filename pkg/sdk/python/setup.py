@@ -7,6 +7,9 @@ setup(
     name="sandrpod-cli",
     version="0.2.0",
     packages=find_packages(),
+    extras_require={
+        "shell": ["websocket-client>=1.0.0"],
+    },
     install_requires=[
         "requests>=2.28.0",
         "click>=8.0.0",

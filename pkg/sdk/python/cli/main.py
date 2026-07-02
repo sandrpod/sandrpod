@@ -413,6 +413,78 @@ def preview(ctx, name, port, path):
         sys.exit(1)
 
 
+@cli.command()
+@click.argument("name")
+@click.pass_context
+def shell(ctx, name):
+    """Open an interactive shell in the sandbox (PTY over WebSocket)"""
+    try:
+        import websocket  # websocket-client
+    except ImportError:
+        click.echo("Error: interactive shell needs 'websocket-client'.\n"
+                   "  pip install websocket-client   (or: pip install 'sandrpod-cli[shell]')", err=True)
+        sys.exit(1)
+    import threading
+    import termios
+    import tty
+
+    client = ctx.obj["client"]
+    url = client.pty_url(name)
+    header = []
+    auth = client.auth_header()
+    if auth:
+        header.append(f"Authorization: {auth}")
+
+    try:
+        ws = websocket.create_connection(url, header=header, enable_multithread=True)
+    except Exception as e:
+        click.echo(f"Error: failed to open shell for '{name}': {e}", err=True)
+        sys.exit(1)
+
+    click.echo(f"Connected to '{name}'. Press Ctrl-] to exit.")
+    old_attrs = None
+    if sys.stdin.isatty():
+        old_attrs = termios.tcgetattr(sys.stdin)
+        tty.setraw(sys.stdin.fileno())
+
+    stop = threading.Event()
+
+    def pump_output():
+        try:
+            while not stop.is_set():
+                data = ws.recv()
+                if data is None or data == "":
+                    break
+                if isinstance(data, str):
+                    data = data.encode("utf-8", errors="replace")
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+        except Exception:
+            pass
+        finally:
+            stop.set()
+
+    reader = threading.Thread(target=pump_output, daemon=True)
+    reader.start()
+    try:
+        while not stop.is_set():
+            ch = sys.stdin.read(1)
+            if not ch or ch == "\x1d":  # Ctrl-]
+                break
+            ws.send(ch)
+    except (KeyboardInterrupt, Exception):
+        pass
+    finally:
+        stop.set()
+        try:
+            ws.close()
+        except Exception:
+            pass
+        if old_attrs is not None:
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_attrs)
+        click.echo("\nShell closed.")
+
+
 # ========== File Commands ==========
 
 @click.group(name="fs")

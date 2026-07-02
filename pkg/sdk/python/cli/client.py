@@ -140,6 +140,19 @@ class CLIClient:
         resp = self._request("GET", f"/api/v1/jobs/{job_id}")
         return resp.json()
 
+    def pty_url(self, name: str) -> str:
+        """交互式 PTY 的 WebSocket URL(http→ws, https→wss)"""
+        base = self.api_url
+        if base.startswith("https://"):
+            base = "wss://" + base[len("https://"):]
+        elif base.startswith("http://"):
+            base = "ws://" + base[len("http://"):]
+        return f"{base}/api/v1/sandboxes/{name}/pty"
+
+    def auth_header(self) -> Optional[str]:
+        """当前会话的 Authorization 头值（供 WebSocket 复用）"""
+        return self.session.headers.get("Authorization")
+
     def delete_sandbox(self, name: str) -> None:
         """删除 Sandbox（同时清理容器，tunnel 不可用时也会删除记录）"""
         self._request("DELETE", f"/api/v1/sandboxes/{name}")
