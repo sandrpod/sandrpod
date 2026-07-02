@@ -122,6 +122,14 @@ func (s *Scheduler) createVMWithProvider(ctx context.Context, providerType strin
 		return nil, err
 	}
 
+	// Contract check: when a public IP was requested, an empty PublicIP must
+	// fail here rather than propagate — it would silently become PROXY_HOST=''
+	// in the Poder bootstrap. (Providers return their last-seen state when the
+	// IP-assignment poll times out, which can legitimately lack an IP.)
+	if createReq.NetworkConfig != nil && createReq.NetworkConfig.PublicIP && vm.PublicIP == "" {
+		return nil, fmt.Errorf("provider %s created VM %s but reported no public IP before timeout — the VM may still be running and need manual cleanup", providerType, vm.ID)
+	}
+
 	log.Printf("[Scheduler] VM %s created with IP %s", vm.ID, vm.PublicIP)
 	return vm, nil
 }

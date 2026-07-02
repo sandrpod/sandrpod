@@ -94,7 +94,9 @@ func mapServer(s *hcloud.Server) *provider.VMInfo {
 }
 
 // sanitizeLabel keeps only Hetzner-legal label characters ([a-zA-Z0-9._-]),
-// truncated to 63 chars.
+// truncated to 63 chars. Hetzner additionally requires labels to start and end
+// with an alphanumeric, so leading/trailing punctuation is trimmed — otherwise
+// a cosmetic tag like "-foo" would fail the whole Server.Create call.
 func sanitizeLabel(s string) string {
 	var b strings.Builder
 	for _, r := range s {
@@ -107,7 +109,7 @@ func sanitizeLabel(s string) string {
 	if len(out) > 63 {
 		out = out[:63]
 	}
-	return out
+	return strings.Trim(out, "._-")
 }
 
 const createVMIPPollTimeout = 90 * time.Second

@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -93,6 +94,24 @@ func mapDroplet(d *godo.Droplet) *provider.VMInfo {
 	return info
 }
 
+// sanitizeTag keeps only characters DigitalOcean tags accept (letters, digits,
+// colons, dashes, underscores), truncated to 255. Returns "" if nothing valid
+// remains, so an unusable tag is dropped instead of failing droplet creation.
+func sanitizeTag(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') ||
+			r == ':' || r == '-' || r == '_' {
+			b.WriteRune(r)
+		}
+	}
+	out := b.String()
+	if len(out) > 255 {
+		out = out[:255]
+	}
+	return out
+}
+
 const createVMIPPollTimeout = 90 * time.Second
 
 // CreateVM creates a droplet with an ephemeral SSH key (via cloud-init) and
@@ -114,7 +133,9 @@ func (p *DOProvider) CreateVM(ctx context.Context, req *provider.CreateVMRequest
 
 	tags := []string{tag}
 	for k, v := range req.Tags {
-		tags = append(tags, fmt.Sprintf("%s:%s", k, v))
+		if t := sanitizeTag(fmt.Sprintf("%s:%s", k, v)); t != "" {
+			tags = append(tags, t)
+		}
 	}
 
 	createReq := &godo.DropletCreateRequest{
@@ -125,8 +146,17 @@ func (p *DOProvider) CreateVM(ctx context.Context, req *provider.CreateVMRequest
 		UserData: sshexec.CloudInitRootKey(authKey),
 		Tags:     tags,
 	}
-	if req.NetworkConfig != nil && req.NetworkConfig.VpcID != "" {
-		createReq.VPCUUID = req.NetworkConfig.VpcID
+	// VPC selection. The scheduler's network plumbing only carries SubnetID
+	// (SANDRPOD_VM_SUBNET_ID_DIGITALOCEAN); DO has no subnets, so that value is
+	// interpreted as the VPC UUID (documented in DIGITALOCEAN_PROVISIONING.md).
+	// A directly-populated VpcID is honored too.
+	if nc := req.NetworkConfig; nc != nil {
+		switch {
+		case nc.VpcID != "":
+			createReq.VPCUUID = nc.VpcID
+		case nc.SubnetID != "":
+			createReq.VPCUUID = nc.SubnetID
+		}
 	}
 
 	droplet, _, err := p.client.Droplets.Create(ctx, createReq)

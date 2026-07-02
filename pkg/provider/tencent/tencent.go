@@ -160,7 +160,13 @@ func (p *TencentProvider) CreateVM(ctx context.Context, req *provider.CreateVMRe
 		if nc.SecurityGroup != "" {
 			runReq.SecurityGroupIds = []*string{common.StringPtr(nc.SecurityGroup)}
 		}
-		if nc.VpcID != "" || nc.SubnetID != "" {
+		// Tencent VPC placement needs BOTH a VPC ID and a subnet ID, but the
+		// scheduler's network plumbing only carries a subnet. Fail fast with a
+		// clear message rather than sending an empty VpcId the API rejects.
+		if nc.SubnetID != "" && nc.VpcID == "" {
+			return nil, fmt.Errorf("tencent VPC placement needs both a VPC and a subnet, but only a subnet was configured — unset SANDRPOD_VM_SUBNET_ID_TENCENT to use the default VPC")
+		}
+		if nc.VpcID != "" {
 			runReq.VirtualPrivateCloud = &cvm.VirtualPrivateCloud{
 				VpcId:    common.StringPtr(nc.VpcID),
 				SubnetId: common.StringPtr(nc.SubnetID),
@@ -283,9 +289,17 @@ const (
 )
 
 // tatTerminalStatuses are the TAT task statuses that mean the invocation has
-// finished (its ExitCode/Output are final).
+// finished (its ExitCode/Output are final). Non-terminal: PENDING, DELIVERING,
+// DELIVER_DELAYED, RUNNING, CANCELLING.
 var tatTerminalStatuses = map[string]bool{
-	"SUCCESS": true, "FAILED": true, "TIMEOUT": true, "START_FAILED": true,
+	"SUCCESS":        true,
+	"FAILED":         true, // ran, exit code != 0
+	"TIMEOUT":        true, // command hit its execution timeout
+	"TASK_TIMEOUT":   true, // agent/client unresponsive
+	"START_FAILED":   true,
+	"DELIVER_FAILED": true, // dispatch to the instance failed
+	"CANCELLED":      true,
+	"TERMINATED":     true,
 }
 
 // ExecuteCommand runs a shell command via TAT RunCommand and waits for the
@@ -366,6 +380,21 @@ func (p *TencentProvider) ExecuteCommand(ctx context.Context, vmID, command stri
 			} else {
 				result.Output = strVal(task.TaskResult.Output)
 			}
+		}
+		// TAT reports one combined output stream (no separate stderr). On
+		// failure, mirror it into Stderr so callers that report
+		// `result.Stderr` (the scheduler's bootstrap errors) get diagnostics
+		// instead of an empty string. A non-SUCCESS status with exit 0 (e.g.
+		// START_FAILED, DELIVER_FAILED) must also fail loudly.
+		status := strVal(task.TaskStatus)
+		if status != "SUCCESS" && result.ExitCode == 0 {
+			result.ExitCode = 1
+			if result.Output == "" {
+				result.Output = "TAT task ended with status " + status
+			}
+		}
+		if result.ExitCode != 0 && result.Stderr == "" {
+			result.Stderr = result.Output
 		}
 		return result, nil
 	}

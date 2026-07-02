@@ -17,7 +17,11 @@ func TestMapStatus(t *testing.T) {
 		"initializing": provider.VMStatePending,
 		"starting":     provider.VMStatePending,
 		"stopping":     provider.VMStateStopping,
+		"deleting":     provider.VMStateStopping,
 		"off":          provider.VMStateStopped,
+		"migrating":    provider.VMStatePending, // no dedicated state; treated as transitional
+		"rebuilding":   provider.VMStatePending,
+		"unknown":      provider.VMStatePending,
 		"weird":        provider.VMStatePending,
 	}
 	for in, want := range cases {
@@ -58,11 +62,15 @@ func TestMapServer(t *testing.T) {
 
 func TestSanitizeLabel(t *testing.T) {
 	cases := map[string]string{
-		"CreatedBy":  "CreatedBy",
-		"my-sandbox": "my-sandbox",
-		"has space!": "hasspace",
-		"a.b_c-d":    "a.b_c-d",
-		"@@@":        "",
+		"CreatedBy":   "CreatedBy",
+		"my-sandbox":  "my-sandbox",
+		"has space!":  "hasspace",
+		"a.b_c-d":     "a.b_c-d",
+		"@@@":         "",
+		"-leading":    "leading",  // must start alphanumeric
+		"trailing-":   "trailing", // must end alphanumeric
+		"..dots..":    "dots",
+		"@wrapped-@!": "wrapped",
 	}
 	for in, want := range cases {
 		if got := sanitizeLabel(in); got != want {

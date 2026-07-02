@@ -11,6 +11,7 @@ package oracle
 import (
 	"context"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -152,9 +153,7 @@ func (p *OracleProvider) CreateVM(ctx context.Context, req *provider.CreateVMReq
 		},
 		FreeformTags: map[string]string{tagKey: "true"},
 	}
-	for k, v := range req.Tags {
-		details.FreeformTags[k] = v
-	}
+	maps.Copy(details.FreeformTags, req.Tags)
 	// Flex shapes require a shape config.
 	if strings.Contains(strings.ToLower(req.InstanceType), "flex") {
 		ocpus, gb := flexDefaultOcpus, flexDefaultGB
@@ -272,23 +271,30 @@ func (p *OracleProvider) GetVM(ctx context.Context, vmID string) (*provider.VMIn
 	return vm, nil
 }
 
-// ListVMs lists SandrPod-tagged instances in the compartment.
+// ListVMs lists SandrPod-tagged instances in the compartment, following
+// pagination so instances beyond the first page aren't silently invisible
+// (Cleanup relies on this listing being complete).
 func (p *OracleProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error) {
-	resp, err := p.compute.ListInstances(ctx, core.ListInstancesRequest{
-		CompartmentId: common.String(p.compartmentID),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list instances: %w", err)
-	}
 	vms := make([]*provider.VMInfo, 0)
-	for _, inst := range resp.Items {
-		if inst.FreeformTags[tagKey] != "true" {
-			continue
+	req := core.ListInstancesRequest{CompartmentId: common.String(p.compartmentID)}
+	for {
+		resp, err := p.compute.ListInstances(ctx, req)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list instances: %w", err)
 		}
-		if inst.LifecycleState == core.InstanceLifecycleStateTerminated {
-			continue
+		for _, inst := range resp.Items {
+			if inst.FreeformTags[tagKey] != "true" {
+				continue
+			}
+			if inst.LifecycleState == core.InstanceLifecycleStateTerminated {
+				continue
+			}
+			vms = append(vms, mapInstance(inst))
 		}
-		vms = append(vms, mapInstance(inst))
+		if resp.OpcNextPage == nil || *resp.OpcNextPage == "" {
+			break
+		}
+		req.Page = resp.OpcNextPage
 	}
 	return vms, nil
 }
@@ -330,7 +336,10 @@ func (p *OracleProvider) ExecuteCommand(ctx context.Context, vmID, command strin
 	}
 
 	// A just-launched instance's agent needs time to register; retry until the
-	// command is accepted or the registration window closes.
+	// command is accepted or the registration window closes. Only transient
+	// conditions are retried — permanent errors (bad compartment, not
+	// authorized, malformed request) surface immediately with their real cause
+	// instead of a misleading "agent not ready" after 3 minutes.
 	var commandID string
 	for {
 		resp, err := p.agent.CreateInstanceAgentCommand(sendCtx, createReq)
@@ -339,6 +348,9 @@ func (p *OracleProvider) ExecuteCommand(ctx context.Context, vmID, command strin
 			break
 		}
 		if err != nil {
+			if !isRetryableAgentErr(err) {
+				return nil, fmt.Errorf("failed to create agent command: %w", err)
+			}
 			select {
 			case <-sendCtx.Done():
 				return nil, fmt.Errorf("instance %s agent not ready before timeout: %w", vmID, err)
@@ -377,19 +389,51 @@ func (p *OracleProvider) ExecuteCommand(ctx context.Context, vmID, command strin
 		}
 
 		result := &provider.CommandResult{ExecutedAt: time.Now()}
-		if txt, ok := exec.Content.(computeinstanceagent.InstanceAgentCommandExecutionOutputViaTextDetails); ok {
-			if txt.ExitCode != nil {
-				result.ExitCode = *txt.ExitCode
-			}
-			if txt.Text != nil {
-				result.Output = strings.TrimSpace(*txt.Text)
-			}
-			if txt.Message != nil {
-				result.Stderr = strings.TrimSpace(*txt.Message)
+		txt, ok := exec.Content.(computeinstanceagent.InstanceAgentCommandExecutionOutputViaTextDetails)
+		if !ok {
+			// We always request text output, so any other content shape is
+			// unexpected. Failing loudly beats returning the zero value —
+			// ExitCode 0 with empty output would read as a silent success.
+			return nil, fmt.Errorf("unexpected agent command output content type %T (state %s)", exec.Content, exec.LifecycleState)
+		}
+		if txt.ExitCode != nil {
+			result.ExitCode = *txt.ExitCode
+		}
+		if txt.Text != nil {
+			result.Output = strings.TrimSpace(*txt.Text)
+		}
+		if txt.Message != nil {
+			result.Stderr = strings.TrimSpace(*txt.Message)
+		}
+		// A non-SUCCEEDED terminal state must not read as success even if the
+		// service reported no exit code (e.g. the command never started).
+		if exec.LifecycleState != computeinstanceagent.InstanceAgentCommandExecutionLifecycleStateSucceeded && result.ExitCode == 0 {
+			result.ExitCode = 1
+			if result.Stderr == "" {
+				result.Stderr = fmt.Sprintf("agent command ended in state %s", exec.LifecycleState)
 			}
 		}
 		return result, nil
 	}
+}
+
+// isRetryableAgentErr reports whether a CreateInstanceAgentCommand error is
+// worth retrying while a fresh instance's agent registers. 404 (agent/instance
+// not known to the agent service yet), 409 (conflict), 429 (throttled), and
+// 5xx are transient; 4xx like 400/401/403 are permanent and surface
+// immediately. Non-service errors (network) are treated as transient.
+func isRetryableAgentErr(err error) bool {
+	if svcErr, ok := common.IsServiceError(err); ok {
+		switch code := svcErr.GetHTTPStatusCode(); {
+		case code == 404 || code == 409 || code == 429:
+			return true
+		case code >= 500:
+			return true
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // WaitUntilRunning blocks until the instance is running or timeout.

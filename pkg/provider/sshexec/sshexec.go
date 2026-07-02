@@ -58,6 +58,10 @@ func GenerateEd25519(comment string) (ssh.Signer, string, error) {
 // providers (DigitalOcean, Hetzner) whose images boot with a root login and
 // take cloud-init user-data.
 func CloudInitRootKey(authKey string) string {
+	// Keys from GenerateEd25519 are base64 + a fixed comment and can't contain
+	// a single quote, but strip defensively — a quote would break out of the
+	// shell quoting below and inject into the cloud-init runcmd.
+	authKey = strings.ReplaceAll(authKey, "'", "")
 	return "#cloud-config\nruncmd:\n" +
 		"  - mkdir -p /root/.ssh && chmod 700 /root/.ssh\n" +
 		fmt.Sprintf("  - echo '%s' >> /root/.ssh/authorized_keys\n", authKey) +
@@ -101,7 +105,7 @@ func Run(ctx context.Context, host string, cfg Config, command string) (*Result,
 		client, err := ssh.Dial("tcp", addr, clientCfg)
 		if err == nil {
 			defer client.Close()
-			return runOnce(client, cfg, command)
+			return runOnce(ctx, client, cfg, command)
 		}
 		if time.Now().After(deadline) {
 			return nil, fmt.Errorf("could not SSH to %s before timeout: %w", addr, err)
@@ -114,12 +118,25 @@ func Run(ctx context.Context, host string, cfg Config, command string) (*Result,
 	}
 }
 
-func runOnce(client *ssh.Client, cfg Config, command string) (*Result, error) {
+func runOnce(ctx context.Context, client *ssh.Client, cfg Config, command string) (*Result, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open ssh session: %w", err)
 	}
 	defer session.Close()
+
+	// session.Run has no context support, so a hung remote command would block
+	// forever past the caller's deadline. Watch ctx and tear the connection
+	// down on cancellation, which forces Run to return.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			client.Close()
+		case <-done:
+		}
+	}()
 
 	var stdout, stderr bytes.Buffer
 	session.Stdout = &stdout
@@ -135,6 +152,9 @@ func runOnce(client *ssh.Client, cfg Config, command string) (*Result, error) {
 
 	exitCode := 0
 	if runErr := session.Run(runTarget); runErr != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("ssh command cancelled: %w", ctx.Err())
+		}
 		var exitErr *ssh.ExitError
 		if errors.As(runErr, &exitErr) {
 			exitCode = exitErr.ExitStatus()

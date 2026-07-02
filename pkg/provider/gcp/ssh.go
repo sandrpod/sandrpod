@@ -100,7 +100,7 @@ func (p *GCPProvider) ExecuteCommand(ctx context.Context, vmID, command string) 
 		client, derr := ssh.Dial("tcp", addr, config)
 		if derr == nil {
 			defer client.Close()
-			return runSSHCommand(client, command)
+			return runSSHCommand(ctx, client, command)
 		}
 		if time.Now().After(dialDeadline) {
 			return nil, fmt.Errorf("could not SSH to %s before timeout: %w", addr, derr)
@@ -117,12 +117,24 @@ func (p *GCPProvider) ExecuteCommand(ctx context.Context, vmID, command string) 
 // stderr, and the exit code. A non-zero exit surfaces as *ssh.ExitError, which
 // is translated into ExitCode rather than an error — only transport/session
 // failures return an error.
-func runSSHCommand(client *ssh.Client, command string) (*provider.CommandResult, error) {
+func runSSHCommand(ctx context.Context, client *ssh.Client, command string) (*provider.CommandResult, error) {
 	session, err := client.NewSession()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open ssh session: %w", err)
 	}
 	defer session.Close()
+
+	// session.Run has no context support; watch ctx and tear the connection
+	// down on cancellation so a hung remote command can't block forever.
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		select {
+		case <-ctx.Done():
+			client.Close()
+		case <-done:
+		}
+	}()
 
 	var stdout, stderr bytes.Buffer
 	session.Stdout = &stdout
@@ -136,6 +148,9 @@ func runSSHCommand(client *ssh.Client, command string) (*provider.CommandResult,
 
 	exitCode := 0
 	if runErr := session.Run("sudo -n bash"); runErr != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("ssh command cancelled: %w", ctx.Err())
+		}
 		var exitErr *ssh.ExitError
 		if errors.As(runErr, &exitErr) {
 			exitCode = exitErr.ExitStatus()

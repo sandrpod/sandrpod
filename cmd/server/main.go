@@ -563,7 +563,14 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				req.ProviderType = "local"
 			}
 
-			job, err := scheduler.ScheduleSandboxCreation(r.Context(), &req)
+			// Cloud provisioning can take minutes (VM boot + Docker install +
+			// image pulls). Detach it from the request context so a client
+			// disconnect/timeout mid-flight doesn't abort provisioning halfway
+			// and orphan a half-bootstrapped VM — the flow completes, the
+			// Poder registers, and the client can poll `GET /sandboxes/{name}`.
+			schedCtx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
+			job, err := scheduler.ScheduleSandboxCreation(schedCtx, &req)
+			cancel()
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Failed to create sandbox: %v", err), http.StatusInternalServerError)
 				return
