@@ -175,6 +175,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/files/upload", a(s.filesUploadHandler))
 	mux.HandleFunc("/files/bulk-upload", a(s.filesBulkUploadHandler))
 
+	// Port preview proxy (web services started inside the sandbox)
+	mux.HandleFunc("/proxy/", a(s.proxyPortHandler))
+
 	// PTY routes
 	mux.HandleFunc("/pty/create", a(s.ptyCreateHandler))
 	mux.HandleFunc("/pty/", a(s.ptyWsHandler))

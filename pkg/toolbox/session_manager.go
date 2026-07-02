@@ -66,10 +66,10 @@ func (m *SessionManager) Execute(sessionId, cmdId, command string, async bool) (
 	exitFile := filepath.Join(cmdDir, "exit_code")
 
 	sessionCommand := &SessionCommand{
-		ID:       cmdId,
-		Command:  command,
-		LogFile:  logFile,
-		ExitFile: exitFile,
+		ID:        cmdId,
+		Command:   command,
+		LogFile:   logFile,
+		ExitFile:  exitFile,
 		CreatedAt: time.Now(),
 	}
 
@@ -98,7 +98,6 @@ func (m *SessionManager) Execute(sessionId, cmdId, command string, async bool) (
 	// Wait synchronously for the result
 	return m.waitForCommand(sessionCommand)
 }
-
 
 // waitForCommand polls until the command writes an exit code file
 func (m *SessionManager) waitForCommand(sessionCommand *SessionCommand) (*SessionExecuteResponse, error) {

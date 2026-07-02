@@ -219,14 +219,14 @@ func (m *PtyManager) CreateSession(width, height int) (*PtySession, error) {
 
 	var pi windows.ProcessInformation
 	err = windows.CreateProcess(
-		nil,    // appName
+		nil, // appName
 		cmdLine,
-		nil,    // procAttrs
-		nil,    // threadAttrs
-		false,  // inheritHandles
+		nil,   // procAttrs
+		nil,   // threadAttrs
+		false, // inheritHandles
 		extendedStartupInfoPresent,
-		nil,    // env (inherit parent)
-		nil,    // currentDir (inherit parent)
+		nil, // env (inherit parent)
+		nil, // currentDir (inherit parent)
 		(*windows.StartupInfo)(unsafe.Pointer(&siEx)),
 		&pi,
 	)
@@ -300,7 +300,7 @@ func (m *PtyManager) CloseSession(id string) error {
 	if session.procHandle != 0 {
 		ev, err := windows.WaitForSingleObject(session.procHandle, 5000)
 		if err != nil || ev == uint32(windows.WAIT_TIMEOUT) {
-			windows.TerminateProcess(session.procHandle, 1) //nolint:errcheck
+			windows.TerminateProcess(session.procHandle, 1)       //nolint:errcheck
 			windows.WaitForSingleObject(session.procHandle, 1000) //nolint:errcheck
 		}
 		windows.CloseHandle(session.procHandle)

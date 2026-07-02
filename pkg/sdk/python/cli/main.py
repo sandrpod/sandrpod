@@ -397,6 +397,22 @@ def stream(ctx, name, code, language, timeout):
         sys.exit(1)
 
 
+@cli.command()
+@click.argument("name")
+@click.argument("port", type=int)
+@click.argument("path", default="/")
+@click.pass_context
+def preview(ctx, name, port, path):
+    """Fetch a web service running inside the sandbox (proxied via the tunnel)"""
+    client = ctx.obj["client"]
+    try:
+        body = client.preview(name, port, path)
+        click.echo(body.decode("utf-8", errors="replace"))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 # ========== File Commands ==========
 
 @click.group(name="fs")

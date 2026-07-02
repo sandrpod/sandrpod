@@ -128,6 +128,13 @@ class CLIClient:
         resp = self._request("POST", "/api/v1/sandboxes", json=data)
         return resp.json()
 
+    def preview(self, name: str, port: int, path: str = "/") -> bytes:
+        """访问沙箱内 localhost:{port} 上的 web 服务(经隧道代理)"""
+        if not path.startswith("/"):
+            path = "/" + path
+        resp = self._request("GET", f"/api/v1/sandboxes/{name}/toolbox/proxy/{port}{path}")
+        return resp.content
+
     def get_job(self, job_id: str) -> Dict[str, Any]:
         """查询 Job 状态（async create 的进度/错误）"""
         resp = self._request("GET", f"/api/v1/jobs/{job_id}")
