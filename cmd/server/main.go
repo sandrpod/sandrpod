@@ -615,7 +615,13 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			bodyBytes, _ := json.Marshal(req)
-			createReq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, "http://poder/sandboxes", bytes.NewReader(bodyBytes))
+			// Detached like the scheduling step above: after minutes of VM
+			// provisioning the client has often already disconnected, and this
+			// final container-create must not die on the canceled request
+			// context (it would mark the sandbox ERROR with the VM/poder fine).
+			poderCtx, poderCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer poderCancel()
+			createReq, _ := http.NewRequestWithContext(poderCtx, http.MethodPost, "http://poder/sandboxes", bytes.NewReader(bodyBytes))
 			createReq.Header.Set("Content-Type", "application/json")
 
 			resp, err := t.Client.Do(createReq)
