@@ -3,11 +3,16 @@
 How SandrPod creates DigitalOcean droplets on demand, bootstraps a Poder on each
 **over SSH**, and runs sandboxes there.
 
-> **Status: implemented, not yet end-to-end validated on a live account.** The
-> provider (`pkg/provider/digitalocean/`) is real SDK code, builds, and has unit
-> tests, but has not been run against a real DigitalOcean account. Smoke-test
-> before relying on it. The **GCP** path ([GCP_PROVISIONING.md](GCP_PROVISIONING.md))
-> is the validated reference for the SSH-executor mechanics.
+> **Status: validated end-to-end on a live account** (region `sgp1`,
+> `s-2vcpu-2gb`, default VPC, no Cloud Firewall): droplet + public IP in ~40 s,
+> SSH bootstrap as root, Docker install ~56 s, Poder registers over the
+> cross-cloud tunnel, sandbox RUNNING, code executes, poder reuse in ~3 s, and
+> poder delete removes the droplet with no leak. The first live run surfaced
+> two now-fixed issues worth knowing about: DO's first-boot vendor tasks can
+> keep cloud-init "running" indefinitely (the bootstrap's cloud-init wait is
+> now bounded at 180 s), and droplets created without a provider-registered
+> SSH key get a root password with **forced expiry that PAM enforces even for
+> pubkey logins** — the cloud-init user-data now clears it (`chage`).
 
 > **DigitalOcean has no managed run-command API**, so SandrPod bootstraps over
 > **SSH**: CreateVM injects a per-VM ephemeral ed25519 key via cloud-init (root
@@ -167,8 +172,12 @@ take a couple of minutes. Reuse the systemd pattern from
 
 ## Known limitations & caveats
 
-- **Not validated on a live account.** Most likely to need verification: cloud-init
-  root-key injection timing and SSH first-connect vs the 3-minute dial-retry.
+- **Validated end-to-end** (`sgp1`, `s-2vcpu-2gb`): cloud-init root-key
+  injection, SSH first-connect timing, Docker bootstrap, reuse, and droplet
+  reclamation all confirmed live. Two DO first-boot behaviors are handled in
+  code: cloud-init can stay "running" indefinitely (bounded wait), and the
+  forced root-password expiry is cleared via cloud-init (PAM would otherwise
+  kill pubkey command sessions with "Your password has expired").
 - **SSH executor, in-process key.** `ExecuteCommand` only works within the
   process that created the droplet; reclaim orphans via the reaper / poder delete.
 - **Public IP is mandatory** (SSH needs it) — DO assigns one by default.
