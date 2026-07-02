@@ -9,6 +9,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -100,6 +101,22 @@ func teardownSandbox(ctx context.Context, sb *podpkg.SandboxInfo, ss podpkg.Sand
 // (and zero sandbox records) for longer than ttl: the VM is terminated, the
 // poder tombstoned and its record deleted. Empty-since tracking is in-memory;
 // a server restart just restarts the clock, which only delays reclamation.
+// vmTerminator terminates the cloud VM behind a poder. Injectable so the reap
+// loop can be unit-tested without the real provider factory / cloud APIs.
+type vmTerminator func(ctx context.Context, providerType, vmID string) error
+
+// factoryVMTerminator is the production terminator: look the provider up in the
+// global factory and call DeleteVM with a bounded context.
+func factoryVMTerminator(_ context.Context, providerType, vmID string) error {
+	prov, err := provider.GetFactory().Get(providerType)
+	if err != nil {
+		return fmt.Errorf("provider %q unavailable: %w", providerType, err)
+	}
+	delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	return prov.DeleteVM(delCtx, vmID)
+}
+
 func reapIdlePoders(ctx context.Context, ttl time.Duration, ps podpkg.PoderRepository, ss podpkg.SandboxRepository, ts *tunnel.TunnelStore) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -110,55 +127,65 @@ func reapIdlePoders(ctx context.Context, ttl time.Duration, ps podpkg.PoderRepos
 			return
 		case <-ticker.C:
 		}
-		now := time.Now()
-		live := make(map[string]bool)
-		for _, p := range ps.List() {
-			live[p.ID] = true
-			if p.State != podpkg.PoderStateOnline || !isCloudProvider(p.ProviderType) || p.VMID == "" {
-				delete(emptySince, p.ID)
-				continue
-			}
-			if p.Usage.Containers > 0 || len(ss.ListByPoderID(p.ID)) > 0 {
-				delete(emptySince, p.ID)
-				continue
-			}
-			since, seen := emptySince[p.ID]
-			if !seen {
-				emptySince[p.ID] = now
-				continue
-			}
-			if now.Sub(since) <= ttl {
-				continue
-			}
-			prov, err := provider.GetFactory().Get(p.ProviderType)
-			if err != nil {
-				log.Printf("idle reaper: poder %s provider %q unavailable: %v", p.ID, p.ProviderType, err)
-				continue
-			}
-			delCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-			err = prov.DeleteVM(delCtx, p.VMID)
-			cancel()
-			if err != nil {
-				log.Printf("idle reaper: poder %s VM %s termination failed, retrying next tick: %v", p.ID, p.VMID, err)
-				continue
-			}
-			poderTombstones.Add(p.ID)
-			if t, ok := ts.Get(p.ID); ok {
-				t.Close()
-			}
-			if err := ps.Delete(p.ID); err != nil {
-				log.Printf("idle reaper: poder %s record delete failed: %v", p.ID, err)
-				continue
-			}
+		reapEmptyPodersOnce(ctx, time.Now(), ttl, ps, ss, ts, emptySince, factoryVMTerminator)
+	}
+}
+
+// reapEmptyPodersOnce runs one scan pass: it advances the emptySince tracking
+// map and reclaims any ONLINE cloud poder that has had zero containers (and zero
+// sandbox records) for longer than ttl — terminating the VM, tombstoning the
+// poder ID, closing its tunnel, and deleting the record. Pure w.r.t. time (now
+// is passed in) and the cloud API (terminate is injected), so it is directly
+// unit-testable.
+func reapEmptyPodersOnce(
+	ctx context.Context,
+	now time.Time,
+	ttl time.Duration,
+	ps podpkg.PoderRepository,
+	ss podpkg.SandboxRepository,
+	ts *tunnel.TunnelStore,
+	emptySince map[string]time.Time,
+	terminate vmTerminator,
+) {
+	live := make(map[string]bool)
+	for _, p := range ps.List() {
+		live[p.ID] = true
+		if p.State != podpkg.PoderStateOnline || !isCloudProvider(p.ProviderType) || p.VMID == "" {
 			delete(emptySince, p.ID)
-			log.Printf("idle reaper: reclaimed poder %s (empty %v > %v), VM %s terminated", p.ID, now.Sub(since).Round(time.Second), ttl, p.VMID)
-			notifyEvent("poder.reclaimed", map[string]any{"poder_id": p.ID, "vm_id": p.VMID, "provider": p.ProviderType})
+			continue
 		}
-		// Drop tracking for poders that no longer exist.
-		for id := range emptySince {
-			if !live[id] {
-				delete(emptySince, id)
-			}
+		if p.Usage.Containers > 0 || len(ss.ListByPoderID(p.ID)) > 0 {
+			delete(emptySince, p.ID)
+			continue
+		}
+		since, seen := emptySince[p.ID]
+		if !seen {
+			emptySince[p.ID] = now
+			continue
+		}
+		if now.Sub(since) <= ttl {
+			continue
+		}
+		if err := terminate(ctx, p.ProviderType, p.VMID); err != nil {
+			log.Printf("idle reaper: poder %s VM %s termination failed, retrying next tick: %v", p.ID, p.VMID, err)
+			continue
+		}
+		poderTombstones.Add(p.ID)
+		if t, ok := ts.Get(p.ID); ok {
+			t.Close()
+		}
+		if err := ps.Delete(p.ID); err != nil {
+			log.Printf("idle reaper: poder %s record delete failed: %v", p.ID, err)
+			continue
+		}
+		delete(emptySince, p.ID)
+		log.Printf("idle reaper: reclaimed poder %s (empty %v > %v), VM %s terminated", p.ID, now.Sub(since).Round(time.Second), ttl, p.VMID)
+		notifyEvent("poder.reclaimed", map[string]any{"poder_id": p.ID, "vm_id": p.VMID, "provider": p.ProviderType})
+	}
+	// Drop tracking for poders that no longer exist.
+	for id := range emptySince {
+		if !live[id] {
+			delete(emptySince, id)
 		}
 	}
 }
