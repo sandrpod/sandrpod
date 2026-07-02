@@ -5,7 +5,7 @@ infrastructure — fast, secure sandboxes provisioned on demand across eight
 clouds, consumed by AI agents (LangChain deepagents) through a Python SDK and
 CLI. Reference points for feature parity: E2B, Modal, Daytona.
 
-_Last updated: 2026-07-02. Status legend: ☐ open · ◐ partial · ☑ done._
+_Last updated: 2026-07-03. Status legend: ☐ open · ◐ partial · ☑ done._
 
 ---
 
@@ -36,46 +36,48 @@ _Last updated: 2026-07-02. Status legend: ☐ open · ◐ partial · ☑ done._
 These block serious external use. All must keep existing deployments working
 (see [Upgrade policy](#upgrade-policy)).
 
-### 1. Authentication & multi-tenancy ◐
+### 1. Authentication & multi-tenancy ◐ → mostly ☑
 Today the control plane has a **single shared bearer token**: anyone holding it
 can delete every sandbox and terminate every VM. Needed, in order:
-- ◐ **Named tokens** (a tokens file: `{name, token, role}`), so tokens are
-  individually issuable/revocable; the legacy single `-token` keeps working.
-- ◐ **Ownership**: sandboxes carry an `owner` (the token name that created
-  them); user-role tokens only see/manage their own, admin sees all.
-- ☐ Real tenancy later: per-tenant quotas, token CRUD API, key rotation.
+- ☑ **Named tokens** (a tokens file: `{name, token, role}`), individually
+  issuable/revocable, **hot-reloaded** on change; the legacy single `-token`
+  keeps working as an implicit admin.
+- ☑ **Ownership**: sandboxes/jobs carry an `owner`; user-role tokens only
+  see/manage their own, admin sees all; infra endpoints are admin-only.
+- ☑ Per-owner quota (`SANDRPOD_MAX_SANDBOXES_PER_OWNER`) + per-identity rate
+  limiting. ☐ Still open: token CRUD API, automated key rotation.
 
-### 2. Idle reclamation (cost safety) ◐
+### 2. Idle reclamation (cost safety) ☑
 Cloud VMs currently run **forever** until a poder is deleted manually. For a
 product that provisions cloud resources on behalf of users, not reclaiming idle
 capacity is a trust problem, not just a feature gap.
-- ◐ **Sandbox idle timeout** (opt-in): reap sandboxes whose `last_activity`
+- ☑ **Sandbox idle timeout** (opt-in): reap sandboxes whose `last_activity`
   exceeds a configurable TTL.
-- ◐ **Empty-poder reclamation** (opt-in): a cloud poder with zero containers
+- ☑ **Empty-poder reclamation** (opt-in): a cloud poder with zero containers
   for longer than a configurable window is deleted and its VM terminated.
-- ☐ Per-sandbox TTL override at create time (`ttl` request field).
+- ☑ Per-sandbox TTL override at create time (`ttl_seconds` request field).
 
-### 3. Async create + job status API ◐
+### 3. Async create + job status API ☑
 `POST /sandboxes` for a cloud provider blocks 2–5 minutes; intermediate proxies
 routinely kill the connection (~137 s observed), and the job store has **no
 user-facing read endpoint**, so a failed create is invisible to the caller.
 Provisioning is already detached from the request context (a disconnect no
 longer aborts it), but the right shape is:
-- ◐ `async` create: return a job id immediately, provision in the background,
-  expose progress/errors via **`GET /api/v1/jobs/{id}`**.
-- ◐ CLI polls to completion by default (`--no-wait` to just get the job id).
-- ☐ Webhooks / event stream for lifecycle transitions.
+- ☑ `async` create: returns a job id immediately, provisions in the
+  background, progress/errors via **`GET /api/v1/jobs/{id}`**.
+- ☑ CLI polls to completion by default (`--no-wait` to just get the job id).
+- ☑ Lifecycle webhooks (`SANDRPOD_WEBHOOK_URL`) for sandbox/poder transitions.
 
-### 4. Transport security ☐
-The documented production deployment is plain HTTP with the bearer token in
-cleartext. Needed: first-class TLS (built-in cert config or a hard requirement
-+ documented reverse-proxy pattern), and HTTPS-only guidance in every
-provisioning doc.
+### 4. Transport security ◐
+- ☑ First-class built-in TLS (`-tls-cert`/`-tls-key`); the SDKs/console speak
+  `wss://` automatically. ☐ Still open: HTTPS-only guidance rolled into every
+  provisioning doc.
 
-### 5. Quotas & rate limiting ◐
+### 5. Quotas & rate limiting ☑
 Nothing stops a loop from provisioning unbounded VMs.
-- ◐ `SANDRPOD_MAX_SANDBOXES_PER_OWNER` cap at create time.
-- ☐ Per-endpoint rate limiting; per-owner VM/cost caps.
+- ☑ `SANDRPOD_MAX_SANDBOXES_PER_OWNER` cap at create time.
+- ☑ Per-identity request rate limiting (`SANDRPOD_RATE_LIMIT`). ☐ Still open:
+  per-owner VM/cost caps.
 
 ---
 
@@ -83,64 +85,62 @@ Nothing stops a loop from provisioning unbounded VMs.
 
 What makes agent users choose (or leave) a sandbox product.
 
-### 6. Port forwarding / preview URLs ☐
-The most common agent task is "start a web service" — and today there is **no
-way to reach it**. E2B/Daytona expose `https://<sandbox>.<domain>` previews.
-The reverse tunnel already carries HTTP; extending it with per-sandbox port
-routing is the natural next step.
+### 6. Port forwarding / preview URLs ☑
+The toolbox serves `/proxy/{port}/{path}` (reverse-proxy to `127.0.0.1:{port}`
+inside the sandbox), reachable end-to-end at
+`/api/v1/sandboxes/{name}/toolbox/proxy/{port}/...` and via `sandrpod-cli
+preview`. ☐ Nice-to-have later: vanity `https://<sandbox>.<domain>` hostnames.
 
-### 7. Interactive shell (PTY) ☐
-The toolbox already implements a PTY over WebSocket (`/pty/create`, `/pty/`),
-but nothing exposes it: no `sandrpod-cli shell <name>`, no SDK support, and
-WS pass-through over the tunnel is unverified. Finish the last mile.
+### 7. Interactive shell (PTY) ☑
+The server proxies `/sandboxes/{name}/pty` end-to-end over the tunnel and
+`sandrpod-cli shell <name>` opens a raw-mode terminal (Ctrl-] to exit).
 
-### 8. Per-sandbox resource limits ☐
-Containers run unconstrained; one busy sandbox can starve the other nine on
-the same VM. Wire CPU/memory limits through the create request into the
-container spec.
+### 8. Per-sandbox resource limits ☑
+`cpu_cores`/`memory_mb` on create flow through to the container HostConfig
+(NanoCPUs/Memory) on local/docker poders (CLI `--cpu`/`--memory`).
 
-### 9. Custom images / templates ☐
-The toolbox image is fixed per poder. Agent users want prebuilt environments
-(deps preinstalled). Needs per-sandbox image selection end-to-end plus a
-template registry story.
+### 9. Custom images / templates ◐
+- ☑ Per-sandbox image selection end-to-end (`image_id` → poder → container).
+- ☐ A template registry / prebuilt-environment catalog story.
 
-### 10. Snapshot / persistent workspaces ☐
-Deleting a sandbox destroys all state; long agent tasks can't survive
-interruption. Options: workspace volume persistence, container commit
-snapshots, or object-storage sync.
+### 10. Snapshot / persistent workspaces ◐
+- ☑ Container-commit snapshots: `POST /sandboxes/{name}/snapshot` →
+  `sandrpod-cli snapshot`, producing an image reusable as `image_id`.
+- ☐ Workspace-volume persistence / object-storage sync for cross-host restore.
 
-### 11. SSH key persistence (SSH-backend providers) ☐
-GCP/DO/Hetzner hold each VM's ephemeral SSH key **in process memory** — a
-server restart orphans management of existing VMs (they can be reclaimed, not
-bootstrapped/probed). Persist keys encrypted at rest, or move to cloud-native
-key mechanisms.
+### 11. SSH key persistence (SSH-backend providers) ☑
+DigitalOcean and Hetzner persist each VM's ephemeral key (PKCS8 PEM, 0600)
+under `SANDRPOD_SSH_KEY_DIR`, reloaded on demand, so a control-plane restart
+no longer orphans existing VMs. (GCP injects via instance metadata, so it is
+unaffected.)
 
-### 12. Deleted-poder ghost re-registration ◐
-A deleted poder's container often heartbeats once more and re-registers,
-leaving an OFFLINE ghost record that needs a manual `poder delete --keep-vm`
-(hit three times during live testing). Tombstone deleted poder IDs and reject
-their re-registration.
+### 12. Deleted-poder ghost re-registration ☑
+Deleting a poder now tombstones its ID for 10 minutes and rejects the dying
+container's re-registration (`410 Gone`); `keep_vm` deletions are exempt.
+Validated live (ghost records no longer appear).
 
 ---
 
 ## P2 — maturity & ecosystem
 
-- **Observability** ☐ — structured logging with levels, Prometheus metrics,
-  lifecycle events. Today it's `log.Printf` all the way down.
-- **TypeScript SDK** ☐ — half the agent ecosystem is TS (LangChain.js, Vercel
-  AI); only Python exists today.
-- **Web console** ☐ — sandbox list/logs/usage dashboard; currently CLI/API only.
-- **Provider completion** ☐ — Azure/Hetzner/Oracle not yet live-validated;
-  ListVMs pagination missing on AWS/Aliyun/Tencent; instance catalogs are
-  static and priceless; Tencent/DO VPC plumbing is a workaround; Oracle Flex
-  sizing is hardcoded (1 OCPU/6 GB).
-- **Upgrade & version management** ☐ — poder image version skew is real (old
-  VMs keep old poders); needs version reporting + rolling upgrade guidance.
+- **Observability** ◐ — ☑ Prometheus `/metrics` (sandbox/poder/job counts,
+  fleet capacity) + lifecycle webhooks. ☐ Still open: structured leveled logging
+  and tracing.
+- **TypeScript SDK** ☑ — `@sandrpod/sdk`, dependency-free fetch client
+  mirroring the Python SDK (`pkg/sdk/typescript`).
+- **Web console** ◐ — ☑ embedded SPA at `/console` (sandbox cards, stats,
+  create/exec/delete). ☐ Logs/usage drill-down still to come.
+- **Provider completion** ◐ — ☑ ListVMs pagination added on AWS/Aliyun/Tencent.
+  ☐ Still open: Azure/Hetzner/Oracle live validation; static/priceless instance
+  catalogs; Tencent/DO VPC plumbing workaround; hardcoded Oracle Flex sizing.
+- **Upgrade & version management** ◐ — ☑ [UPGRADING.md](UPGRADING.md) with an
+  in-place, rehearsed procedure. ☐ Still open: persisted per-poder version
+  reporting for rolling-upgrade visibility.
 - **Employee-PC mode review** ☐ — the permission/audit/tray surface hasn't had
   the same review + live-validation pass the cloud path got.
-- **Horizontal scale** ☐ — single server instance (SQLite/in-memory); the real
-  ceiling is tunnel connection count (~30–40k goroutines per 10k sandboxes).
-  Document the boundary; revisit multi-instance later.
+- **Horizontal scale** ◐ — ☑ boundary documented in [SCALING.md](SCALING.md)
+  (connection-count / single-writer ceiling, Postgres + multi-instance path).
+  ☐ Still open: multi-instance tunnel affinity/registry.
 
 ---
 
