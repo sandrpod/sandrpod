@@ -65,7 +65,13 @@ func CloudInitRootKey(authKey string) string {
 	return "#cloud-config\nruncmd:\n" +
 		"  - mkdir -p /root/.ssh && chmod 700 /root/.ssh\n" +
 		fmt.Sprintf("  - echo '%s' >> /root/.ssh/authorized_keys\n", authKey) +
-		"  - chmod 600 /root/.ssh/authorized_keys\n"
+		"  - chmod 600 /root/.ssh/authorized_keys\n" +
+		// Droplets/servers created without a provider-registered SSH key get a
+		// one-time root password with forced expiry (chage -d 0). PAM enforces
+		// that even for pubkey logins — command sessions die with "WARNING:
+		// Your password has expired" (or hang on the passwd prompt). Clear the
+		// expiry; we only ever use key auth.
+		"  - chage -d $(date +%Y-%m-%d) -M -1 root || true\n"
 }
 
 // Config configures a single Run invocation.

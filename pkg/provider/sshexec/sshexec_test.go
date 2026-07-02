@@ -48,4 +48,9 @@ func TestCloudInitRootKey(t *testing.T) {
 	if !strings.Contains(ci, "ssh-ed25519 AAAAC3xyz sandrpod") {
 		t.Error("must embed the authorized key")
 	}
+	// Providers set a one-time root password with forced expiry when no SSH
+	// key is registered; PAM would kill/hang our command sessions without this.
+	if !strings.Contains(ci, "chage -d") {
+		t.Error("must clear the forced root-password expiry")
+	}
 }

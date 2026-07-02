@@ -572,6 +572,10 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			job, err := scheduler.ScheduleSandboxCreation(schedCtx, &req)
 			cancel()
 			if err != nil {
+				// Log server-side too: with provisioning detached, the client
+				// has often disconnected by the time this fails — writing the
+				// error only to a dead connection would leave no trace at all.
+				log.Printf("create sandbox %s (provider=%s) failed: %v", req.Name, req.ProviderType, err)
 				http.Error(w, fmt.Sprintf("Failed to create sandbox: %v", err), http.StatusInternalServerError)
 				return
 			}
