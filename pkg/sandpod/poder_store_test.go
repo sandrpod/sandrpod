@@ -113,7 +113,7 @@ func TestPoderStore_Register(t *testing.T) {
 func TestPoderStore_Heartbeat(t *testing.T) {
 	t.Run("updates usage and lastHeartbeat", func(t *testing.T) {
 		s := NewPoderStore()
-		_ , _ = s.Register(newRegisterPoderRequest("p1", "poder-1", "us-east-1", "local", 10))
+		_, _ = s.Register(newRegisterPoderRequest("p1", "poder-1", "us-east-1", "local", 10))
 
 		before := time.Now()
 		err := s.Heartbeat("p1", &HeartbeatRequest{
@@ -160,7 +160,7 @@ func TestPoderStore_Heartbeat(t *testing.T) {
 func TestPoderStore_Get(t *testing.T) {
 	t.Run("found", func(t *testing.T) {
 		s := NewPoderStore()
-		_ , _ = s.Register(newRegisterPoderRequest("p1", "poder-1", "us-east-1", "local", 10))
+		_, _ = s.Register(newRegisterPoderRequest("p1", "poder-1", "us-east-1", "local", 10))
 
 		poder, ok := s.Get("p1")
 		if !ok {

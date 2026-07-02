@@ -25,12 +25,12 @@ func (r *sandboxRepo) Add(sb *sandpod.SandboxInfo) error {
 		INSERT INTO sandboxes
 		  (name, id, region, provider_type, instance_type, image_id, state,
 		   ip, poder_id, poder_url, container_id, proxy_url, api_url,
-		   arch, os, os_version, labels, owner, created_at, last_activity)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		   arch, os, os_version, labels, owner, ttl_seconds, created_at, last_activity)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sb.Name, sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID,
 		string(sb.State), sb.IP, sb.PoderID, sb.PoderURL, sb.ContainerID,
 		sb.ProxyURL, sb.APIURL, sb.Arch, sb.OS, sb.OSVersion,
-		string(labels), sb.Owner,
+		string(labels), sb.Owner, sb.TTLSeconds,
 		sb.CreatedAt.UTC().Format(time.RFC3339Nano),
 		sb.LastActivity.UTC().Format(time.RFC3339Nano),
 	)
@@ -105,7 +105,7 @@ func (r *sandboxRepo) Delete(name string) error {
 
 const sandboxColumns = `name, id, region, provider_type, instance_type, image_id, state,
     ip, poder_id, poder_url, container_id, proxy_url, api_url,
-    arch, os, os_version, labels, owner, created_at, last_activity`
+    arch, os, os_version, labels, owner, ttl_seconds, created_at, last_activity`
 
 func (r *sandboxRepo) getByName(name string) (*sandpod.SandboxInfo, bool, error) {
 	row := r.db.QueryRow(`SELECT `+sandboxColumns+` FROM sandboxes WHERE name=?`, name)
@@ -126,8 +126,8 @@ func (r *sandboxRepo) upsertTx(tx *sql.Tx, sb *sandpod.SandboxInfo) error {
 		INSERT INTO sandboxes
 		  (name, id, region, provider_type, instance_type, image_id, state,
 		   ip, poder_id, poder_url, container_id, proxy_url, api_url,
-		   arch, os, os_version, labels, owner, created_at, last_activity)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		   arch, os, os_version, labels, owner, ttl_seconds, created_at, last_activity)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(name) DO UPDATE SET
 		  id=excluded.id, region=excluded.region, provider_type=excluded.provider_type,
 		  instance_type=excluded.instance_type, image_id=excluded.image_id,
@@ -135,11 +135,11 @@ func (r *sandboxRepo) upsertTx(tx *sql.Tx, sb *sandpod.SandboxInfo) error {
 		  poder_url=excluded.poder_url, container_id=excluded.container_id,
 		  proxy_url=excluded.proxy_url, api_url=excluded.api_url,
 		  arch=excluded.arch, os=excluded.os, os_version=excluded.os_version,
-		  labels=excluded.labels, owner=excluded.owner, last_activity=excluded.last_activity`,
+		  labels=excluded.labels, owner=excluded.owner, ttl_seconds=excluded.ttl_seconds, last_activity=excluded.last_activity`,
 		sb.Name, sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID,
 		string(sb.State), sb.IP, sb.PoderID, sb.PoderURL, sb.ContainerID,
 		sb.ProxyURL, sb.APIURL, sb.Arch, sb.OS, sb.OSVersion,
-		string(labels), sb.Owner,
+		string(labels), sb.Owner, sb.TTLSeconds,
 		sb.CreatedAt.UTC().Format(time.RFC3339Nano),
 		sb.LastActivity.UTC().Format(time.RFC3339Nano),
 	)
@@ -149,17 +149,17 @@ func (r *sandboxRepo) upsertTx(tx *sql.Tx, sb *sandpod.SandboxInfo) error {
 // scanSandbox scans one row (from QueryRow) into a SandboxInfo.
 func scanSandbox(row *sql.Row) (*sandpod.SandboxInfo, bool, error) {
 	var (
-		sb           sandpod.SandboxInfo
-		state        string
-		labelsJSON   string
-		createdStr   string
-		activityStr  string
+		sb          sandpod.SandboxInfo
+		state       string
+		labelsJSON  string
+		createdStr  string
+		activityStr string
 	)
 	err := row.Scan(
 		&sb.Name, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID,
 		&state, &sb.IP, &sb.PoderID, &sb.PoderURL, &sb.ContainerID,
 		&sb.ProxyURL, &sb.APIURL, &sb.Arch, &sb.OS, &sb.OSVersion,
-		&labelsJSON, &sb.Owner, &createdStr, &activityStr,
+		&labelsJSON, &sb.Owner, &sb.TTLSeconds, &createdStr, &activityStr,
 	)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
@@ -179,17 +179,17 @@ func scanSandboxes(rows *sql.Rows) []*sandpod.SandboxInfo {
 	var out []*sandpod.SandboxInfo
 	for rows.Next() {
 		var (
-			sb           sandpod.SandboxInfo
-			state        string
-			labelsJSON   string
-			createdStr   string
-			activityStr  string
+			sb          sandpod.SandboxInfo
+			state       string
+			labelsJSON  string
+			createdStr  string
+			activityStr string
 		)
 		if err := rows.Scan(
 			&sb.Name, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID,
 			&state, &sb.IP, &sb.PoderID, &sb.PoderURL, &sb.ContainerID,
 			&sb.ProxyURL, &sb.APIURL, &sb.Arch, &sb.OS, &sb.OSVersion,
-			&labelsJSON, &sb.Owner, &createdStr, &activityStr,
+			&labelsJSON, &sb.Owner, &sb.TTLSeconds, &createdStr, &activityStr,
 		); err != nil {
 			continue
 		}

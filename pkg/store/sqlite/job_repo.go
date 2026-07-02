@@ -209,13 +209,13 @@ func (r *jobRepo) upsertTx(tx *sql.Tx, j *sandpod.Job) error {
 
 func scanJob(row *sql.Row) (*sandpod.Job, bool, error) {
 	var (
-		j            sandpod.Job
-		jobType      string
-		status       string
-		resultJSON   sql.NullString
-		traceJSON    string
-		createdStr   string
-		updatedStr   string
+		j          sandpod.Job
+		jobType    string
+		status     string
+		resultJSON sql.NullString
+		traceJSON  string
+		createdStr string
+		updatedStr string
 	)
 	err := row.Scan(
 		&j.ID, &jobType, &status,
@@ -247,13 +247,13 @@ func scanJobs(rows *sql.Rows) []*sandpod.Job {
 	var out []*sandpod.Job
 	for rows.Next() {
 		var (
-			j            sandpod.Job
-			jobType      string
-			status       string
-			resultJSON   sql.NullString
-			traceJSON    string
-			createdStr   string
-			updatedStr   string
+			j          sandpod.Job
+			jobType    string
+			status     string
+			resultJSON sql.NullString
+			traceJSON  string
+			createdStr string
+			updatedStr string
 		)
 		if err := rows.Scan(
 			&j.ID, &jobType, &status,

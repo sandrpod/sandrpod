@@ -95,6 +95,7 @@ class CLIClient:
         instance_type: str = "",
         image: str = "",
         async_: bool = False,
+        ttl_seconds: int = 0,
     ) -> Dict[str, Any]:
         """
         创建 Sandbox
@@ -122,6 +123,8 @@ class CLIClient:
             data["image_id"] = image
         if async_:
             data["async"] = True
+        if ttl_seconds:
+            data["ttl_seconds"] = int(ttl_seconds)
         resp = self._request("POST", "/api/v1/sandboxes", json=data)
         return resp.json()
 

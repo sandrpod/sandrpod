@@ -8,10 +8,10 @@ type State string
 
 const (
 	StatePending    State = "PENDING"    // waiting to be created
-	StateStarting   State = "STARTING"  // starting up
-	StateRunning    State = "RUNNING"   // running normally
-	StateStopping   State = "STOPPING"  // in the process of stopping
-	StateStopped    State = "STOPPED"   // stopped
-	StateError      State = "ERROR"     // encountered an error
+	StateStarting   State = "STARTING"   // starting up
+	StateRunning    State = "RUNNING"    // running normally
+	StateStopping   State = "STOPPING"   // in the process of stopping
+	StateStopped    State = "STOPPED"    // stopped
+	StateError      State = "ERROR"      // encountered an error
 	StateTerminated State = "TERMINATED" // permanently terminated
 )

@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
     os_version     TEXT    NOT NULL DEFAULT '',
     labels         TEXT    NOT NULL DEFAULT '{}',
     owner          TEXT    NOT NULL DEFAULT '',
+    ttl_seconds    INTEGER NOT NULL DEFAULT 0,
     created_at     DATETIME NOT NULL,
     last_activity  DATETIME NOT NULL
 );
@@ -100,6 +101,7 @@ var columnMigrations = []string{
 	`ALTER TABLE poders ADD COLUMN vm_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE sandboxes ADD COLUMN owner TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE jobs ADD COLUMN owner TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sandboxes ADD COLUMN ttl_seconds INTEGER NOT NULL DEFAULT 0`,
 }
 
 // Migrate applies the DDL to db. It is idempotent (uses IF NOT EXISTS) and

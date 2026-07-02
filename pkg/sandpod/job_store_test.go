@@ -12,15 +12,15 @@ import (
 func newTestJob(id string, jobType JobType, status JobStatus) *Job {
 	now := time.Now()
 	return &Job{
-		ID:          id,
-		Type:        jobType,
-		Status:      status,
-		SandboxName: fmt.Sprintf("sandbox-%s", id),
-		Region:      "us-east-1",
+		ID:           id,
+		Type:         jobType,
+		Status:       status,
+		SandboxName:  fmt.Sprintf("sandbox-%s", id),
+		Region:       "us-east-1",
 		ProviderType: "local",
-		PoderID:     "poder-1",
-		CreatedAt:   now,
-		UpdatedAt:   now,
+		PoderID:      "poder-1",
+		CreatedAt:    now,
+		UpdatedAt:    now,
 	}
 }
 

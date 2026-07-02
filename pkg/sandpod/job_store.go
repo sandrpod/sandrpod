@@ -12,10 +12,10 @@ import (
 
 // JobStore is the in-memory job store.
 type JobStore struct {
-	mu          sync.RWMutex
-	jobs        map[string]*Job
-	queue       []*Job        // job queue ordered by creation time
-	jobTimeout  time.Duration // job timeout duration, default 5 minutes
+	mu         sync.RWMutex
+	jobs       map[string]*Job
+	queue      []*Job        // job queue ordered by creation time
+	jobTimeout time.Duration // job timeout duration, default 5 minutes
 }
 
 // NewJobStore creates a new JobStore.

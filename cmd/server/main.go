@@ -48,7 +48,10 @@ var (
 	sandboxIdleTTL = flag.Duration("sandbox-idle-timeout", envDuration("SANDRPOD_SANDBOX_IDLE_TIMEOUT"), "Reap sandboxes idle longer than this, e.g. 2h (0 = disabled; env: SANDRPOD_SANDBOX_IDLE_TIMEOUT)")
 	poderIdleTTL   = flag.Duration("poder-idle-timeout", envDuration("SANDRPOD_PODER_IDLE_TIMEOUT"), "Reclaim cloud poders with no sandboxes after this, terminating the VM, e.g. 30m (0 = disabled; env: SANDRPOD_PODER_IDLE_TIMEOUT)")
 	publicURL      = flag.String("public-url", os.Getenv("SANDRPOD_PUBLIC_URL"), "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
-	tokensFile     = flag.String("tokens-file", os.Getenv("SANDRPOD_TOKENS_FILE"), "JSON file of named API tokens [{name,token,role}] adding to -token; role admin|user (env: SANDRPOD_TOKENS_FILE)")
+	tokensFile     = flag.String("tokens-file", os.Getenv("SANDRPOD_TOKENS_FILE"), "JSON file of named API tokens [{name,token,role}] adding to -token; role admin|user; hot-reloaded on change (env: SANDRPOD_TOKENS_FILE)")
+	tlsCert        = flag.String("tls-cert", os.Getenv("SANDRPOD_TLS_CERT"), "TLS certificate file; with -tls-key serves HTTPS (env: SANDRPOD_TLS_CERT)")
+	tlsKey         = flag.String("tls-key", os.Getenv("SANDRPOD_TLS_KEY"), "TLS private key file (env: SANDRPOD_TLS_KEY)")
+	rateLimit      = flag.Float64("rate-limit", float64(envInt("SANDRPOD_RATE_LIMIT")), "Requests/second per user token, 0 = unlimited (env: SANDRPOD_RATE_LIMIT)")
 	maxPerOwner    = flag.Int("max-sandboxes-per-owner", envInt("SANDRPOD_MAX_SANDBOXES_PER_OWNER"), "Max concurrent sandboxes per user token (0 = unlimited, admins exempt; env: SANDRPOD_MAX_SANDBOXES_PER_OWNER)")
 )
 
@@ -56,6 +59,9 @@ var (
 // still-dying container can't re-register and leave a ghost OFFLINE record.
 // 10 minutes comfortably outlives every cloud's VM-termination window.
 var poderTombstones = podpkg.NewTombstones(10 * time.Minute)
+
+// apiRateLimit, when non-nil, throttles user-role tokens (see -rate-limit).
+var apiRateLimit *rateLimiter
 
 // envInt parses an integer env var, returning 0 when unset or malformed.
 func envInt(key string) int {
@@ -90,7 +96,9 @@ func envDuration(key string) time.Duration {
 type serverConfig struct {
 	Token  string // legacy single API bearer token (implicit admin); empty = none
 	Tokens []NamedToken
-	APIURL string // used by scheduler for bootstrapping
+	// Registry, when set, supplies hot-reloadable named tokens (tokens-file).
+	Registry *tokenRegistry
+	APIURL   string // used by scheduler for bootstrapping
 	// MaxSandboxesPerOwner caps how many sandboxes a user-role token may hold
 	// at once (0 = unlimited; admins are exempt).
 	MaxSandboxesPerOwner int
@@ -135,7 +143,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			// Auth disabled: everything runs as an anonymous admin (legacy).
-			if cfg.Token == "" && len(cfg.Tokens) == 0 {
+			if cfg.Token == "" && len(cfg.Tokens) == 0 && (cfg.Registry == nil || len(cfg.Registry.get()) == 0) {
 				next(w, withIdentity(r, identity{Name: "", Role: roleAdmin}))
 				return
 			}
@@ -148,6 +156,11 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			// the platform token, not an MCP Bearer; legacy callers don't use
 			// /mcp so the practical impact is zero).
 			if id, ok := resolveRequest(cfg, r); ok {
+				// Per-identity rate limit for user tokens (admins/poders exempt).
+				if apiRateLimit != nil && !id.isAdmin() && !apiRateLimit.allow(id.Name) {
+					http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+					return
+				}
 				next(w, withIdentity(r, id))
 				return
 			}
@@ -244,6 +257,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		}
 		tunnelStore.Add(t)
 		log.Printf("Poder %s connected via tunnel", poderID)
+		notifyEvent("poder.registered", map[string]any{"poder_id": poderID, "provider": r.Header.Get("X-Poder-Provider-Type"), "vm_id": r.Header.Get("X-Poder-VM-ID")})
 		// Reconciliation now happens via heartbeat (reconcileByHeartbeat).
 		// The first heartbeat from Poder (≤10 s) will carry ContainerNames and
 		// mark any stale RUNNING sandboxes as ERROR — no tunnel-HTTP probe needed.
@@ -425,6 +439,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 					log.Printf("DELETE poder %s: provider %q unavailable, VM %s not terminated: %v", pID, poder.ProviderType, poder.VMID, err)
 				}
 			}
+			notifyEvent("poder.deleted", map[string]any{"poder_id": pID, "vm_terminated": vmTerminated})
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"status": "ok", "vm_terminated": vmTerminated})
 			return
@@ -684,6 +699,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 					InstanceType: req.InstanceType,
 					State:        podpkg.StatePending,
 					Owner:        ident.Name,
+					TTLSeconds:   req.TTLSeconds,
 					CreatedAt:    time.Now(),
 					LastActivity: time.Now(),
 				}
@@ -1129,6 +1145,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				log.Printf("sandbox delete: poder tunnel %s unavailable, skipping container cleanup for %s", pID, name)
 			}
 
+			notifyEvent("sandbox.deleted", map[string]any{"name": name})
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"status": "deleted"})
 		}
@@ -1340,8 +1357,14 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to load tokens file %q: %v", *tokensFile, err)
 		}
-		cfg.Tokens = toks
-		log.Printf("Loaded %d named token(s) from %s", len(toks), *tokensFile)
+		reg := &tokenRegistry{}
+		reg.set(toks)
+		cfg.Registry = reg
+		log.Printf("Loaded %d named token(s) from %s (hot-reload enabled)", len(toks), *tokensFile)
+	}
+	if *rateLimit > 0 {
+		apiRateLimit = newRateLimiter(*rateLimit)
+		log.Printf("Rate limiting enabled: %.1f req/s per user token", *rateLimit)
 	}
 	handler := buildMux(cfg, stores, tunnelStore, directStore)
 
@@ -1370,16 +1393,29 @@ func main() {
 
 	go cleanupOfflinePoders(rootCtx, stores.Poders, *offlineTimeout)
 	go reapOfflinePoders(rootCtx, stores.Poders, *reapTimeout)
-	// Opt-in idle reclamation (cost safety); both default to disabled.
+	// Idle reclamation (cost safety). The sandbox reaper always runs so
+	// per-sandbox ttl_seconds work; the global default stays opt-in (0 = only
+	// sandboxes that set their own TTL are reaped).
 	if *sandboxIdleTTL > 0 {
-		log.Printf("Idle-sandbox reaper enabled: ttl=%v", *sandboxIdleTTL)
-		go reapIdleSandboxes(rootCtx, *sandboxIdleTTL, stores.Sandboxes, stores.Poders, tunnelStore)
+		log.Printf("Idle-sandbox reaper enabled: default ttl=%v", *sandboxIdleTTL)
 	}
+	go reapIdleSandboxes(rootCtx, *sandboxIdleTTL, stores.Sandboxes, stores.Poders, tunnelStore)
 	if *poderIdleTTL > 0 {
 		log.Printf("Idle-poder reaper enabled: ttl=%v (empty cloud poders reclaimed, VMs terminated)", *poderIdleTTL)
 		go reapIdlePoders(rootCtx, *poderIdleTTL, stores.Poders, stores.Sandboxes, tunnelStore)
 	}
 
+	if cfg.Registry != nil && *tokensFile != "" {
+		go watchTokensFile(rootCtx, *tokensFile, cfg.Registry)
+	}
+
+	if *tlsCert != "" && *tlsKey != "" {
+		log.Printf("API server listening on %s (HTTPS, Control Plane + Tunnel Mode)", addr)
+		if err := server.ListenAndServeTLS(*tlsCert, *tlsKey); err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+		return
+	}
 	log.Printf("API server listening on %s (Control Plane + Tunnel Mode)", addr)
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
 		log.Fatalf("Server error: %v", err)

@@ -22,12 +22,14 @@ type SandboxInfo struct {
 	// Owner is the auth-token name that created the sandbox. Empty on records
 	// created before multi-token auth (or with auth disabled); empty-owner
 	// records are visible to every authenticated caller for upgrade smoothness.
-	Owner   string `json:"owner,omitempty"`
-	PoderID string `json:"poder_id,omitempty"` // owning Poder ID
-	PoderURL     string `json:"poder_url,omitempty"`    // Poder API URL
-	ContainerID  string `json:"container_id,omitempty"` // actual container ID
-	ProxyURL     string `json:"proxy_url,omitempty"`    // Toolbox proxy URL
-	APIURL       string `json:"api_url,omitempty"`
+	Owner string `json:"owner,omitempty"`
+	// TTLSeconds > 0 = reap after this many idle seconds (per-sandbox override).
+	TTLSeconds  int64  `json:"ttl_seconds,omitempty"`
+	PoderID     string `json:"poder_id,omitempty"`     // owning Poder ID
+	PoderURL    string `json:"poder_url,omitempty"`    // Poder API URL
+	ContainerID string `json:"container_id,omitempty"` // actual container ID
+	ProxyURL    string `json:"proxy_url,omitempty"`    // Toolbox proxy URL
+	APIURL      string `json:"api_url,omitempty"`
 	// Runtime environment info (for AI-generated executable scripts)
 	Arch         string            `json:"arch,omitempty"`       // e.g. amd64, arm64 (inherited from Poder host)
 	OS           string            `json:"os,omitempty"`         // e.g. linux
@@ -44,6 +46,10 @@ type CreateSandboxRequest struct {
 	ProviderType string `json:"provider_type"` // provider type: local, aws, aliyun, azure, gcp
 	InstanceType string `json:"instance_type"`
 	ImageID      string `json:"image_id,omitempty"`
+	// TTLSeconds, when > 0, overrides the server's idle timeout for this
+	// sandbox: it is reaped after this many seconds without activity, even if
+	// the global idle reaper is otherwise disabled.
+	TTLSeconds int64 `json:"ttl_seconds,omitempty"`
 	// Async makes POST /sandboxes return a job id immediately and provision in
 	// the background; poll GET /api/v1/jobs/{id} (or the sandbox state) for
 	// progress. Cloud provisioning takes minutes — long synchronous responses

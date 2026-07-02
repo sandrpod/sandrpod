@@ -36,11 +36,11 @@ func Open(dsn string) (*sql.DB, error) {
 	db.SetMaxOpenConns(1)
 
 	pragmas := []string{
-		`PRAGMA journal_mode=WAL`,       // concurrent reads while writing
-		`PRAGMA busy_timeout=5000`,      // wait up to 5 s instead of returning SQLITE_BUSY
-		`PRAGMA foreign_keys=ON`,        // enforce FK constraints
-		`PRAGMA synchronous=NORMAL`,     // safe with WAL; faster than FULL
-		`PRAGMA cache_size=-8000`,       // 8 MB page cache
+		`PRAGMA journal_mode=WAL`,   // concurrent reads while writing
+		`PRAGMA busy_timeout=5000`,  // wait up to 5 s instead of returning SQLITE_BUSY
+		`PRAGMA foreign_keys=ON`,    // enforce FK constraints
+		`PRAGMA synchronous=NORMAL`, // safe with WAL; faster than FULL
+		`PRAGMA cache_size=-8000`,   // 8 MB page cache
 	}
 	for _, p := range pragmas {
 		if _, err := db.Exec(p); err != nil {

@@ -14,9 +14,12 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 )
@@ -73,6 +76,56 @@ func loadTokensFile(path string) ([]NamedToken, error) {
 	return list, nil
 }
 
+// tokenRegistry holds the live named-token set, swappable at runtime so the
+// tokens file can be hot-reloaded (revocations apply without a restart).
+type tokenRegistry struct {
+	mu   sync.RWMutex
+	list []NamedToken
+}
+
+func (tr *tokenRegistry) get() []NamedToken {
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
+	return tr.list
+}
+
+func (tr *tokenRegistry) set(list []NamedToken) {
+	tr.mu.Lock()
+	tr.list = list
+	tr.mu.Unlock()
+}
+
+// watchTokensFile polls the tokens file every 10 s and swaps the registry on
+// change. A parse error keeps the previous set (fail-safe: never lock everyone
+// out because of a half-written edit).
+func watchTokensFile(ctx context.Context, path string, tr *tokenRegistry) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	var lastMod time.Time
+	if st, err := os.Stat(path); err == nil {
+		lastMod = st.ModTime()
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		st, err := os.Stat(path)
+		if err != nil || !st.ModTime().After(lastMod) {
+			continue
+		}
+		lastMod = st.ModTime()
+		toks, err := loadTokensFile(path)
+		if err != nil {
+			log.Printf("tokens file %s changed but failed to parse (keeping previous set): %v", path, err)
+			continue
+		}
+		tr.set(toks)
+		log.Printf("tokens file reloaded: %d token(s)", len(toks))
+	}
+}
+
 // identity is who a request authenticated as.
 type identity struct {
 	Name string
@@ -95,13 +148,18 @@ func identityFrom(r *http.Request) identity {
 
 // resolveToken matches a presented credential against the configured tokens
 // (constant-time per candidate). The legacy single token authenticates as an
-// admin named "admin".
+// admin named "admin". Named tokens come from the static cfg.Tokens plus the
+// hot-reloadable registry, when configured.
 func resolveToken(cfg serverConfig, presented string) (identity, bool) {
 	if cfg.Token != "" &&
 		subtle.ConstantTimeCompare([]byte(presented), []byte(cfg.Token)) == 1 {
 		return identity{Name: "admin", Role: roleAdmin}, true
 	}
-	for _, t := range cfg.Tokens {
+	candidates := cfg.Tokens
+	if cfg.Registry != nil {
+		candidates = append(candidates, cfg.Registry.get()...)
+	}
+	for _, t := range candidates {
 		if subtle.ConstantTimeCompare([]byte(presented), []byte(t.Token)) == 1 {
 			return identity{Name: t.Name, Role: t.Role}, true
 		}

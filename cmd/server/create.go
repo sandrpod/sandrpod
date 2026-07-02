@@ -37,6 +37,7 @@ func runSandboxCreate(
 	owner string,
 ) (*podpkg.SandboxInfo, string, error) {
 	failBoth := func(jobID, msg string) {
+		notifyEvent("sandbox.error", map[string]any{"name": req.Name, "provider": req.ProviderType, "error": msg})
 		if jobID != "" {
 			_ = jobStore.UpdateJob(jobID, func(j *podpkg.Job) {
 				j.Status = podpkg.JobStatusFailed
@@ -87,6 +88,7 @@ func runSandboxCreate(
 			s.Arch = sbArch
 			s.OS = sbOS
 			s.OSVersion = sbOSVersion
+			s.TTLSeconds = req.TTLSeconds
 			s.LastActivity = time.Now()
 		})
 	} else {
@@ -97,6 +99,7 @@ func runSandboxCreate(
 			ProviderType: req.ProviderType,
 			InstanceType: req.InstanceType,
 			Owner:        owner,
+			TTLSeconds:   req.TTLSeconds,
 			PoderID:      schedJob.PoderID,
 			ProxyURL:     "tunnel://" + schedJob.PoderID,
 			State:        podpkg.StatePending,
@@ -158,5 +161,6 @@ func runSandboxCreate(
 		}
 	})
 	sb, _ := sandboxStore.Get(req.Name)
+	notifyEvent("sandbox.running", map[string]any{"name": req.Name, "provider": req.ProviderType, "poder_id": schedJob.PoderID})
 	return sb, jobID, nil
 }

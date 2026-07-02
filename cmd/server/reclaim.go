@@ -39,6 +39,7 @@ func reapIdleSandboxes(ctx context.Context, ttl time.Duration, ss podpkg.Sandbox
 				continue
 			}
 			log.Printf("idle reaper: deleting sandbox %s (idle, ttl %v)", sb.Name, ttl)
+			notifyEvent("sandbox.reaped", map[string]any{"name": sb.Name, "provider": sb.ProviderType})
 			teardownSandbox(ctx, sb, ss, ps, ts)
 		}
 	}
@@ -57,11 +58,20 @@ func shouldReapSandbox(sb *podpkg.SandboxInfo, now time.Time, ttl time.Duration)
 	default:
 		return false // PENDING/STARTING etc. are still provisioning
 	}
+	// A per-sandbox TTL overrides the global default; with neither set the
+	// sandbox is never reaped.
+	effective := ttl
+	if sb.TTLSeconds > 0 {
+		effective = time.Duration(sb.TTLSeconds) * time.Second
+	}
+	if effective <= 0 {
+		return false
+	}
 	last := sb.LastActivity
 	if last.IsZero() {
 		last = sb.CreatedAt
 	}
-	return !last.IsZero() && now.Sub(last) > ttl
+	return !last.IsZero() && now.Sub(last) > effective
 }
 
 // teardownSandbox removes a sandbox record, decrements its poder's usage, and
@@ -142,6 +152,7 @@ func reapIdlePoders(ctx context.Context, ttl time.Duration, ps podpkg.PoderRepos
 			}
 			delete(emptySince, p.ID)
 			log.Printf("idle reaper: reclaimed poder %s (empty %v > %v), VM %s terminated", p.ID, now.Sub(since).Round(time.Second), ttl, p.VMID)
+			notifyEvent("poder.reclaimed", map[string]any{"poder_id": p.ID, "vm_id": p.VMID, "provider": p.ProviderType})
 		}
 		// Drop tracking for poders that no longer exist.
 		for id := range emptySince {

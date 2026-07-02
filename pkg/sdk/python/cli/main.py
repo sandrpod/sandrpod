@@ -170,10 +170,11 @@ def list(ctx):
 @click.option("--instance-type", default="", help="Instance type (optional)")
 @click.option("--image", default="", help="Container image ID (optional, uses Poder default if omitted)")
 @click.option("--poder", default=None, help="Target a specific Poder ID (bypasses the scheduler)")
+@click.option("--ttl", default=0, help="Idle TTL in seconds; sandbox is auto-reaped after this much inactivity (0 = server default)")
 @click.option("--no-wait", is_flag=True, help="Return immediately with the job id instead of waiting for RUNNING")
 @click.option("--wait-timeout", default=900, help="Seconds to wait for the sandbox to reach RUNNING (default 900)")
 @click.pass_context
-def create(ctx, name, region, provider_type, instance_type, image, poder, no_wait, wait_timeout):
+def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, no_wait, wait_timeout):
     """Create a sandbox (waits for it to reach RUNNING; cloud provisioning can take minutes)"""
     import time as _time
     client = ctx.obj["client"]
@@ -198,7 +199,7 @@ def create(ctx, name, region, provider_type, instance_type, image, poder, no_wai
     # connection drops mid-way we just fall through to polling).
     job_id = None
     try:
-        resp = client.create_sandbox(name, region, provider_type, instance_type, image, async_=True)
+        resp = client.create_sandbox(name, region, provider_type, instance_type, image, async_=True, ttl_seconds=ttl)
         job_id = resp.get("job_id")
         click.echo(f"Sandbox:  {resp.get('sandbox', {}).get('name', name)}")
         click.echo(f"Job ID:   {job_id or 'N/A'}")
