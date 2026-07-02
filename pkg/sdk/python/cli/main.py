@@ -487,6 +487,21 @@ def shell(ctx, name):
         click.echo("\nShell closed.")
 
 
+@cli.command()
+@click.argument("name")
+@click.option("--image", default="", help="Target image ref (repo:tag); default sandrpod-snapshot/<name>:latest")
+@click.pass_context
+def snapshot(ctx, name, image):
+    """Commit the sandbox's current state to a new image (docker commit)"""
+    client = ctx.obj["client"]
+    try:
+        res = client.snapshot(name, image)
+        click.echo(f"Snapshot image: {res.get('image', 'N/A')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 # ========== File Commands ==========
 
 @click.group(name="fs")

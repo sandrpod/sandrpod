@@ -25,8 +25,8 @@ type Resources struct {
 	CPU       float64 // Number of CPU cores
 	MemoryGiB float64 // Memory in GiB
 	DiskGiB   float64 // Disk in GiB
-	GPU       int      // Number of GPUs
-	GPUType   string   // GPU model, e.g. "NVIDIA T4"
+	GPU       int     // Number of GPUs
+	GPUType   string  // GPU model, e.g. "NVIDIA T4"
 }
 
 // NetworkConfig holds network configuration for a VM.
@@ -77,9 +77,9 @@ type HealthStatus struct {
 
 // CommandResult holds the output of a remotely executed command.
 type CommandResult struct {
-	Output    string    // Standard output
-	ExitCode  int      // Exit code
-	Stderr    string    // Standard error output
+	Output     string    // Standard output
+	ExitCode   int       // Exit code
+	Stderr     string    // Standard error output
 	ExecutedAt time.Time // Execution timestamp
 }
 
@@ -93,14 +93,14 @@ type RunnerBootstrapConfig struct {
 
 // CreateVMRequest is the request payload for creating a VM.
 type CreateVMRequest struct {
-	Name          string            // Instance name
-	Region        string            // Region
-	InstanceType  string            // Instance type
-	ImageID       string            // Image ID (optional, uses default if empty)
-	NetworkConfig *NetworkConfig   // Network configuration (optional)
-	DiskConfig    *DiskConfig      // Disk configuration (optional)
+	Name          string                 // Instance name
+	Region        string                 // Region
+	InstanceType  string                 // Instance type
+	ImageID       string                 // Image ID (optional, uses default if empty)
+	NetworkConfig *NetworkConfig         // Network configuration (optional)
+	DiskConfig    *DiskConfig            // Disk configuration (optional)
 	RunnerConfig  *RunnerBootstrapConfig // Poder bootstrap configuration
-	Tags          map[string]string // Resource tags
+	Tags          map[string]string      // Resource tags
 }
 
 // Provider is the abstract interface for a cloud provider.

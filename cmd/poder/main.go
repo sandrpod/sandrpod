@@ -184,6 +184,25 @@ func main() {
 				})
 				return
 			}
+			if action == "snapshot" {
+				pod, err := p.FindPodByName(ctx, sandboxName)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("Sandbox %s not found", sandboxName), http.StatusNotFound)
+					return
+				}
+				imageName := r.URL.Query().Get("image")
+				if imageName == "" {
+					imageName = "sandrpod-snapshot/" + sandboxName + ":latest"
+				}
+				ref, err := p.SnapshotPod(ctx, pod.ID, imageName)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("Failed to snapshot sandbox: %v", err), http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{"image": ref, "sandbox": sandboxName})
+				return
+			}
 			if action == "stop" {
 				pod, err := p.FindPodByName(ctx, sandboxName)
 				if err != nil {

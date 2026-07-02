@@ -106,6 +106,10 @@ type Poder interface {
 	PausePod(ctx context.Context, podID string) error
 	UnpausePod(ctx context.Context, podID string) error
 
+	// SnapshotPod commits the pod's current state to a new image, returning the
+	// image reference (name:tag or image ID).
+	SnapshotPod(ctx context.Context, podID, imageName string) (string, error)
+
 	// Remote execution
 	ExecuteCommand(ctx context.Context, podID, command string) (*CommandResult, error)
 

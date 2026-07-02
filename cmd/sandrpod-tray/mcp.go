@@ -3,9 +3,9 @@
 // The agent's mcpbridge admin endpoints live on a Unix socket
 // (~/.sandrpod/mcp.sock). This file gives the tray:
 //
-//   1. A thin client that dials that socket.
-//   2. Settings-page endpoints under /api/mcp/* that proxy through.
-//   3. A "MCP Servers" submenu showing per-server state with click-to-restart.
+//  1. A thin client that dials that socket.
+//  2. Settings-page endpoints under /api/mcp/* that proxy through.
+//  3. A "MCP Servers" submenu showing per-server state with click-to-restart.
 //
 // When the agent isn't running (no socket) we surface that as "未连接" instead
 // of crashing the menu — the tray and the agent have independent lifetimes.
@@ -164,10 +164,10 @@ func httpMCPServerAction(w http.ResponseWriter, r *http.Request) {
 // mcpMenu holds the dynamic submenu items so the refresh goroutine can
 // update their titles in place.
 type mcpMenu struct {
-	mu      sync.Mutex
-	parent  *systray.MenuItem
-	items   map[string]*mcpMenuItem // server name -> item handle
-	reload  *systray.MenuItem
+	mu     sync.Mutex
+	parent *systray.MenuItem
+	items  map[string]*mcpMenuItem // server name -> item handle
+	reload *systray.MenuItem
 }
 
 type mcpMenuItem struct {

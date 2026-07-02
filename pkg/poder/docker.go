@@ -14,6 +14,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/distribution/reference"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -214,6 +215,27 @@ func (p *DockerPoder) PausePod(ctx context.Context, podID string) error {
 // UnpausePod resumes a paused pod.
 func (p *DockerPoder) UnpausePod(ctx context.Context, podID string) error {
 	return p.dockerClient.ContainerUnpause(ctx, podID)
+}
+
+// SnapshotPod commits the pod's container to a new image (docker commit) and
+// returns the resulting image reference. imageName may be "repo:tag"; if it has
+// no tag, Docker applies :latest.
+func (p *DockerPoder) SnapshotPod(ctx context.Context, podID, imageName string) (string, error) {
+	if imageName == "" {
+		return "", fmt.Errorf("snapshot image name is required")
+	}
+	ref, err := reference.ParseNormalizedNamed(imageName)
+	if err != nil {
+		return "", fmt.Errorf("invalid snapshot image name %q: %w", imageName, err)
+	}
+	ref = reference.TagNameOnly(ref)
+	if _, err := p.dockerClient.ContainerCommit(ctx, podID, container.CommitOptions{
+		Reference: ref.String(),
+		Comment:   "sandrpod snapshot",
+	}); err != nil {
+		return "", fmt.Errorf("failed to commit container %s: %w", podID, err)
+	}
+	return ref.String(), nil
 }
 
 // GetPod returns information about a pod, consulting the internal registry first

@@ -15,13 +15,13 @@
 //
 // Runtime layout:
 //
-//   sandrpod-tray serve    (default; brings up tray + IPC + HTTP)
-//   sandrpod-tray unlock <path> --i-understand-the-risk
-//   sandrpod-tray lock <path>
-//   sandrpod-tray rules ls
-//   sandrpod-tray rules add <path> --mode rw
-//   sandrpod-tray rules rm <path>
-//   sandrpod-tray seed         (force-write default hardlock seeds)
+//	sandrpod-tray serve    (default; brings up tray + IPC + HTTP)
+//	sandrpod-tray unlock <path> --i-understand-the-risk
+//	sandrpod-tray lock <path>
+//	sandrpod-tray rules ls
+//	sandrpod-tray rules add <path> --mode rw
+//	sandrpod-tray rules rm <path>
+//	sandrpod-tray seed         (force-write default hardlock seeds)
 //
 // All subcommands operate on $HOME/.sandrpod/permissions.json (override via
 // SANDRPOD_PERMISSION_FILE).

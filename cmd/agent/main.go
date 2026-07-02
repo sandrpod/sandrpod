@@ -210,9 +210,9 @@ func main() {
 //
 //   - off:    no-op (legacy behavior).
 //   - prompt: load permissions.json, install the platform notifier
-//             (osascript modal on macOS).
+//     (osascript modal on macOS).
 //   - strict: load permissions.json, install NopNotifier so every path
-//             outside work_dir is silently denied.
+//     outside work_dir is silently denied.
 //
 // Any failure (unreadable permissions file, unsupported platform when in
 // prompt mode) is fatal — we refuse to start with a broken gate, since

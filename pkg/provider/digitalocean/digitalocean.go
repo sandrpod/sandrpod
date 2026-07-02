@@ -36,17 +36,24 @@ type DOProvider struct {
 	mu  sync.RWMutex
 	vms map[string]*provider.VMInfo
 	// sshKeys holds the per-droplet ephemeral SSH signer (root login), keyed by
-	// droplet ID. Held in-process — CreateVM and bootstrap run in one process.
+	// droplet ID. Held in-process, and (when keys is enabled) mirrored to disk
+	// so it survives a control-plane restart.
 	sshKeys map[string]ssh.Signer
+	keys    *sshexec.KeyStore
 }
 
 // NewDOProvider creates a DigitalOcean provider from the given configuration.
 func NewDOProvider(cfg *Config) (*DOProvider, error) {
+	ks, err := sshexec.NewKeyStore(cfg.SSHKeyDir)
+	if err != nil {
+		return nil, err
+	}
 	return &DOProvider{
 		region:  cfg.Region,
 		client:  godo.NewFromToken(cfg.Token),
 		vms:     make(map[string]*provider.VMInfo),
 		sshKeys: make(map[string]ssh.Signer),
+		keys:    ks,
 	}, nil
 }
 
@@ -126,7 +133,7 @@ func (p *DOProvider) CreateVM(ctx context.Context, req *provider.CreateVMRequest
 		image = defaultImage
 	}
 
-	signer, authKey, err := sshexec.GenerateEd25519("sandrpod")
+	signer, authKey, priv, err := sshexec.GenerateEd25519Key("sandrpod")
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate ssh key: %w", err)
 	}
@@ -168,6 +175,10 @@ func (p *DOProvider) CreateVM(ctx context.Context, req *provider.CreateVMRequest
 	p.mu.Lock()
 	p.sshKeys[id] = signer
 	p.mu.Unlock()
+	if err := p.keys.Save("digitalocean", id, priv); err != nil {
+		// Non-fatal: the in-memory signer still works this process lifetime.
+		fmt.Printf("digitalocean: persist ssh key for %s failed: %v\n", id, err)
+	}
 
 	vmInfo := mapDroplet(droplet)
 	if vm, ok := p.pollForPublicIP(ctx, droplet.ID); ok {
@@ -217,6 +228,7 @@ func (p *DOProvider) DeleteVM(ctx context.Context, vmID string) error {
 	delete(p.vms, vmID)
 	delete(p.sshKeys, vmID)
 	p.mu.Unlock()
+	p.keys.Delete("digitalocean", vmID)
 	return nil
 }
 
@@ -267,7 +279,17 @@ func (p *DOProvider) ExecuteCommand(ctx context.Context, vmID, command string) (
 	signer, ok := p.sshKeys[vmID]
 	p.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("no ssh credential for droplet %s (created by a different process?)", vmID)
+		loaded, found, lerr := p.keys.Load("digitalocean", vmID)
+		if lerr != nil {
+			return nil, lerr
+		}
+		if !found {
+			return nil, fmt.Errorf("no ssh credential for droplet %s (set SANDRPOD_SSH_KEY_DIR to persist keys across restarts)", vmID)
+		}
+		signer = loaded
+		p.mu.Lock()
+		p.sshKeys[vmID] = signer
+		p.mu.Unlock()
 	}
 	vm, err := p.GetVM(ctx, vmID)
 	if err != nil {

@@ -34,23 +34,30 @@ const (
 // the private half and the authorized-keys line for the public half (suffixed
 // with an identifying comment).
 func GenerateEd25519(comment string) (ssh.Signer, string, error) {
+	signer, authKey, _, err := GenerateEd25519Key(comment)
+	return signer, authKey, err
+}
+
+// GenerateEd25519Key is GenerateEd25519 plus the raw private key, so callers
+// can persist it via a KeyStore for survival across control-plane restarts.
+func GenerateEd25519Key(comment string) (ssh.Signer, string, ed25519.PrivateKey, error) {
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	signer, err := ssh.NewSignerFromKey(priv)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	sshPub, err := ssh.NewPublicKey(pub)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	authKey := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(sshPub)))
 	if comment != "" {
 		authKey += " " + comment
 	}
-	return signer, authKey, nil
+	return signer, authKey, priv, nil
 }
 
 // CloudInitRootKey builds a cloud-init user-data document that installs the

@@ -7,8 +7,9 @@ import "os"
 
 // Config holds DigitalOcean credentials and default placement.
 type Config struct {
-	Token  string // DigitalOcean API token
-	Region string // Default region slug, e.g. "nyc3"
+	Token     string // DigitalOcean API token
+	Region    string // Default region slug, e.g. "nyc3"
+	SSHKeyDir string // Directory to persist per-VM SSH keys (empty = memory-only)
 }
 
 // LoadConfig loads configuration from environment variables. The token is read
@@ -19,8 +20,9 @@ func LoadConfig() *Config {
 		token = os.Getenv("DO_TOKEN")
 	}
 	return &Config{
-		Token:  token,
-		Region: getEnv("DO_REGION", "nyc3"),
+		Token:     token,
+		Region:    getEnv("DO_REGION", "nyc3"),
+		SSHKeyDir: os.Getenv("SANDRPOD_SSH_KEY_DIR"),
 	}
 }
 

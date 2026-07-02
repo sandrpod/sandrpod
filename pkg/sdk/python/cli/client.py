@@ -141,6 +141,14 @@ class CLIClient:
         resp = self._request("GET", f"/api/v1/sandboxes/{name}/toolbox/proxy/{port}{path}")
         return resp.content
 
+    def snapshot(self, name: str, image: str = "") -> Dict[str, Any]:
+        """把沙箱当前状态提交为镜像(docker commit),返回 {image, sandbox}"""
+        path = f"/api/v1/sandboxes/{name}/snapshot"
+        if image:
+            path += "?image=" + urllib.parse.quote(image, safe="")
+        resp = self._request("POST", path)
+        return resp.json()
+
     def get_job(self, job_id: str) -> Dict[str, Any]:
         """查询 Job 状态（async create 的进度/错误）"""
         resp = self._request("GET", f"/api/v1/jobs/{job_id}")

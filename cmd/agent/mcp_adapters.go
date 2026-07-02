@@ -21,10 +21,11 @@ import (
 // server/tool/status into Path/Caller/Reason.
 //
 // Why pack rather than extend the schema?
-//   The audit upload wire format is versioned and consumed by the central
-//   platform. Adding fields requires a coordinated rollout. Packing keeps
-//   the bridge shippable today; we can split fields out later when v2 of
-//   the wire format ships.
+//
+//	The audit upload wire format is versioned and consumed by the central
+//	platform. Adding fields requires a coordinated rollout. Packing keeps
+//	the bridge shippable today; we can split fields out later when v2 of
+//	the wire format ships.
 type mcpAuditAdapter struct {
 	rec *audit.Recorder
 }
@@ -89,8 +90,8 @@ type mcpPermissionAdapter struct {
 
 type mcpGrants struct {
 	Version   int             `json:"version"`
-	Servers   map[string]bool `json:"servers"`              // server name -> persistent allow for mcp.spawn
-	Tools     map[string]bool `json:"tools,omitempty"`      // "server:tool" -> persistent allow for mcp.call
+	Servers   map[string]bool `json:"servers"`         // server name -> persistent allow for mcp.spawn
+	Tools     map[string]bool `json:"tools,omitempty"` // "server:tool" -> persistent allow for mcp.call
 	UpdatedAt time.Time       `json:"updated_at"`
 }
 
@@ -253,15 +254,15 @@ var sensitiveToolPatterns = []string{
 	"purge",
 	"destroy",
 	"wipe",
-	"send",      // send_email, send_message, send_dm, ...
-	"publish",   // publish_post, publish_repo, ...
-	"post",      // post_tweet, post_comment, ... (some false positives — OK)
+	"send",    // send_email, send_message, send_dm, ...
+	"publish", // publish_post, publish_repo, ...
+	"post",    // post_tweet, post_comment, ... (some false positives — OK)
 	"transfer",
 	"pay",
 	"charge",
-	"merge",     // merge_pr — irreversible from user POV
+	"merge", // merge_pr — irreversible from user POV
 	"revoke",
-	"reset",     // reset_password
+	"reset", // reset_password
 	"unsubscribe",
 }
 

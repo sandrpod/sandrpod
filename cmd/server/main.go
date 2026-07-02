@@ -1067,6 +1067,19 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				return
 			}
 
+			if action == "snapshot" {
+				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				if !ok {
+					return
+				}
+				targetURL := "http://poder/sandboxes/" + name + "/snapshot"
+				if r.URL.RawQuery != "" {
+					targetURL += "?" + r.URL.RawQuery
+				}
+				proxyHTTP(t, r, targetURL, w)
+				return
+			}
+
 			http.Error(w, "Action not allowed", http.StatusMethodNotAllowed)
 
 		case http.MethodDelete:

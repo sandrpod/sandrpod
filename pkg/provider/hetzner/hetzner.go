@@ -37,17 +37,24 @@ type HetznerProvider struct {
 	mu  sync.RWMutex
 	vms map[string]*provider.VMInfo
 	// sshKeys holds the per-server ephemeral SSH signer (root), keyed by server
-	// ID. Held in-process — CreateVM and bootstrap run in one process.
+	// ID. Held in-process, and (when keys is enabled) mirrored to disk so it
+	// survives a control-plane restart.
 	sshKeys map[string]ssh.Signer
+	keys    *sshexec.KeyStore
 }
 
 // NewHetznerProvider creates a Hetzner provider from the given configuration.
 func NewHetznerProvider(cfg *Config) (*HetznerProvider, error) {
+	ks, err := sshexec.NewKeyStore(cfg.SSHKeyDir)
+	if err != nil {
+		return nil, err
+	}
 	return &HetznerProvider{
 		location: cfg.Location,
 		client:   hcloud.NewClient(hcloud.WithToken(cfg.Token)),
 		vms:      make(map[string]*provider.VMInfo),
 		sshKeys:  make(map[string]ssh.Signer),
+		keys:     ks,
 	}, nil
 }
 
@@ -126,7 +133,7 @@ func (p *HetznerProvider) CreateVM(ctx context.Context, req *provider.CreateVMRe
 		image = defaultImage
 	}
 
-	signer, authKey, err := sshexec.GenerateEd25519("sandrpod")
+	signer, authKey, priv, err := sshexec.GenerateEd25519Key("sandrpod")
 	if err != nil {
 		return nil, fmt.Errorf("failed to generate ssh key: %w", err)
 	}
@@ -157,6 +164,9 @@ func (p *HetznerProvider) CreateVM(ctx context.Context, req *provider.CreateVMRe
 	p.mu.Lock()
 	p.sshKeys[id] = signer
 	p.mu.Unlock()
+	if err := p.keys.Save("hetzner", id, priv); err != nil {
+		fmt.Printf("hetzner: persist ssh key for %s failed: %v\n", id, err)
+	}
 
 	vmInfo := mapServer(result.Server)
 	if vm, ok := p.pollForPublicIP(ctx, result.Server.ID); ok {
@@ -206,6 +216,7 @@ func (p *HetznerProvider) DeleteVM(ctx context.Context, vmID string) error {
 	delete(p.vms, vmID)
 	delete(p.sshKeys, vmID)
 	p.mu.Unlock()
+	p.keys.Delete("hetzner", vmID)
 	return nil
 }
 
@@ -250,7 +261,17 @@ func (p *HetznerProvider) ExecuteCommand(ctx context.Context, vmID, command stri
 	signer, ok := p.sshKeys[vmID]
 	p.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("no ssh credential for server %s (created by a different process?)", vmID)
+		loaded, found, lerr := p.keys.Load("hetzner", vmID)
+		if lerr != nil {
+			return nil, lerr
+		}
+		if !found {
+			return nil, fmt.Errorf("no ssh credential for server %s (set SANDRPOD_SSH_KEY_DIR to persist keys across restarts)", vmID)
+		}
+		signer = loaded
+		p.mu.Lock()
+		p.sshKeys[vmID] = signer
+		p.mu.Unlock()
 	}
 	vm, err := p.GetVM(ctx, vmID)
 	if err != nil {
