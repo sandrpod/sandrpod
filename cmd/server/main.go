@@ -46,6 +46,8 @@ var (
 	offlineTimeout = flag.Duration("offline-timeout", 30*time.Second, "Poder offline timeout")
 	reapTimeout    = flag.Duration("reap-timeout", 10*time.Minute, "OFFLINE poder reclamation timeout (terminates cloud VM and deletes record)")
 	dbDSN          = flag.String("db", "", `persistence backend: empty=in-memory (default), sqlite:<path>=SQLite file (e.g. sqlite:./data/sandrpod.db)`)
+	sandboxIdleTTL = flag.Duration("sandbox-idle-timeout", envDuration("SANDRPOD_SANDBOX_IDLE_TIMEOUT"), "Reap sandboxes idle longer than this, e.g. 2h (0 = disabled; env: SANDRPOD_SANDBOX_IDLE_TIMEOUT)")
+	poderIdleTTL   = flag.Duration("poder-idle-timeout", envDuration("SANDRPOD_PODER_IDLE_TIMEOUT"), "Reclaim cloud poders with no sandboxes after this, terminating the VM, e.g. 30m (0 = disabled; env: SANDRPOD_PODER_IDLE_TIMEOUT)")
 	publicURL      = flag.String("public-url", os.Getenv("SANDRPOD_PUBLIC_URL"), "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
 )
 
@@ -53,6 +55,21 @@ var (
 // still-dying container can't re-register and leave a ghost OFFLINE record.
 // 10 minutes comfortably outlives every cloud's VM-termination window.
 var poderTombstones = podpkg.NewTombstones(10 * time.Minute)
+
+// envDuration parses a duration env var, returning 0 (disabled) when unset or
+// malformed. Used as the flag default so env and flag configure the same knob.
+func envDuration(key string) time.Duration {
+	v := os.Getenv(key)
+	if v == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		log.Printf("Warning: ignoring invalid %s=%q: %v", key, v, err)
+		return 0
+	}
+	return d
+}
 
 // serverConfig holds runtime configuration for the HTTP mux.
 type serverConfig struct {
@@ -489,6 +506,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 					OS:           poderOS,
 					OSVersion:    poderOSVersion,
 					CreatedAt:    time.Now(),
+					LastActivity: time.Now(),
 				}
 				sandboxStore.Add(sandbox)
 				poderStore.UpdateUsage(pID, func(u *podpkg.PoderUsage) { u.Containers++ })
@@ -623,6 +641,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				OS:           sbOS,
 				OSVersion:    sbOSVersion,
 				CreatedAt:    time.Now(),
+				LastActivity: time.Now(),
 			}
 			sandboxStore.Add(sandbox)
 
@@ -1312,6 +1331,15 @@ func main() {
 
 	go cleanupOfflinePoders(rootCtx, stores.Poders, *offlineTimeout)
 	go reapOfflinePoders(rootCtx, stores.Poders, *reapTimeout)
+	// Opt-in idle reclamation (cost safety); both default to disabled.
+	if *sandboxIdleTTL > 0 {
+		log.Printf("Idle-sandbox reaper enabled: ttl=%v", *sandboxIdleTTL)
+		go reapIdleSandboxes(rootCtx, *sandboxIdleTTL, stores.Sandboxes, stores.Poders, tunnelStore)
+	}
+	if *poderIdleTTL > 0 {
+		log.Printf("Idle-poder reaper enabled: ttl=%v (empty cloud poders reclaimed, VMs terminated)", *poderIdleTTL)
+		go reapIdlePoders(rootCtx, *poderIdleTTL, stores.Poders, stores.Sandboxes, tunnelStore)
+	}
 
 	log.Printf("API server listening on %s (Control Plane + Tunnel Mode)", addr)
 	if err := server.ListenAndServe(); err != http.ErrServerClosed {
@@ -1327,6 +1355,9 @@ func sandboxTunnel(name string, ss podpkg.SandboxRepository, ts *tunnel.TunnelSt
 		http.Error(w, "sandbox not found", http.StatusNotFound)
 		return nil, nil, false
 	}
+	// Every tunnel use (execute/stream/session/toolbox/start/stop) counts as
+	// activity — this single choke point feeds the idle-sandbox reaper.
+	_ = ss.Update(name, func(s *podpkg.SandboxInfo) { s.LastActivity = time.Now() })
 	// Direct-agent path (end-user): sandbox is registered directly by the local sandrpod-agent
 	if strings.HasPrefix(sb.ProxyURL, "direct://") {
 		t, ok := ds.Get(name)
