@@ -154,6 +154,11 @@ class CLIClient:
         resp = self._request("GET", f"/api/v1/jobs/{job_id}")
         return resp.json()
 
+    def metrics(self) -> str:
+        """获取 Prometheus 文本格式的 /metrics(需要 admin token)"""
+        resp = self._request("GET", "/metrics")
+        return resp.text
+
     def pty_url(self, name: str) -> str:
         """交互式 PTY 的 WebSocket URL(http→ws, https→wss)"""
         base = self.api_url

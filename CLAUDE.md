@@ -167,21 +167,36 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 源码：`pkg/sdk/python/cli/`，已安装到本机（开发模式，改源码即时生效）：
 
 ```bash
-# Sandbox 操作（--provider: local | aws | aliyun | azure | gcp）
+# Sandbox 操作（--provider: local | aws | aliyun | azure | gcp | tencent | digitalocean | hetzner | oracle）
 sandrpod-cli list
+sandrpod-cli get <name>                                 # 详情
+sandrpod-cli env <name>                                 # 运行时环境（arch/OS/shell）
 sandrpod-cli create <name> --provider gcp --region asia-east1-a --instance-type e2-medium
 sandrpod-cli create <name> --provider local --image sandrpod/toolbox:latest
 sandrpod-cli create <name> --poder <poder-id>          # 指定 poder 直建（跳过调度器）
-sandrpod-cli delete <name>
+sandrpod-cli create <name> --ttl 3600 --cpu 2 --memory 2048  # 闲置 TTL(秒) + CPU 核 + 内存(MiB)
+sandrpod-cli create <name> --no-wait                   # 异步：立即返回 job id，不等 RUNNING
+sandrpod-cli start/stop/delete <name>
+sandrpod-cli logs <name> [--tail N]
 sandrpod-cli execute <name> "ls /workspace"            # 一次性执行
 sandrpod-cli stream <name> "for i in 1 2 3; do echo $i; sleep 1; done"  # 流式输出
+sandrpod-cli shell <name>                              # 交互式 PTY（需 websocket-client；Ctrl-] 退出）
+sandrpod-cli preview <name> <port> [path]              # 访问沙箱内 localhost:<port> 的 web 服务
+sandrpod-cli snapshot <name> [--image repo:tag]        # docker commit 成镜像
+
+# Job（异步创建）
+sandrpod-cli job get <job-id>                          # 查 async 创建的 job 状态/错误/结果
+
+# 可观测性
+sandrpod-cli metrics                                   # 拉取服务端 Prometheus /metrics（需 admin token）
 
 # Poder 管理
 sandrpod-cli poder list
 sandrpod-cli poder get <poder-id>
 sandrpod-cli poder delete <poder-id> [-y] [--keep-vm]  # --keep-vm: 只删记录不终止云 VM
 
-# 文件操作（fs replace 等）
+# 文件操作
+sandrpod-cli fs ls|cat|write|mkdir|rm|mv|search|grep|info|upload|download <name> ...
 sandrpod-cli fs replace <name> <file> <pattern> <new-value>
 ```
 

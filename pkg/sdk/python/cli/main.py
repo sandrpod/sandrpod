@@ -853,6 +853,51 @@ def session_delete(ctx, name, session_id):
 cli.add_command(session_group)
 
 
+# ========== Job Commands ==========
+
+@cli.group()
+@click.pass_context
+def job(ctx):
+    """Inspect async provisioning jobs (from `create --no-wait`)"""
+    pass
+
+
+@job.command("get")
+@click.argument("job_id")
+@click.pass_context
+def job_get(ctx, job_id):
+    """Show a job's status/result/error"""
+    client = ctx.obj["client"]
+    try:
+        j = client.get_job(job_id)
+        click.echo(f"Job:      {j.get('id', job_id)}")
+        click.echo(f"Type:     {j.get('type', 'N/A')}")
+        click.echo(f"Status:   {j.get('status', 'N/A')}")
+        click.echo(f"Sandbox:  {j.get('sandbox_name', 'N/A')}")
+        if j.get("error_message"):
+            click.echo(f"Error:    {j['error_message']}")
+        result = j.get("result")
+        if result:
+            click.echo(f"Result:   ip={result.get('ip', '-')} proxy={result.get('proxy_url', '-')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+# ========== Metrics ==========
+
+@cli.command()
+@click.pass_context
+def metrics(ctx):
+    """Fetch server Prometheus /metrics (needs an admin token)"""
+    client = ctx.obj["client"]
+    try:
+        click.echo(client.metrics(), nl=False)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 # ========== Poder Commands ==========
 
 @cli.group()
