@@ -49,6 +49,11 @@ var (
 	publicURL      = flag.String("public-url", os.Getenv("SANDRPOD_PUBLIC_URL"), "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
 )
 
+// poderTombstones remembers recently-deleted poder IDs so a deleted poder's
+// still-dying container can't re-register and leave a ghost OFFLINE record.
+// 10 minutes comfortably outlives every cloud's VM-termination window.
+var poderTombstones = podpkg.NewTombstones(10 * time.Minute)
+
 // serverConfig holds runtime configuration for the HTTP mux.
 type serverConfig struct {
 	Token  string // API bearer token; empty = no auth
@@ -142,6 +147,13 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		poderID := r.Header.Get("X-Poder-ID")
 		if poderID == "" {
 			http.Error(w, "X-Poder-ID header required", http.StatusBadRequest)
+			return
+		}
+		// A deleted poder's container often survives its VM by a few seconds
+		// and reconnects, leaving a ghost OFFLINE record. Reject tombstoned IDs.
+		if poderTombstones.Contains(poderID) {
+			log.Printf("Poder %s rejected: recently deleted (tombstoned)", poderID)
+			http.Error(w, "poder was deleted", http.StatusGone)
 			return
 		}
 
@@ -335,6 +347,14 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				}
 				_ = sandboxStore.Delete(sb.Name)
 			}
+			// Tombstone BEFORE closing the tunnel: the dying poder container
+			// often reconnects within seconds and would re-register a ghost
+			// record. Skipped for keep_vm — a kept VM's poder legitimately
+			// reconnects.
+			keepVM := r.URL.Query().Get("keep_vm") == "true"
+			if !keepVM {
+				poderTombstones.Add(pID)
+			}
 			if tunnelAlive {
 				t.Close()
 			}
@@ -345,7 +365,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			// Terminate the underlying cloud VM for aws/aliyun poders unless the
 			// caller opted out with ?keep_vm=true. Failures are logged only.
 			vmTerminated := false
-			if isCloudProvider(poder.ProviderType) && poder.VMID != "" && r.URL.Query().Get("keep_vm") != "true" {
+			if isCloudProvider(poder.ProviderType) && poder.VMID != "" && !keepVM {
 				if p, err := provider.GetFactory().Get(poder.ProviderType); err == nil {
 					// VM termination can take minutes (e.g. a GCP instance delete
 					// waits ~90s for the operation). Use a detached context so a
@@ -1561,6 +1581,8 @@ func reapOfflinePoders(ctx context.Context, ps podpkg.PoderRepository, timeout t
 					}
 					log.Printf("reap poder %s: terminated VM %s", p.ID, p.VMID)
 				}
+				// Tombstone so a lingering container can't re-register a ghost.
+				poderTombstones.Add(p.ID)
 				if err := ps.Delete(p.ID); err != nil {
 					log.Printf("reap poder %s: failed to delete record: %v", p.ID, err)
 					continue
