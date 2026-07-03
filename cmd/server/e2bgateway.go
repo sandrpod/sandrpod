@@ -20,6 +20,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -306,12 +307,31 @@ func (d e2bDeps) toolboxJSON(name, method, subpath string, query url.Values, req
 
 type e2bSandboxBackend struct{ d e2bDeps }
 
+// e2bSubstrate reports which SandrPod substrate E2B-created sandboxes land on.
+// Defaults to the local docker poder; set SANDRPOD_E2B_PROVIDER (+ _REGION,
+// _INSTANCE_TYPE) to route the unmodified E2B SDK's Sandbox.create() onto a
+// cloud provider (e.g. gcp / asia-east1-a / e2-medium) so it provisions real
+// cloud VMs. Region/instance type are only consulted for non-local providers.
+func e2bSubstrate() (provider, region, instanceType string) {
+	provider = os.Getenv("SANDRPOD_E2B_PROVIDER")
+	if provider == "" {
+		return "local", "local", ""
+	}
+	region = os.Getenv("SANDRPOD_E2B_REGION")
+	if region == "" {
+		region = "local"
+	}
+	return provider, region, os.Getenv("SANDRPOD_E2B_INSTANCE_TYPE")
+}
+
 func (b *e2bSandboxBackend) CreateSandbox(ident string, req e2bcompat.NewSandbox) (e2bcompat.SandboxDetail, error) {
 	name := "e2b" + randToken(8)
+	provider, region, instanceType := e2bSubstrate()
 	create := &podpkg.CreateSandboxRequest{
 		Name:         name,
-		Region:       "local",
-		ProviderType: "local",
+		Region:       region,
+		ProviderType: provider,
+		InstanceType: instanceType,
 		TTLSeconds:   int64(req.Timeout),
 	}
 	// An E2B templateID that looks like a container image is used directly.
