@@ -21,11 +21,16 @@ FROM alpine:3.19
 # npx-based MCP servers (and the `mcp-remote` shim for remote HTTP servers).
 # jq lets in-sandbox agents safely read-modify-write mcp.json (see the
 # register-mcp skill). python3/bash/git/curl support code execution.
-# py3-numpy + py3-matplotlib + py3-pandas give `run_code` a data-science stack:
-# real chart output (captured as PNG) and DataFrame work. Alpine's prebuilt musl
+RUN apk add --no-cache ca-certificates tzdata python3 nodejs npm bash git curl jq
+
+# Data-science stack for `run_code` (chart output + DataFrames). Installed as
+# three separate layers (numpy → matplotlib → pandas) rather than one, so each
+# image blob stays ~40-60 MB instead of one ~150 MB layer — smaller blobs push
+# and pull far more reliably over flaky links/proxies. Alpine's prebuilt musl
 # packages avoid a slow from-source pip build.
-RUN apk add --no-cache ca-certificates tzdata python3 nodejs npm bash git curl jq \
-    py3-numpy py3-matplotlib py3-pandas
+RUN apk add --no-cache py3-numpy
+RUN apk add --no-cache py3-matplotlib
+RUN apk add --no-cache py3-pandas
 
 # uv + uvx: the de-facto launcher for Python MCP servers (e.g. uvx mcp-server-git).
 # Shipped as static binaries from the official image — no Python build deps.
