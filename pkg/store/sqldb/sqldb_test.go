@@ -1,23 +1,23 @@
-package sqlite_test
+package sqldb_test
 
 import (
 	"testing"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/sandpod"
-	"github.com/sandrpod/sandrpod/pkg/store/sqlite"
+	"github.com/sandrpod/sandrpod/pkg/store/sqldb"
 )
 
 // ─── Sandbox Repo ────────────────────────────────────────────────────────────
 
 func TestSandboxRepo_CRUD(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewSandboxRepo(db)
+	repo := sqldb.NewSandboxRepo(db)
 	now := time.Now().UTC().Truncate(time.Second)
 
 	sb := &sandpod.SandboxInfo{
@@ -106,13 +106,13 @@ func TestSandboxRepo_CRUD(t *testing.T) {
 }
 
 func TestSandboxRepo_MultipleItems(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewSandboxRepo(db)
+	repo := sqldb.NewSandboxRepo(db)
 	now := time.Now().UTC()
 
 	for i := 0; i < 5; i++ {
@@ -165,13 +165,13 @@ func newPoderReq(id, region, providerType string) *sandpod.RegisterPoderRequest 
 }
 
 func TestPoderRepo_RegisterGetList(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewPoderRepo(db)
+	repo := sqldb.NewPoderRepo(db)
 
 	info, err := repo.Register(newPoderReq("p1", "us-east-1", "aws"))
 	if err != nil {
@@ -211,13 +211,13 @@ func TestPoderRepo_RegisterGetList(t *testing.T) {
 }
 
 func TestPoderRepo_Heartbeat(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewPoderRepo(db)
+	repo := sqldb.NewPoderRepo(db)
 	if _, err := repo.Register(newPoderReq("p1", "us", "local")); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -245,13 +245,13 @@ func TestPoderRepo_Heartbeat(t *testing.T) {
 }
 
 func TestPoderRepo_SelectBest(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewPoderRepo(db)
+	repo := sqldb.NewPoderRepo(db)
 
 	// Register two poders in the same region
 	_, _ = repo.Register(newPoderReq("heavy", "us", "local"))
@@ -288,13 +288,13 @@ func TestPoderRepo_SelectBest(t *testing.T) {
 }
 
 func TestPoderRepo_SelectBestRespectsMaxContainers(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewPoderRepo(db)
+	repo := sqldb.NewPoderRepo(db)
 	_, _ = repo.Register(newPoderReq("full", "us", "local"))
 
 	// Fill to capacity
@@ -310,13 +310,13 @@ func TestPoderRepo_SelectBestRespectsMaxContainers(t *testing.T) {
 }
 
 func TestPoderRepo_SetOffline(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewPoderRepo(db)
+	repo := sqldb.NewPoderRepo(db)
 	_, _ = repo.Register(newPoderReq("p1", "us", "local"))
 
 	repo.SetOffline("p1")
@@ -334,13 +334,13 @@ func TestPoderRepo_SetOffline(t *testing.T) {
 }
 
 func TestPoderRepo_UpdateUsage(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewPoderRepo(db)
+	repo := sqldb.NewPoderRepo(db)
 	_, _ = repo.Register(newPoderReq("p1", "us", "local"))
 
 	if err := repo.UpdateUsage("p1", func(u *sandpod.PoderUsage) {
@@ -377,13 +377,13 @@ func newJob(id string) *sandpod.Job {
 }
 
 func TestJobRepo_AddGetUpdate(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewJobRepo(db)
+	repo := sqldb.NewJobRepo(db)
 
 	job := newJob("j1")
 	if err := repo.AddJob(job); err != nil {
@@ -431,13 +431,13 @@ func TestJobRepo_AddGetUpdate(t *testing.T) {
 }
 
 func TestJobRepo_PollJobs_Basic(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewJobRepo(db)
+	repo := sqldb.NewJobRepo(db)
 
 	// Add 5 PENDING jobs
 	for i := 0; i < 5; i++ {
@@ -480,13 +480,13 @@ func TestJobRepo_PollJobs_Basic(t *testing.T) {
 }
 
 func TestJobRepo_PollJobs_ResetStaleInProgress(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewJobRepo(db)
+	repo := sqldb.NewJobRepo(db)
 
 	// Add a job and manually claim it as IN_PROGRESS with a very old updated_at
 	job := newJob("stale-j1")
@@ -511,13 +511,13 @@ func TestJobRepo_PollJobs_ResetStaleInProgress(t *testing.T) {
 }
 
 func TestJobRepo_PollJobs_OrderByCreatedAt(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewJobRepo(db)
+	repo := sqldb.NewJobRepo(db)
 	base := time.Now().UTC()
 
 	// Insert in reverse order of created_at
@@ -550,13 +550,13 @@ func TestJobRepo_PollJobs_OrderByCreatedAt(t *testing.T) {
 // ─── Startup Recovery ────────────────────────────────────────────────────────
 
 func TestOpen_StartupRecovery(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	defer db.Close()
 
-	repo := sqlite.NewJobRepo(db)
+	repo := sqldb.NewJobRepo(db)
 
 	// Insert a job that is already IN_PROGRESS (simulating a crash)
 	j := newJob("crash-job")
@@ -581,12 +581,12 @@ func TestOpen_StartupRecovery(t *testing.T) {
 }
 
 func TestTokenRepo_CRUD(t *testing.T) {
-	db, err := sqlite.Open(":memory:")
+	db, err := sqldb.Open(":memory:")
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
 	defer db.Close()
-	repo := sqlite.NewTokenRepo(db)
+	repo := sqldb.NewTokenRepo(db)
 
 	a := &sandpod.APIToken{Name: "alice", Prefix: "e2b_1111", Hash: "h-a", Role: "user", CreatedAt: time.Now()}
 	b := &sandpod.APIToken{Name: "ops", Prefix: "e2b_2222", Hash: "h-b", Role: "admin", CreatedAt: time.Now()}

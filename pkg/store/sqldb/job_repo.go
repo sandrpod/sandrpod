@@ -1,4 +1,4 @@
-package sqlite
+package sqldb
 
 import (
 	"database/sql"
@@ -9,10 +9,10 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/sandpod"
 )
 
-type jobRepo struct{ db *sql.DB }
+type jobRepo struct{ db *DB }
 
 // NewJobRepo returns a SQLite-backed JobRepository.
-func NewJobRepo(db *sql.DB) *jobRepo {
+func NewJobRepo(db *DB) *jobRepo {
 	return &jobRepo{db: db}
 }
 
@@ -79,8 +79,9 @@ func (r *jobRepo) UpdateJob(id string, fn func(*sandpod.Job)) error {
 // PollJobs atomically resets timed-out IN_PROGRESS jobs to PENDING, then
 // claims up to limit PENDING jobs (marks them IN_PROGRESS) and returns them.
 //
-// SetMaxOpenConns(1) on the database connection serialises all writers, making
-// this transaction safe without SELECT FOR UPDATE.
+// Concurrency: on SQLite the single writer (SetMaxOpenConns(1)) serialises this
+// whole transaction; on Postgres the claim SELECT adds FOR UPDATE SKIP LOCKED
+// (dialect ClaimLock) so concurrent pollers claim disjoint job sets.
 func (r *jobRepo) PollJobs(jobTimeout time.Duration, limit int) ([]*sandpod.Job, error) {
 	tx, err := r.db.Begin()
 	if err != nil {
@@ -102,9 +103,11 @@ func (r *jobRepo) PollJobs(jobTimeout time.Duration, limit int) ([]*sandpod.Job,
 		return nil, fmt.Errorf("store/sqlite: PollJobs reset: %w", err)
 	}
 
-	// Step 2: select ids of PENDING jobs to claim.
+	// Step 2: select ids of PENDING jobs to claim. On Postgres the dialect adds
+	// FOR UPDATE SKIP LOCKED so concurrent pollers claim disjoint sets; on SQLite
+	// the single writer already serialises this (ClaimLock is empty).
 	rows, err := tx.Query(
-		`SELECT id FROM jobs WHERE status='PENDING' ORDER BY created_at LIMIT ?`, limit,
+		`SELECT id FROM jobs WHERE status='PENDING' ORDER BY created_at LIMIT ?`+r.db.d.ClaimLock(), limit,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("store/sqlite: PollJobs select: %w", err)
@@ -167,12 +170,12 @@ func (r *jobRepo) getByID(id string) (*sandpod.Job, bool, error) {
 	return scanJob(row)
 }
 
-func (r *jobRepo) getByIDTx(tx *sql.Tx, id string) (*sandpod.Job, bool, error) {
+func (r *jobRepo) getByIDTx(tx *Tx, id string) (*sandpod.Job, bool, error) {
 	row := tx.QueryRow(`SELECT `+jobColumns+` FROM jobs WHERE id=?`, id)
 	return scanJob(row)
 }
 
-func (r *jobRepo) upsertTx(tx *sql.Tx, j *sandpod.Job) error {
+func (r *jobRepo) upsertTx(tx *Tx, j *sandpod.Job) error {
 	traceJSON, _ := json.Marshal(j.TraceContext)
 	var resultJSON *string
 	if j.Result != nil {

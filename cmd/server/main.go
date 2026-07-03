@@ -34,7 +34,7 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/provider/tencent"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/store"
-	sqlitestore "github.com/sandrpod/sandrpod/pkg/store/sqlite"
+	sqldbstore "github.com/sandrpod/sandrpod/pkg/store/sqldb"
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
 
@@ -44,7 +44,7 @@ var (
 	token          = flag.String("token", os.Getenv("SANDRPOD_TOKEN"), "API token for authentication (env: SANDRPOD_TOKEN)")
 	offlineTimeout = flag.Duration("offline-timeout", 30*time.Second, "Poder offline timeout")
 	reapTimeout    = flag.Duration("reap-timeout", 10*time.Minute, "OFFLINE poder reclamation timeout (terminates cloud VM and deletes record)")
-	dbDSN          = flag.String("db", "", `persistence backend: empty=in-memory (default), sqlite:<path>=SQLite file (e.g. sqlite:./data/sandrpod.db)`)
+	dbDSN          = flag.String("db", "", `persistence backend: empty=in-memory (default); sqlite:<path> (e.g. sqlite:./data/sandrpod.db); postgres://user:pass@host:5432/db?sslmode=require (production)`)
 	sandboxIdleTTL = flag.Duration("sandbox-idle-timeout", envDuration("SANDRPOD_SANDBOX_IDLE_TIMEOUT"), "Reap sandboxes idle longer than this, e.g. 2h (0 = disabled; env: SANDRPOD_SANDBOX_IDLE_TIMEOUT)")
 	poderIdleTTL   = flag.Duration("poder-idle-timeout", envDuration("SANDRPOD_PODER_IDLE_TIMEOUT"), "Reclaim cloud poders with no sandboxes after this, terminating the VM, e.g. 30m (0 = disabled; env: SANDRPOD_PODER_IDLE_TIMEOUT)")
 	publicURL      = flag.String("public-url", os.Getenv("SANDRPOD_PUBLIC_URL"), "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
@@ -1359,22 +1359,27 @@ func main() {
 	case *dbDSN == "":
 		stores = store.NewMemoryStores()
 		log.Printf("Using in-memory store (data will be lost on restart)")
-	case strings.HasPrefix(*dbDSN, "sqlite:"):
-		dsn, _ := strings.CutPrefix(*dbDSN, "sqlite:")
-		db, err := sqlitestore.Open(dsn)
+	case strings.HasPrefix(*dbDSN, "sqlite:"),
+		strings.HasPrefix(*dbDSN, "postgres://"),
+		strings.HasPrefix(*dbDSN, "postgresql://"):
+		db, err := sqldbstore.Open(*dbDSN)
 		if err != nil {
-			log.Fatalf("Failed to open SQLite DB %q: %v", dsn, err)
+			log.Fatalf("Failed to open DB: %v", err)
 		}
 		defer db.Close()
 		stores = podpkg.Stores{
-			Sandboxes: sqlitestore.NewSandboxRepo(db),
-			Poders:    sqlitestore.NewPoderRepo(db),
-			Jobs:      sqlitestore.NewJobRepo(db),
-			Tokens:    sqlitestore.NewTokenRepo(db),
+			Sandboxes: sqldbstore.NewSandboxRepo(db),
+			Poders:    sqldbstore.NewPoderRepo(db),
+			Jobs:      sqldbstore.NewJobRepo(db),
+			Tokens:    sqldbstore.NewTokenRepo(db),
 		}
-		log.Printf("Using SQLite store at %q", dsn)
+		kind := "SQLite"
+		if !strings.HasPrefix(*dbDSN, "sqlite:") {
+			kind = "PostgreSQL"
+		}
+		log.Printf("Using %s store", kind)
 	default:
-		log.Fatalf("Unknown -db value %q (supported: sqlite:<path>)", *dbDSN)
+		log.Fatalf("Unknown -db value %q (supported: sqlite:<path>, postgres://...)", *dbDSN)
 	}
 
 	tunnelStore := tunnel.NewTunnelStore()

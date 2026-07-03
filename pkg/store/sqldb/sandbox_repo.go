@@ -1,4 +1,4 @@
-package sqlite
+package sqldb
 
 import (
 	"database/sql"
@@ -9,10 +9,10 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/sandpod"
 )
 
-type sandboxRepo struct{ db *sql.DB }
+type sandboxRepo struct{ db *DB }
 
 // NewSandboxRepo returns a SQLite-backed SandboxRepository.
-func NewSandboxRepo(db *sql.DB) *sandboxRepo {
+func NewSandboxRepo(db *DB) *sandboxRepo {
 	return &sandboxRepo{db: db}
 }
 
@@ -112,12 +112,12 @@ func (r *sandboxRepo) getByName(name string) (*sandpod.SandboxInfo, bool, error)
 	return scanSandbox(row)
 }
 
-func (r *sandboxRepo) getByNameTx(tx *sql.Tx, name string) (*sandpod.SandboxInfo, bool, error) {
+func (r *sandboxRepo) getByNameTx(tx *Tx, name string) (*sandpod.SandboxInfo, bool, error) {
 	row := tx.QueryRow(`SELECT `+sandboxColumns+` FROM sandboxes WHERE name=?`, name)
 	return scanSandbox(row)
 }
 
-func (r *sandboxRepo) upsertTx(tx *sql.Tx, sb *sandpod.SandboxInfo) error {
+func (r *sandboxRepo) upsertTx(tx *Tx, sb *sandpod.SandboxInfo) error {
 	labels, err := json.Marshal(sb.Labels)
 	if err != nil {
 		return fmt.Errorf("store/sqlite: sandbox upsert marshal labels: %w", err)

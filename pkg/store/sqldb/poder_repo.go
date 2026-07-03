@@ -1,4 +1,4 @@
-package sqlite
+package sqldb
 
 import (
 	"database/sql"
@@ -8,10 +8,10 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/sandpod"
 )
 
-type poderRepo struct{ db *sql.DB }
+type poderRepo struct{ db *DB }
 
 // NewPoderRepo returns a SQLite-backed PoderRepository.
-func NewPoderRepo(db *sql.DB) *poderRepo {
+func NewPoderRepo(db *DB) *poderRepo {
 	return &poderRepo{db: db}
 }
 
@@ -180,7 +180,7 @@ func (r *poderRepo) getByID(id string) (*sandpod.PoderInfo, bool, error) {
 	return scanPoder(row)
 }
 
-func (r *poderRepo) getByIDTx(tx *sql.Tx, id string) (*sandpod.PoderInfo, bool, error) {
+func (r *poderRepo) getByIDTx(tx *Tx, id string) (*sandpod.PoderInfo, bool, error) {
 	row := tx.QueryRow(`SELECT `+poderColumns+` FROM poders WHERE id=?`, id)
 	return scanPoder(row)
 }

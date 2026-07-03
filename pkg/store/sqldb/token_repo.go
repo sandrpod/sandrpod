@@ -1,17 +1,16 @@
-package sqlite
+package sqldb
 
 import (
-	"database/sql"
 	"fmt"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/sandpod"
 )
 
-type tokenRepo struct{ db *sql.DB }
+type tokenRepo struct{ db *DB }
 
 // NewTokenRepo returns a SQLite-backed APITokenRepository.
-func NewTokenRepo(db *sql.DB) *tokenRepo { return &tokenRepo{db: db} }
+func NewTokenRepo(db *DB) *tokenRepo { return &tokenRepo{db: db} }
 
 func (r *tokenRepo) Create(t *sandpod.APIToken) error {
 	_, err := r.db.Exec(

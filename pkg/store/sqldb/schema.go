@@ -1,9 +1,6 @@
-package sqlite
+package sqldb
 
-import (
-	"database/sql"
-	"strings"
-)
+import "database/sql"
 
 // ddl is the schema definition. All statements use IF NOT EXISTS so Migrate
 // is idempotent and safe to call on every server startup.
@@ -113,14 +110,15 @@ var columnMigrations = []string{
 	`ALTER TABLE sandboxes ADD COLUMN ttl_seconds INTEGER NOT NULL DEFAULT 0`,
 }
 
-// Migrate applies the DDL to db. It is idempotent (uses IF NOT EXISTS) and
-// safe to call on every startup.
-func Migrate(db *sql.DB) error {
-	if _, err := db.Exec(ddl); err != nil {
+// migrate applies the dialect's schema then its idempotent column migrations.
+// It is safe to call on every startup (CREATE … IF NOT EXISTS; duplicate-column
+// ADDs are ignored per the dialect).
+func migrate(sdb *sql.DB, d Dialect) error {
+	if _, err := sdb.Exec(d.Schema()); err != nil {
 		return err
 	}
-	for _, stmt := range columnMigrations {
-		if _, err := db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+	for _, stmt := range d.Migrations() {
+		if _, err := sdb.Exec(stmt); err != nil && !d.IsDupColumn(err) {
 			return err
 		}
 	}

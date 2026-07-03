@@ -33,8 +33,12 @@ docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t sandr
 # Run API Server (port 8080, in-memory store by default)
 go run ./cmd/server -port 8080
 
-# Run API Server with SQLite persistence
+# Run API Server with SQLite persistence (dev / single instance)
 go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
+
+# Run API Server with PostgreSQL (production: connection pool + concurrent job claim via SELECT FOR UPDATE SKIP LOCKED)
+go run ./cmd/server -port 8080 -db "postgres://user:pass@host:5432/sandrpod?sslmode=require"
+# One instance uses ONE backend, selected at startup by the -db DSN scheme; the same pkg/store/sqldb code targets either SQLite or PostgreSQL (not both at once).
 
 # Run API Server for cloud providers (AWS/Aliyun/Azure/GCP) — public-url is sent to cloud VMs for callback
 go run ./cmd/server -port 8080 -public-url https://api.example.com -db sqlite:./data/sandrpod.db
@@ -119,7 +123,7 @@ Client → API Server (Control Plane)
 - `pkg/provider/`: Cloud provider abstraction layer (AWS, Aliyun, Azure, GCP, Tencent, DigitalOcean, Hetzner, Oracle). Factory pattern for dynamic provider registration. Two remote-exec backends: **managed run-command** (AWS SSM / Aliyun CloudAssist / Azure Run Command / Tencent TAT / Oracle Instance Agent) and **SSH** for clouds with no such API (GCP, DigitalOcean, Hetzner). The SSH path uses a per-VM ephemeral ed25519 key — GCP injects it via instance metadata + sudo (`pkg/provider/gcp/ssh.go`), while DigitalOcean/Hetzner inject it via cloud-init as root and share `pkg/provider/sshexec`.
 - `pkg/poder/`: Pod executor implementations. Docker implementation for local development.
 - `pkg/sandpod/`: SandPod core types, state machine, Repository interfaces (`repo.go`), memory-backed store implementations, Scheduler.
-- `pkg/store/`: Repository implementations — in-memory adapter (`memory.go`) and SQLite backend (`sqlite/`). Plug-in via `store.Stores` aggregate.
+- `pkg/store/`: Repository implementations — in-memory adapter (`memory.go`) and a dialect-parameterised SQL backend (`sqldb/`) that targets **either SQLite or PostgreSQL from one codebase** (a thin `Dialect` handles placeholder rebinding, DDL types, and the `FOR UPDATE SKIP LOCKED` job claim). A given server instance uses exactly one backend, chosen at startup by the `-db` DSN scheme (`sqlite:` / `postgres://`) — not both simultaneously. Plug-in via `store.Stores` aggregate.
 - `pkg/tunnel/`: WebSocket + yamux reverse tunnel (`PoderTunnel`, `TunnelStore`). Used by both Poder and sandrpod-agent.
 - `pkg/toolbox/`: Code execution engine with PTY, file operations, and process management.
 - `pkg/permission/`: Decision engine for employee-PC mode. 5-branch policy (work_dir → hardlock → permanent → session → ask). Includes `Store` (atomic JSON), `Manager`, `IPCClient/Server`, command policy scanner, and default hardlock seeds.
