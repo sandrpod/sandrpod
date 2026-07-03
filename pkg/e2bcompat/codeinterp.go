@@ -21,9 +21,12 @@ type CodeExecution struct {
 	Stderr string
 	Text   string // value of the final expression (main result)
 	Error  string // traceback if the cell raised
-	// Images are base64-encoded PNGs of matplotlib figures the cell produced;
-	// emitted as E2B result messages so the SDK's Execution.results carries them.
+	// Images are base64-encoded PNGs (fallback when Results is unset).
 	Images []string
+	// Results is the E2B-shaped rich result list; each map carries a result's
+	// MIME reprs (text/html/svg/png/latex/…) and is_main_result. Emitted verbatim
+	// as E2B result messages so the SDK's Execution.results matches official E2B.
+	Results []map[string]any
 }
 
 // CodeContext is an E2B code-interpreter context ({id, language, cwd}).
@@ -153,9 +156,19 @@ func (c *codeInterp) execute(w http.ResponseWriter, r *http.Request) {
 			"type": "error", "name": "Error",
 			"value": firstLine(ex.Error), "traceback": ex.Error,
 		})
+	} else if len(ex.Results) > 0 {
+		// Emit each rich result verbatim (text/html/svg/png/latex/…) so the E2B
+		// SDK's Execution.results matches what official E2B returns.
+		for _, res := range ex.Results {
+			msg := map[string]any{"type": "result"}
+			for k, v := range res {
+				msg[k] = v
+			}
+			enc.Encode(msg)
+			flush()
+		}
 	} else {
-		// Rich results: matplotlib figures as PNG, then the final expression.
-		// E2B aggregates every "result" message into Execution.results.
+		// Fallback for backends that only expose text/images.
 		for _, img := range ex.Images {
 			enc.Encode(map[string]any{"type": "result", "png": img, "is_main_result": false})
 			flush()

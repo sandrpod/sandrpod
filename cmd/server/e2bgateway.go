@@ -97,17 +97,19 @@ type e2bCodeBackend struct{ d e2bDeps }
 func (b *e2bCodeBackend) RunCode(name, contextID, code string) (e2bcompat.CodeExecution, error) {
 	reqBody := map[string]string{"code": code, "context_id": contextID}
 	var res struct {
-		Stdout string   `json:"stdout"`
-		Stderr string   `json:"stderr"`
-		Text   string   `json:"text"`
-		Error  string   `json:"error"`
-		Images []string `json:"images"`
+		Stdout  string           `json:"stdout"`
+		Stderr  string           `json:"stderr"`
+		Text    string           `json:"text"`
+		Error   string           `json:"error"`
+		Images  []string         `json:"images"`
+		Results []map[string]any `json:"results"`
 	}
 	if err := b.d.toolboxJSON(name, http.MethodPost, "code-interpreter/execute", nil, reqBody, &res); err != nil {
 		return e2bcompat.CodeExecution{}, err
 	}
 	return e2bcompat.CodeExecution{
-		Stdout: res.Stdout, Stderr: res.Stderr, Text: res.Text, Error: res.Error, Images: res.Images,
+		Stdout: res.Stdout, Stderr: res.Stderr, Text: res.Text, Error: res.Error,
+		Images: res.Images, Results: res.Results,
 	}, nil
 }
 

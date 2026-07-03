@@ -31,24 +31,46 @@ import (
 const pyDriver = `
 import sys, io, json, base64, ast, traceback
 _ns = {"__name__": "__main__"}
-def _capture_images():
-    # Grab any open matplotlib figures as PNG (only if matplotlib was used, so
-    # there is zero cost otherwise), then close them so they don't accumulate.
+# IPython-style rich reprs → E2B Result MIME keys. This is how the official E2B
+# kernel formats results (DataFrames yield html, sympy yields latex, etc.).
+_MIME = (("_repr_html_","html"),("_repr_markdown_","markdown"),("_repr_svg_","svg"),
+         ("_repr_latex_","latex"),("_repr_json_","json"),("_repr_javascript_","javascript"),
+         ("_repr_jpeg_","jpeg"),("_repr_png_","png"),("_repr_pdf_","pdf"))
+def _mime_result(val, is_main):
+    r = {"is_main_result": is_main, "text": repr(val)}
+    for method, key in _MIME:
+        fn = getattr(val, method, None)
+        if not callable(fn):
+            continue
+        try:
+            data = fn()
+        except Exception:
+            continue
+        if data is None:
+            continue
+        if isinstance(data, tuple):  # some reprs return (data, metadata)
+            data = data[0]
+        if key in ("png", "jpeg", "pdf") and isinstance(data, (bytes, bytearray)):
+            data = base64.b64encode(data).decode("ascii")
+        r[key] = data
+    return r
+def _figures():
+    # Open matplotlib figures become PNG display results (E2B-style), then close.
     plt = sys.modules.get("matplotlib.pyplot")
     if plt is None:
         return []
-    imgs = []
+    figs = []
     try:
         for num in plt.get_fignums():
             buf = io.BytesIO()
             plt.figure(num).savefig(buf, format="png", bbox_inches="tight")
-            imgs.append(base64.b64encode(buf.getvalue()).decode("ascii"))
+            figs.append({"is_main_result": False, "png": base64.b64encode(buf.getvalue()).decode("ascii")})
         plt.close("all")
     except Exception:
         pass
-    return imgs
+    return figs
 def _run(src):
-    out, err, text, error = io.StringIO(), io.StringIO(), None, None
+    out, err, error, val, has = io.StringIO(), io.StringIO(), None, None, False
     so, se = sys.stdout, sys.stderr
     sys.stdout, sys.stderr = out, err
     try:
@@ -59,14 +81,23 @@ def _run(src):
         exec(compile(block, "<cell>", "exec"), _ns)
         if last is not None:
             val = eval(compile(last, "<cell>", "eval"), _ns)
-            if val is not None:
-                text = repr(val)
+            has = val is not None
     except Exception:
         error = traceback.format_exc()
     finally:
         sys.stdout, sys.stderr = so, se
-    return {"stdout": out.getvalue(), "stderr": err.getvalue(), "text": text,
-            "error": error, "images": _capture_images()}
+    results = _figures()
+    if has:
+        results.append(_mime_result(val, True))
+    # Convenience mirrors for simple consumers (CLI/console text + images).
+    text, images = "", []
+    for r in results:
+        if r.get("is_main_result"):
+            text = r.get("text") or ""
+        if r.get("png"):
+            images.append(r["png"])
+    return {"stdout": out.getvalue(), "stderr": err.getvalue(), "error": error,
+            "text": text, "images": images, "results": results}
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -85,11 +116,13 @@ for line in sys.stdin:
 type CodeResult struct {
 	Stdout string `json:"stdout"`
 	Stderr string `json:"stderr"`
-	Text   string `json:"text"`  // value of the final expression, if any
+	Text   string `json:"text"`  // main result's text/plain (convenience mirror)
 	Error  string `json:"error"` // traceback, if the cell raised
-	// Images holds base64-encoded PNGs of any matplotlib figures the cell left
-	// open (captured then closed after each run).
+	// Images holds base64-encoded PNGs (convenience mirror of Results' png).
 	Images []string `json:"images,omitempty"`
+	// Results is the E2B-shaped rich result list: matplotlib figures plus the
+	// final expression, each carrying its MIME reprs (text/html/svg/png/latex/…).
+	Results []map[string]any `json:"results,omitempty"`
 }
 
 // kernel is one persistent interpreter process.
