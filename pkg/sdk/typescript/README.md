@@ -35,6 +35,13 @@ console.log(res.stdout);
 await client.runCode(sandbox.name, "x = 40", "ctx1");
 console.log((await client.runCode(sandbox.name, "x + 2", "ctx1")).text); // → "42"
 
+// Rich results (E2B-shaped): DataFrame → html, matplotlib → png + structured chart.
+const cr = await client.runCode(sandbox.name, "import matplotlib.pyplot as plt; plt.bar(['a','b'],[3,7])");
+for (const r of cr.results ?? []) {
+  if (r.png) { /* base64 PNG */ }
+  if (r.chart) console.log(r.chart.type, r.chart.elements); // "bar", [{label,value},…]
+}
+
 // Live per-sandbox resource usage.
 const m = await client.stats(sandbox.name); // { cpu_count, cpu_used_pct, mem_*, disk_* }
 

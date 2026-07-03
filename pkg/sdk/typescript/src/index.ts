@@ -73,6 +73,37 @@ export interface CodeContext {
   cwd: string;
 }
 
+/** Structured chart data parsed from a matplotlib figure (E2B chart schema). */
+export interface ChartData {
+  /** line | scatter | bar | pie | box_and_whisker | superchart | unknown */
+  type: string;
+  title?: string | null;
+  /** Data elements (PointData / BarData / PieData / … per chart type). */
+  elements: unknown[];
+  x_label?: string | null;
+  y_label?: string | null;
+  [key: string]: unknown;
+}
+
+/**
+ * One rich result from a runCode call — the E2B Result shape. A DataFrame yields
+ * `html`, a matplotlib figure yields `png` + `chart`, sympy yields `latex`, etc.
+ */
+export interface CodeResultItem {
+  text?: string;
+  html?: string;
+  markdown?: string;
+  svg?: string;
+  png?: string;
+  jpeg?: string;
+  pdf?: string;
+  latex?: string;
+  json?: unknown;
+  javascript?: string;
+  chart?: ChartData;
+  is_main_result?: boolean;
+}
+
 /** Result of a stateful runCode call. */
 export interface CodeResult {
   stdout: string;
@@ -81,8 +112,10 @@ export interface CodeResult {
   text: string;
   /** Traceback if the cell raised. */
   error: string;
-  /** Base64-encoded PNGs of any matplotlib figures the cell produced. */
+  /** Base64-encoded PNGs of any matplotlib figures (convenience mirror of `results`). */
   images?: string[];
+  /** Rich results (matplotlib figures + the final expression), E2B-shaped. */
+  results?: CodeResultItem[];
 }
 
 /** One filesystem change from a directory watcher. */
