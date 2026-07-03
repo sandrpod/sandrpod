@@ -1,6 +1,8 @@
 package store
 
 import (
+	"fmt"
+	"sync"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/sandpod"
@@ -23,6 +25,51 @@ func (r *MemJobRepo) PollJobs(jobTimeout time.Duration, limit int) ([]*sandpod.J
 	return r.JobStore.PollJobs(0, limit)
 }
 
+// MemTokenRepo is an in-memory APITokenRepository, keyed by hash. Ephemeral:
+// issued tokens are lost on restart (use the SQLite backend to persist).
+type MemTokenRepo struct {
+	mu sync.Mutex
+	m  map[string]*sandpod.APIToken // hash -> token
+}
+
+// NewMemTokenRepo returns an empty in-memory token repository.
+func NewMemTokenRepo() *MemTokenRepo { return &MemTokenRepo{m: map[string]*sandpod.APIToken{}} }
+
+func (r *MemTokenRepo) Create(t *sandpod.APIToken) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.m[t.Hash]; ok {
+		return fmt.Errorf("store: api token already exists")
+	}
+	cp := *t
+	r.m[t.Hash] = &cp
+	return nil
+}
+
+func (r *MemTokenRepo) List() ([]*sandpod.APIToken, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]*sandpod.APIToken, 0, len(r.m))
+	for _, t := range r.m {
+		cp := *t
+		out = append(out, &cp)
+	}
+	return out, nil
+}
+
+func (r *MemTokenRepo) DeleteByPrefix(prefix string) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var removed []string
+	for h, t := range r.m {
+		if t.Prefix == prefix {
+			delete(r.m, h)
+			removed = append(removed, h)
+		}
+	}
+	return removed, nil
+}
+
 // NewMemoryStores constructs the default in-memory Stores.
 // Used when no -db flag is provided; data is lost on server restart.
 func NewMemoryStores() Stores {
@@ -30,5 +77,6 @@ func NewMemoryStores() Stores {
 		Sandboxes: &MemSandboxRepo{sandpod.NewSandboxStore()},
 		Poders:    &MemPoderRepo{sandpod.NewPoderStore()},
 		Jobs:      &MemJobRepo{sandpod.NewJobStore()},
+		Tokens:    NewMemTokenRepo(),
 	}
 }

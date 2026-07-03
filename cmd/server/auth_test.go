@@ -3,10 +3,36 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 )
+
+// TestResolveToken_DBIssuedKey locks in that a DB-issued key (matched by hash
+// via the in-memory index) authenticates, alongside the legacy admin token, and
+// that revocation (index removal) takes effect immediately.
+func TestResolveToken_DBIssuedKey(t *testing.T) {
+	raw := "e2b_" + strings.Repeat("a", 40)
+	idx := newAPIKeyIndex()
+	idx.put(hashKey(raw), identity{Name: "client-x", Role: roleUser})
+	cfg := serverConfig{Token: "admin-tok", Keys: idx}
+
+	if id, ok := resolveToken(cfg, raw); !ok || id.Name != "client-x" || id.Role != roleUser {
+		t.Errorf("db key: got (%+v, %v), want client-x/user/true", id, ok)
+	}
+	if id, ok := resolveToken(cfg, "admin-tok"); !ok || !id.isAdmin() {
+		t.Errorf("admin token regressed: got (%+v, %v)", id, ok)
+	}
+	if _, ok := resolveToken(cfg, "e2b_"+strings.Repeat("b", 40)); ok {
+		t.Error("unknown key: want reject")
+	}
+	// Revoke → immediately stops resolving.
+	idx.remove(hashKey(raw))
+	if _, ok := resolveToken(cfg, raw); ok {
+		t.Error("revoked key still resolves")
+	}
+}
 
 func TestLoadTokensFile(t *testing.T) {
 	dir := t.TempDir()

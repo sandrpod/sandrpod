@@ -38,10 +38,13 @@ type JobRepository interface {
 	ListJobs() []*Job
 }
 
-// Stores groups the three repositories for dependency injection into handlers
-// and the scheduler.
+// Stores groups the repositories for dependency injection into handlers and the
+// scheduler.
 type Stores struct {
 	Sandboxes SandboxRepository
 	Poders    PoderRepository
 	Jobs      JobRepository
+	// Tokens persists issued API tokens (nil for backends that predate it; the
+	// server treats nil as "no DB-backed tokens").
+	Tokens APITokenRepository
 }

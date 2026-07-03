@@ -87,10 +87,19 @@ CREATE TABLE IF NOT EXISTS jobs (
     updated_at     DATETIME NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS api_tokens (
+    hash        TEXT PRIMARY KEY,           -- sha256(raw key), hex; raw key never stored
+    name        TEXT     NOT NULL DEFAULT '',
+    prefix      TEXT     NOT NULL DEFAULT '', -- first chars of the key, for display/revoke
+    role        TEXT     NOT NULL DEFAULT 'user',
+    created_at  DATETIME NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_status      ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_updated     ON jobs(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_poder  ON sandboxes(poder_id);
 CREATE INDEX IF NOT EXISTS idx_poders_state     ON poders(state, region, provider_type);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_prefix ON api_tokens(prefix);
 `
 
 // columnMigrations lists ADD COLUMN statements applied to existing databases

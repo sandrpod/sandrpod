@@ -307,3 +307,29 @@ func TestMemJobRepo_UpdateJob(t *testing.T) {
 		t.Errorf("UpdateJob: status = %q, want COMPLETED", got.Status)
 	}
 }
+
+func TestMemTokenRepo(t *testing.T) {
+	r := NewMemTokenRepo()
+	tok := &sandpod.APIToken{Name: "alice", Prefix: "e2b_aaaabbbb", Hash: "hash-1", Role: "user", CreatedAt: time.Now()}
+	if err := r.Create(tok); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := r.Create(tok); err == nil {
+		t.Error("duplicate hash should be rejected")
+	}
+	list, _ := r.List()
+	if len(list) != 1 || list[0].Name != "alice" || list[0].Hash != "hash-1" {
+		t.Fatalf("list: %+v", list)
+	}
+	// Non-matching prefix removes nothing.
+	if removed, _ := r.DeleteByPrefix("e2b_nope"); len(removed) != 0 {
+		t.Errorf("delete miss: want none, got %v", removed)
+	}
+	removed, _ := r.DeleteByPrefix("e2b_aaaabbbb")
+	if len(removed) != 1 || removed[0] != "hash-1" {
+		t.Errorf("delete: want [hash-1], got %v", removed)
+	}
+	if list, _ := r.List(); len(list) != 0 {
+		t.Errorf("after delete: want empty, got %+v", list)
+	}
+}

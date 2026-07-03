@@ -98,7 +98,10 @@ type serverConfig struct {
 	Tokens []NamedToken
 	// Registry, when set, supplies hot-reloadable named tokens (tokens-file).
 	Registry *tokenRegistry
-	APIURL   string // used by scheduler for bootstrapping
+	// Keys, when set, is the in-memory index of DB-issued API tokens (matched by
+	// hash). Backed by stores.Tokens; loaded at startup, updated on issue/revoke.
+	Keys   *apiKeyIndex
+	APIURL string // used by scheduler for bootstrapping
 	// MaxSandboxesPerOwner caps how many sandboxes a user-role token may hold
 	// at once (0 = unlimited; admins are exempt).
 	MaxSandboxesPerOwner int
@@ -377,6 +380,12 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"poders": poders})
 	}))
+
+	// /api/v1/tokens - issue (POST) / list (GET) API tokens; admin only.
+	// Issued keys are e2b_<hex> so they drop straight into E2B_API_KEY.
+	mux.HandleFunc("/api/v1/tokens", adminOnly(handleTokens(cfg, stores.Tokens)))
+	// /api/v1/tokens/{prefix} - revoke a token by its display prefix; admin only.
+	mux.HandleFunc("/api/v1/tokens/", adminOnly(handleTokenDelete(cfg, stores.Tokens)))
 
 	// /api/v1/poders/* - Poder details, heartbeat, and direct sandbox operations
 	mux.HandleFunc("/api/v1/poders/", adminOnly(func(w http.ResponseWriter, r *http.Request) {
@@ -1361,6 +1370,7 @@ func main() {
 			Sandboxes: sqlitestore.NewSandboxRepo(db),
 			Poders:    sqlitestore.NewPoderRepo(db),
 			Jobs:      sqlitestore.NewJobRepo(db),
+			Tokens:    sqlitestore.NewTokenRepo(db),
 		}
 		log.Printf("Using SQLite store at %q", dsn)
 	default:
@@ -1387,6 +1397,19 @@ func main() {
 	if *rateLimit > 0 {
 		apiRateLimit = newRateLimiter(*rateLimit)
 		log.Printf("Rate limiting enabled: %.1f req/s per user token", *rateLimit)
+	}
+	// Load DB-issued API tokens into the in-memory auth index (hot path).
+	if stores.Tokens != nil {
+		keys := newAPIKeyIndex()
+		if toks, err := stores.Tokens.List(); err != nil {
+			log.Printf("Warning: failed to load API tokens from store: %v", err)
+		} else {
+			keys.load(toks)
+			if len(toks) > 0 {
+				log.Printf("Loaded %d issued API token(s) from store", len(toks))
+			}
+		}
+		cfg.Keys = keys
 	}
 	handler := buildMux(cfg, stores, tunnelStore, directStore)
 

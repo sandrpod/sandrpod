@@ -579,3 +579,38 @@ func TestOpen_StartupRecovery(t *testing.T) {
 		t.Errorf("expected 1 reclaimed job, got %d", len(jobs))
 	}
 }
+
+func TestTokenRepo_CRUD(t *testing.T) {
+	db, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	repo := sqlite.NewTokenRepo(db)
+
+	a := &sandpod.APIToken{Name: "alice", Prefix: "e2b_1111", Hash: "h-a", Role: "user", CreatedAt: time.Now()}
+	b := &sandpod.APIToken{Name: "ops", Prefix: "e2b_2222", Hash: "h-b", Role: "admin", CreatedAt: time.Now()}
+	if err := repo.Create(a); err != nil {
+		t.Fatalf("create a: %v", err)
+	}
+	if err := repo.Create(b); err != nil {
+		t.Fatalf("create b: %v", err)
+	}
+	if err := repo.Create(a); err == nil {
+		t.Error("duplicate hash should be rejected by PK")
+	}
+	list, err := repo.List()
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list: %v len=%d", err, len(list))
+	}
+	removed, err := repo.DeleteByPrefix("e2b_1111")
+	if err != nil || len(removed) != 1 || removed[0] != "h-a" {
+		t.Fatalf("delete: err=%v removed=%v", err, removed)
+	}
+	if list, _ := repo.List(); len(list) != 1 || list[0].Hash != "h-b" {
+		t.Errorf("after delete: want [h-b], got %+v", list)
+	}
+	if removed, _ := repo.DeleteByPrefix("e2b_nope"); len(removed) != 0 {
+		t.Errorf("delete miss: want none, got %v", removed)
+	}
+}

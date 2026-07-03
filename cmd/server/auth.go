@@ -11,7 +11,9 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -126,6 +128,58 @@ func watchTokensFile(ctx context.Context, path string, tr *tokenRegistry) {
 	}
 }
 
+// hashKey returns the hex SHA-256 of a raw API key. Persisted tokens store this
+// hash (never the raw key), and the auth index is keyed by it.
+func hashKey(raw string) string {
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:])
+}
+
+// apiKeyIndex is the in-memory hot-path lookup for DB-issued API tokens:
+// sha256(key) -> identity. It is loaded from the token store at startup and
+// updated in lockstep as tokens are issued/revoked, so authentication never
+// touches the database. The DB remains the durable source of truth.
+type apiKeyIndex struct {
+	mu sync.RWMutex
+	m  map[string]identity
+}
+
+func newAPIKeyIndex() *apiKeyIndex { return &apiKeyIndex{m: map[string]identity{}} }
+
+func (x *apiKeyIndex) get(hash string) (identity, bool) {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	id, ok := x.m[hash]
+	return id, ok
+}
+
+func (x *apiKeyIndex) put(hash string, id identity) {
+	x.mu.Lock()
+	x.m[hash] = id
+	x.mu.Unlock()
+}
+
+func (x *apiKeyIndex) remove(hash string) {
+	x.mu.Lock()
+	delete(x.m, hash)
+	x.mu.Unlock()
+}
+
+func (x *apiKeyIndex) len() int {
+	x.mu.RLock()
+	defer x.mu.RUnlock()
+	return len(x.m)
+}
+
+// load bulk-populates the index from persisted tokens (startup).
+func (x *apiKeyIndex) load(toks []*podpkg.APIToken) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	for _, t := range toks {
+		x.m[t.Hash] = identity{Name: t.Name, Role: t.Role}
+	}
+}
+
 // identity is who a request authenticated as.
 type identity struct {
 	Name string
@@ -162,6 +216,14 @@ func resolveToken(cfg serverConfig, presented string) (identity, bool) {
 	for _, t := range candidates {
 		if subtle.ConstantTimeCompare([]byte(presented), []byte(t.Token)) == 1 {
 			return identity{Name: t.Name, Role: t.Role}, true
+		}
+	}
+	// DB-issued tokens: matched by hash via the in-memory index. Preimage
+	// resistance means a hash-map lookup leaks nothing usable, so a plain lookup
+	// (not constant-time) is safe here.
+	if cfg.Keys != nil && cfg.Keys.len() > 0 {
+		if id, ok := cfg.Keys.get(hashKey(presented)); ok {
+			return id, true
 		}
 	}
 	return identity{}, false
