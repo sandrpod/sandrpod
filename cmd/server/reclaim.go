@@ -39,7 +39,11 @@ func reapIdleSandboxes(ctx context.Context, ttl time.Duration, ss podpkg.Sandbox
 			if !shouldReapSandbox(sb, now, ttl) {
 				continue
 			}
-			log.Printf("idle reaper: deleting sandbox %s (idle, ttl %v)", sb.Name, ttl)
+			// Log the *effective* TTL (a per-sandbox TTLSeconds overrides the
+			// global default) so the reason a sandbox was reaped is legible —
+			// e.g. an E2B sandbox created with a short `timeout` expires on that,
+			// not the 12h default.
+			log.Printf("idle reaper: deleting sandbox %s (idle, ttl %v)", sb.Name, effectiveSandboxTTL(sb, ttl))
 			notifyEvent("sandbox.reaped", map[string]any{"name": sb.Name, "provider": sb.ProviderType})
 			teardownSandbox(ctx, sb, ss, ps, ts)
 		}
@@ -61,10 +65,7 @@ func shouldReapSandbox(sb *podpkg.SandboxInfo, now time.Time, ttl time.Duration)
 	}
 	// A per-sandbox TTL overrides the global default; with neither set the
 	// sandbox is never reaped.
-	effective := ttl
-	if sb.TTLSeconds > 0 {
-		effective = time.Duration(sb.TTLSeconds) * time.Second
-	}
+	effective := effectiveSandboxTTL(sb, ttl)
 	if effective <= 0 {
 		return false
 	}
@@ -73,6 +74,16 @@ func shouldReapSandbox(sb *podpkg.SandboxInfo, now time.Time, ttl time.Duration)
 		last = sb.CreatedAt
 	}
 	return !last.IsZero() && now.Sub(last) > effective
+}
+
+// effectiveSandboxTTL is the idle TTL actually applied to a sandbox: its own
+// TTLSeconds when set (e.g. an E2B `Sandbox.create(timeout=…)`), otherwise the
+// server-wide default.
+func effectiveSandboxTTL(sb *podpkg.SandboxInfo, ttl time.Duration) time.Duration {
+	if sb.TTLSeconds > 0 {
+		return time.Duration(sb.TTLSeconds) * time.Second
+	}
+	return ttl
 }
 
 // teardownSandbox removes a sandbox record, decrements its poder's usage, and

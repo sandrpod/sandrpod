@@ -27,6 +27,10 @@ func TestShouldReapSandbox(t *testing.T) {
 		{"zero activity falls back to created", podpkg.SandboxInfo{State: podpkg.StateRunning, CreatedAt: old}, true},
 		{"zero activity + fresh created survives", podpkg.SandboxInfo{State: podpkg.StateRunning, CreatedAt: fresh}, false},
 		{"both timestamps zero is skipped", podpkg.SandboxInfo{State: podpkg.StateRunning}, false},
+		// A per-sandbox TTLSeconds (e.g. an E2B Sandbox.create(timeout=…))
+		// overrides the global default in both directions.
+		{"short per-sandbox TTL reaps a would-be-fresh sandbox", podpkg.SandboxInfo{State: podpkg.StateRunning, LastActivity: fresh, TTLSeconds: 30}, true},
+		{"long per-sandbox TTL keeps an otherwise-idle sandbox", podpkg.SandboxInfo{State: podpkg.StateRunning, LastActivity: old, TTLSeconds: 3 * 3600}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -34,5 +38,15 @@ func TestShouldReapSandbox(t *testing.T) {
 				t.Errorf("shouldReapSandbox = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+func TestEffectiveSandboxTTL(t *testing.T) {
+	def := time.Hour
+	if got := effectiveSandboxTTL(&podpkg.SandboxInfo{}, def); got != def {
+		t.Errorf("no per-sandbox TTL: got %v, want default %v", got, def)
+	}
+	if got := effectiveSandboxTTL(&podpkg.SandboxInfo{TTLSeconds: 300}, def); got != 5*time.Minute {
+		t.Errorf("per-sandbox TTL: got %v, want 5m", got)
 	}
 }
