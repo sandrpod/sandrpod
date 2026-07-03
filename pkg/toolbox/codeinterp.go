@@ -31,6 +31,16 @@ import (
 const pyDriver = `
 import sys, io, json, base64, ast, traceback
 _ns = {"__name__": "__main__"}
+def _jsonable(o):
+    # json default for values json can't handle: numpy scalars → native via
+    # .item(), numpy arrays → list via .tolist(), everything else → str.
+    if hasattr(o, "item"):
+        try: return o.item()
+        except Exception: pass
+    if hasattr(o, "tolist"):
+        try: return o.tolist()
+        except Exception: pass
+    return str(o)
 # IPython-style rich reprs → E2B Result MIME keys. This is how the official E2B
 # kernel formats results (DataFrames yield html, sympy yields latex, etc.).
 _MIME = (("_repr_html_","html"),("_repr_markdown_","markdown"),("_repr_svg_","svg"),
@@ -54,17 +64,72 @@ def _mime_result(val, is_main):
             data = base64.b64encode(data).decode("ascii")
         r[key] = data
     return r
+def _chart_axes(ax):
+    # Parse one matplotlib Axes into E2B's structured chart schema.
+    from matplotlib.patches import Wedge, Rectangle
+    from matplotlib.collections import PathCollection
+    title = ax.get_title() or None
+    wedges = [p for p in ax.patches if isinstance(p, Wedge)]
+    if wedges:
+        texts = [t.get_text() for t in ax.texts]
+        elems = [{"label": (texts[i] if i < len(texts) else ""),
+                  "angle": float(abs(w.theta2 - w.theta1)), "radius": float(w.r)} for i, w in enumerate(wedges)]
+        return {"type": "pie", "title": title, "elements": elems}
+    def _ticks(getter, lblgetter):
+        try: t = [float(v) for v in getter()]
+        except Exception: t = []
+        return t, [l.get_text() for l in lblgetter()]
+    xt, xtl = _ticks(ax.get_xticks, ax.get_xticklabels)
+    yt, ytl = _ticks(ax.get_yticks, ax.get_yticklabels)
+    base = {"title": title, "x_label": ax.get_xlabel() or None, "y_label": ax.get_ylabel() or None,
+            "x_unit": None, "y_unit": None, "x_scale": ax.get_xscale(), "y_scale": ax.get_yscale(),
+            "x_ticks": xt, "x_tick_labels": xtl, "y_ticks": yt, "y_tick_labels": ytl}
+    lines = ax.get_lines()
+    scatters = [c for c in ax.collections if isinstance(c, PathCollection)]
+    bars = [p for p in ax.patches if isinstance(p, Rectangle) and p.get_width() and p.get_height()]
+    if bars and not lines and not scatters:
+        xl = [l.get_text() for l in ax.get_xticklabels()]
+        elems = [{"label": (xl[i] if i < len(xl) else str(i)), "value": float(b.get_height()), "group": None}
+                 for i, b in enumerate(bars)]
+        return {"type": "bar", "elements": elems, **base}
+    if scatters and not lines:
+        elems = [{"label": ("" if sc.get_label().startswith("_") else sc.get_label()),
+                  "points": [[float(x), float(y)] for x, y in sc.get_offsets()]} for sc in scatters]
+        return {"type": "scatter", "elements": elems, **base}
+    if lines:
+        all_scatter = all(str(ln.get_linestyle()) in ("None", "") and str(ln.get_marker()) not in ("None", "") for ln in lines)
+        elems = [{"label": ("" if ln.get_label().startswith("_") else ln.get_label()),
+                  "points": [[float(x), float(y)] for x, y in zip(ln.get_xdata(), ln.get_ydata())]} for ln in lines]
+        return {"type": ("scatter" if all_scatter else "line"), "elements": elems, **base}
+    return {"type": "unknown", "elements": [], **base}
+def _extract_chart(fig):
+    axes = fig.get_axes()
+    if not axes:
+        return None
+    if len(axes) > 1:
+        return {"type": "superchart", "title": (fig._suptitle.get_text() if fig._suptitle else None),
+                "elements": [_chart_axes(a) for a in axes]}
+    return _chart_axes(axes[0])
 def _figures():
-    # Open matplotlib figures become PNG display results (E2B-style), then close.
+    # Open matplotlib figures become PNG display results (E2B-style) plus a
+    # structured chart object parsed from the axes, then close.
     plt = sys.modules.get("matplotlib.pyplot")
     if plt is None:
         return []
     figs = []
     try:
         for num in plt.get_fignums():
+            fig = plt.figure(num)
             buf = io.BytesIO()
-            plt.figure(num).savefig(buf, format="png", bbox_inches="tight")
-            figs.append({"is_main_result": False, "png": base64.b64encode(buf.getvalue()).decode("ascii")})
+            fig.savefig(buf, format="png", bbox_inches="tight")
+            item = {"is_main_result": False, "png": base64.b64encode(buf.getvalue()).decode("ascii")}
+            try:
+                ch = _extract_chart(fig)
+                if ch:
+                    item["chart"] = ch
+            except Exception:
+                pass
+            figs.append(item)
         plt.close("all")
     except Exception:
         pass
@@ -108,7 +173,13 @@ for line in sys.stdin:
     except Exception as e:
         sys.stdout.write(json.dumps({"stdout":"","stderr":"","text":None,"error":str(e)}) + "\n")
         sys.stdout.flush(); continue
-    sys.stdout.write(json.dumps(_run(src)) + "\n")
+    # default= makes numpy scalars/arrays serializable; the try means a bad
+    # result never kills the kernel (which would break the whole context).
+    try:
+        payload = json.dumps(_run(src), default=_jsonable)
+    except Exception as e:
+        payload = json.dumps({"stdout":"","stderr":"","text":None,"error":"serialize: "+str(e)})
+    sys.stdout.write(payload + "\n")
     sys.stdout.flush()
 `
 
