@@ -180,6 +180,18 @@ func (x *apiKeyIndex) load(toks []*podpkg.APIToken) {
 	}
 }
 
+// replace swaps the whole index atomically. Used by the periodic multi-instance
+// reload so tokens issued OR revoked on peer instances converge here.
+func (x *apiKeyIndex) replace(toks []*podpkg.APIToken) {
+	m := make(map[string]identity, len(toks))
+	for _, t := range toks {
+		m[t.Hash] = identity{Name: t.Name, Role: t.Role}
+	}
+	x.mu.Lock()
+	x.m = m
+	x.mu.Unlock()
+}
+
 // identity is who a request authenticated as.
 type identity struct {
 	Name string
@@ -232,9 +244,19 @@ func resolveToken(cfg serverConfig, presented string) (identity, bool) {
 	// DB-issued tokens: matched by hash via the in-memory index. Preimage
 	// resistance means a hash-map lookup leaks nothing usable, so a plain lookup
 	// (not constant-time) is safe here.
-	if cfg.Keys != nil && cfg.Keys.len() > 0 {
-		if id, ok := cfg.Keys.get(hashKey(presented)); ok {
+	if cfg.Keys != nil {
+		h := hashKey(presented)
+		if id, ok := cfg.Keys.get(h); ok {
 			return id, true
+		}
+		// Multi-instance fallback: a token issued on a peer instance isn't in
+		// this instance's index yet. Look it up in the shared store and cache it.
+		if cfg.NodeURL != "" && cfg.TokenStore != nil {
+			if t, ok := cfg.TokenStore.FindByHash(h); ok {
+				id := identity{Name: t.Name, Role: t.Role}
+				cfg.Keys.put(h, id)
+				return id, true
+			}
 		}
 	}
 	return identity{}, false

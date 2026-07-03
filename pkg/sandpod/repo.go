@@ -47,4 +47,7 @@ type Stores struct {
 	// Tokens persists issued API tokens (nil for backends that predate it; the
 	// server treats nil as "no DB-backed tokens").
 	Tokens APITokenRepository
+	// TunnelOwners maps a poder/agent tunnel to the server instance holding it,
+	// enabling inter-node request forwarding in multi-instance deployments.
+	TunnelOwners TunnelOwnerRepository
 }

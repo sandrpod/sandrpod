@@ -92,6 +92,12 @@ CREATE TABLE IF NOT EXISTS api_tokens (
     created_at  DATETIME NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS tunnel_owners (
+    tunnel_key TEXT PRIMARY KEY,        -- poder id or direct-agent sandbox name
+    node_url   TEXT     NOT NULL,       -- server instance holding the live tunnel
+    updated_at DATETIME NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_jobs_status      ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_updated     ON jobs(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_poder  ON sandboxes(poder_id);

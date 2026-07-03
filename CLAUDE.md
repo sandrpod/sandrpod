@@ -40,6 +40,12 @@ go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
 go run ./cmd/server -port 8080 -db "postgres://user:pass@host:5432/sandrpod?sslmode=require"
 # One instance uses ONE backend, selected at startup by the -db DSN scheme; the same pkg/store/sqldb code targets either SQLite or PostgreSQL (not both at once).
 
+# Multi-instance LOAD mode (N active instances behind a load balancer, shared PostgreSQL):
+#   give each instance a unique -node-url (its internal address peers reach it at).
+#   A request landing on any instance is forwarded to the node holding the target poder's tunnel.
+go run ./cmd/server -port 8080 -db "postgres://…" -node-url http://10.0.1.5:8080   # instance A
+go run ./cmd/server -port 8080 -db "postgres://…" -node-url http://10.0.1.6:8080   # instance B (same DB)
+
 # Run API Server for cloud providers (AWS/Aliyun/Azure/GCP) — public-url is sent to cloud VMs for callback
 go run ./cmd/server -port 8080 -public-url https://api.example.com -db sqlite:./data/sandrpod.db
 

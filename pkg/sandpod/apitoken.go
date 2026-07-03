@@ -24,6 +24,9 @@ type APITokenRepository interface {
 	// Create persists a token. It must reject a duplicate Hash.
 	Create(t *APIToken) error
 	List() ([]*APIToken, error)
+	// FindByHash returns the token with the given SHA-256 hash, if any. It lets
+	// an instance validate a token issued on a peer (its local cache misses).
+	FindByHash(hash string) (*APIToken, bool)
 	// DeleteByPrefix removes every token whose Prefix matches and returns their
 	// hashes, so an in-memory auth index can drop the same entries. removed is
 	// empty when nothing matched.

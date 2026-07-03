@@ -57,6 +57,16 @@ func (r *MemTokenRepo) List() ([]*sandpod.APIToken, error) {
 	return out, nil
 }
 
+func (r *MemTokenRepo) FindByHash(hash string) (*sandpod.APIToken, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if t, ok := r.m[hash]; ok {
+		cp := *t
+		return &cp, true
+	}
+	return nil, false
+}
+
 func (r *MemTokenRepo) DeleteByPrefix(prefix string) ([]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -70,13 +80,48 @@ func (r *MemTokenRepo) DeleteByPrefix(prefix string) ([]string, error) {
 	return removed, nil
 }
 
+// MemTunnelOwnerRepo is an in-memory TunnelOwnerRepository. Single-process, so
+// the cross-instance forwarding it enables only matters with a shared SQL
+// backend; here it just records local claims harmlessly.
+type MemTunnelOwnerRepo struct {
+	mu sync.Mutex
+	m  map[string]string // key -> node url
+}
+
+// NewMemTunnelOwnerRepo returns an empty in-memory tunnel-owner repository.
+func NewMemTunnelOwnerRepo() *MemTunnelOwnerRepo { return &MemTunnelOwnerRepo{m: map[string]string{}} }
+
+func (r *MemTunnelOwnerRepo) Claim(key, nodeURL string) error {
+	r.mu.Lock()
+	r.m[key] = nodeURL
+	r.mu.Unlock()
+	return nil
+}
+
+func (r *MemTunnelOwnerRepo) Release(key, nodeURL string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.m[key] == nodeURL {
+		delete(r.m, key)
+	}
+	return nil
+}
+
+func (r *MemTunnelOwnerRepo) NodeFor(key string) (string, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	n, ok := r.m[key]
+	return n, ok
+}
+
 // NewMemoryStores constructs the default in-memory Stores.
 // Used when no -db flag is provided; data is lost on server restart.
 func NewMemoryStores() Stores {
 	return Stores{
-		Sandboxes: &MemSandboxRepo{sandpod.NewSandboxStore()},
-		Poders:    &MemPoderRepo{sandpod.NewPoderStore()},
-		Jobs:      &MemJobRepo{sandpod.NewJobStore()},
-		Tokens:    NewMemTokenRepo(),
+		Sandboxes:    &MemSandboxRepo{sandpod.NewSandboxStore()},
+		Poders:       &MemPoderRepo{sandpod.NewPoderStore()},
+		Jobs:         &MemJobRepo{sandpod.NewJobStore()},
+		Tokens:       NewMemTokenRepo(),
+		TunnelOwners: NewMemTunnelOwnerRepo(),
 	}
 }

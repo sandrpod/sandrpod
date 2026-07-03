@@ -43,6 +43,18 @@ func (r *tokenRepo) List() ([]*sandpod.APIToken, error) {
 	return out, rows.Err()
 }
 
+func (r *tokenRepo) FindByHash(hash string) (*sandpod.APIToken, bool) {
+	var t sandpod.APIToken
+	var created string
+	if err := r.db.QueryRow(
+		`SELECT hash, name, prefix, role, created_at FROM api_tokens WHERE hash=?`, hash,
+	).Scan(&t.Hash, &t.Name, &t.Prefix, &t.Role, &created); err != nil {
+		return nil, false
+	}
+	t.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
+	return &t, true
+}
+
 func (r *tokenRepo) DeleteByPrefix(prefix string) ([]string, error) {
 	// Read the matching hashes first so the caller can drop them from its
 	// in-memory auth index, then delete in the same transaction.

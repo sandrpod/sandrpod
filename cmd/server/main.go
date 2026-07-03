@@ -14,6 +14,7 @@ import (
 	"log"
 	"maps"
 	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"os"
 	"os/signal"
@@ -48,6 +49,7 @@ var (
 	sandboxIdleTTL = flag.Duration("sandbox-idle-timeout", envDuration("SANDRPOD_SANDBOX_IDLE_TIMEOUT"), "Reap sandboxes idle longer than this, e.g. 2h (0 = disabled; env: SANDRPOD_SANDBOX_IDLE_TIMEOUT)")
 	poderIdleTTL   = flag.Duration("poder-idle-timeout", envDuration("SANDRPOD_PODER_IDLE_TIMEOUT"), "Reclaim cloud poders with no sandboxes after this, terminating the VM, e.g. 30m (0 = disabled; env: SANDRPOD_PODER_IDLE_TIMEOUT)")
 	publicURL      = flag.String("public-url", os.Getenv("SANDRPOD_PUBLIC_URL"), "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
+	nodeURL        = flag.String("node-url", os.Getenv("SANDRPOD_NODE_URL"), "Internal URL of THIS instance that peer instances reach it at (e.g. http://10.0.1.5:8080). Set on every instance in a load-balanced, PostgreSQL-backed multi-instance deployment so requests can be forwarded to the node holding a poder's tunnel. Empty = single-instance (no forwarding). (env: SANDRPOD_NODE_URL)")
 	tokensFile     = flag.String("tokens-file", os.Getenv("SANDRPOD_TOKENS_FILE"), "JSON file of named API tokens [{name,token,role}] adding to -token; role admin|user; hot-reloaded on change (env: SANDRPOD_TOKENS_FILE)")
 	tlsCert        = flag.String("tls-cert", os.Getenv("SANDRPOD_TLS_CERT"), "TLS certificate file; with -tls-key serves HTTPS (env: SANDRPOD_TLS_CERT)")
 	tlsKey         = flag.String("tls-key", os.Getenv("SANDRPOD_TLS_KEY"), "TLS private key file (env: SANDRPOD_TLS_KEY)")
@@ -102,6 +104,13 @@ type serverConfig struct {
 	// hash). Backed by stores.Tokens; loaded at startup, updated on issue/revoke.
 	Keys   *apiKeyIndex
 	APIURL string // used by scheduler for bootstrapping
+	// NodeURL is this instance's internal address for inter-node forwarding in a
+	// multi-instance deployment; empty means single-instance (no forwarding).
+	NodeURL string
+	// TokenStore is the persistent token repository, consulted as a fallback in
+	// multi-instance mode so a token issued on a peer instance (absent from this
+	// instance's in-memory Keys index) still authenticates.
+	TokenStore podpkg.APITokenRepository
 	// MaxSandboxesPerOwner caps how many sandboxes a user-role token may hold
 	// at once (0 = unlimited; admins are exempt).
 	MaxSandboxesPerOwner int
@@ -266,6 +275,11 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			return
 		}
 		tunnelStore.Add(t)
+		// Multi-instance: record that this node holds the poder's tunnel so peer
+		// instances can forward requests here.
+		if cfg.NodeURL != "" {
+			_ = stores.TunnelOwners.Claim(poderID, cfg.NodeURL)
+		}
 		log.Printf("Poder %s connected via tunnel", poderID)
 		notifyEvent("poder.registered", map[string]any{"poder_id": poderID, "provider": r.Header.Get("X-Poder-Provider-Type"), "vm_id": r.Header.Get("X-Poder-VM-ID")})
 		// Reconciliation now happens via heartbeat (reconcileByHeartbeat).
@@ -276,6 +290,9 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		defer func() {
 			if cur, ok := tunnelStore.Get(poderID); ok && cur == t {
 				tunnelStore.Remove(poderID)
+				if cfg.NodeURL != "" {
+					_ = stores.TunnelOwners.Release(poderID, cfg.NodeURL)
+				}
 				poderStore.SetOffline(poderID)
 				// Mark surviving sandboxes as ERROR — the tunnel is gone so we
 				// cannot reach the containers; callers will get a meaningful
@@ -319,6 +336,9 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			return
 		}
 		directStore.Set(sandboxName, t)
+		if cfg.NodeURL != "" {
+			_ = stores.TunnelOwners.Claim(sandboxName, cfg.NodeURL)
+		}
 
 		// Register or update sandbox metadata
 		now := time.Now()
@@ -356,6 +376,9 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			// a reconnect that registered a new tunnel before this one closed).
 			if current, ok := directStore.Get(sandboxName); ok && current == t {
 				directStore.Remove(sandboxName)
+				if cfg.NodeURL != "" {
+					_ = stores.TunnelOwners.Release(sandboxName, cfg.NodeURL)
+				}
 				sandboxStore.Update(sandboxName, func(s *podpkg.SandboxInfo) {
 					s.State = podpkg.StateError
 				})
@@ -781,7 +804,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				http.Error(w, "sandbox not found", http.StatusNotFound)
 				return
 			}
-			sb, t, ok := sandboxTunnel(sandboxName, sandboxStore, tunnelStore, directStore, w)
+			sb, t, ok := sandboxTunnel(sandboxName, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 			if !ok {
 				return
 			}
@@ -805,7 +828,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				http.Error(w, "sandbox not found", http.StatusNotFound)
 				return
 			}
-			_, t, ok := sandboxTunnel(sandboxName, sandboxStore, tunnelStore, directStore, w)
+			_, t, ok := sandboxTunnel(sandboxName, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 			if !ok {
 				return
 			}
@@ -865,7 +888,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		// through the streaming proxy to preserve real-time flushes.
 		// See docs/MCP_TRANSPORT_BRIDGE_DESIGN.md §七.
 		if action == "mcp" || strings.HasPrefix(action, "mcp/") {
-			_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+			_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 			if !ok {
 				return
 			}
@@ -882,7 +905,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		switch r.Method {
 		case http.MethodGet:
 			if sessionPath != "" {
-				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				sb, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -901,7 +924,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if action == "logs" {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -915,7 +938,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if action == "toolbox" || strings.HasPrefix(action, "toolbox/") {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -928,7 +951,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if strings.HasPrefix(action, "session/") {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -942,7 +965,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 
 			// PTY WebSocket: must be GET (WebSocket upgrade starts with HTTP GET)
 			if action == "pty" {
-				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				sb, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1003,7 +1026,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 
 		case http.MethodPost:
 			if sessionPath != "" {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1030,7 +1053,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if action == "toolbox" || strings.HasPrefix(action, "toolbox/") {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1044,7 +1067,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if action == "start" {
-				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				sb, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1065,7 +1088,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if action == "stop" {
-				sb, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				sb, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1086,7 +1109,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if action == "snapshot" {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1102,7 +1125,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 
 		case http.MethodDelete:
 			if sessionPath != "" {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1113,7 +1136,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if strings.HasPrefix(action, "session/") {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1123,7 +1146,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if action == "toolbox" || strings.HasPrefix(action, "toolbox/") {
-				_, t, ok := sandboxTunnel(name, sandboxStore, tunnelStore, directStore, w)
+				_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1368,10 +1391,11 @@ func main() {
 		}
 		defer db.Close()
 		stores = podpkg.Stores{
-			Sandboxes: sqldbstore.NewSandboxRepo(db),
-			Poders:    sqldbstore.NewPoderRepo(db),
-			Jobs:      sqldbstore.NewJobRepo(db),
-			Tokens:    sqldbstore.NewTokenRepo(db),
+			Sandboxes:    sqldbstore.NewSandboxRepo(db),
+			Poders:       sqldbstore.NewPoderRepo(db),
+			Jobs:         sqldbstore.NewJobRepo(db),
+			Tokens:       sqldbstore.NewTokenRepo(db),
+			TunnelOwners: sqldbstore.NewTunnelOwnerRepo(db),
 		}
 		kind := "SQLite"
 		if !strings.HasPrefix(*dbDSN, "sqlite:") {
@@ -1388,7 +1412,10 @@ func main() {
 	if apiURL == "" {
 		apiURL = fmt.Sprintf("http://localhost:%d", *port)
 	}
-	cfg := serverConfig{Token: *token, APIURL: apiURL, MaxSandboxesPerOwner: *maxPerOwner}
+	cfg := serverConfig{Token: *token, APIURL: apiURL, MaxSandboxesPerOwner: *maxPerOwner, NodeURL: *nodeURL}
+	if *nodeURL != "" {
+		log.Printf("Multi-instance mode: this node = %s (inter-node forwarding enabled)", *nodeURL)
+	}
 	if *tokensFile != "" {
 		toks, err := loadTokensFile(*tokensFile)
 		if err != nil {
@@ -1405,6 +1432,7 @@ func main() {
 	}
 	// Load DB-issued API tokens into the in-memory auth index (hot path).
 	if stores.Tokens != nil {
+		cfg.TokenStore = stores.Tokens
 		keys := newAPIKeyIndex()
 		if toks, err := stores.Tokens.List(); err != nil {
 			log.Printf("Warning: failed to load API tokens from store: %v", err)
@@ -1513,6 +1541,26 @@ func main() {
 		go watchTokensFile(rootCtx, *tokensFile, cfg.Registry)
 	}
 
+	// Multi-instance: periodically re-sync the token index from the shared store
+	// so tokens issued OR revoked on peer instances converge here (issuance is
+	// also picked up instantly via the FindByHash fallback in resolveToken).
+	if *nodeURL != "" && cfg.Keys != nil && stores.Tokens != nil {
+		go func() {
+			ticker := time.NewTicker(30 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-rootCtx.Done():
+					return
+				case <-ticker.C:
+					if toks, err := stores.Tokens.List(); err == nil {
+						cfg.Keys.replace(toks)
+					}
+				}
+			}
+		}()
+	}
+
 	if *tlsCert != "" && *tlsKey != "" {
 		log.Printf("API server listening on %s (HTTPS, Control Plane + Tunnel Mode)", addr)
 		if err := server.ListenAndServeTLS(*tlsCert, *tlsKey); err != http.ErrServerClosed {
@@ -1528,31 +1576,70 @@ func main() {
 
 // sandboxTunnel looks up a sandbox and its Poder tunnel together.
 // Writes an appropriate HTTP error and returns false if either is missing.
-func sandboxTunnel(name string, ss podpkg.SandboxRepository, ts *tunnel.TunnelStore, ds *tunnel.TunnelStore, w http.ResponseWriter) (*podpkg.SandboxInfo, *tunnel.PoderTunnel, bool) {
+// sandboxTunnel resolves a sandbox to the reverse tunnel that reaches its
+// container (or direct agent), and records activity for the idle reaper — the
+// single choke point every proxy path funnels through.
+//
+// Multi-instance: the yamux tunnel lives on exactly one instance. When it isn't
+// on this one, the request r is forwarded to the peer node that owns it
+// (owners.NodeFor); this returns ok=false with the response already written. A
+// request already forwarded once (forwardedHeader) is not forwarded again, so a
+// stale owner map degrades to a clean 503 instead of a loop.
+func sandboxTunnel(name string, r *http.Request, ss podpkg.SandboxRepository, ts, ds *tunnel.TunnelStore, owners podpkg.TunnelOwnerRepository, nodeURL string, w http.ResponseWriter) (*podpkg.SandboxInfo, *tunnel.PoderTunnel, bool) {
 	sb, ok := ss.Get(name)
 	if !ok {
 		http.Error(w, "sandbox not found", http.StatusNotFound)
 		return nil, nil, false
 	}
-	// Every tunnel use (execute/stream/session/toolbox/start/stop) counts as
-	// activity — this single choke point feeds the idle-sandbox reaper.
 	_ = ss.Update(name, func(s *podpkg.SandboxInfo) { s.LastActivity = time.Now() })
-	// Direct-agent path (end-user): sandbox is registered directly by the local sandrpod-agent
+
+	// Pick the local tunnel store + ownership key by path: a direct-agent
+	// sandbox is keyed by its own name, a poder-backed one by its poder id.
+	key, local := sb.PoderID, ts
 	if strings.HasPrefix(sb.ProxyURL, "direct://") {
-		t, ok := ds.Get(name)
-		if !ok {
-			http.Error(w, "sandbox agent not connected", http.StatusServiceUnavailable)
-			return nil, nil, false
+		key, local = name, ds
+	}
+	if t, ok := local.Get(key); ok {
+		return sb, t, true // tunnel is on this instance (the common case)
+	}
+	// Not local: forward to the peer instance holding it (multi-instance only).
+	if nodeURL != "" && owners != nil && r != nil && r.Header.Get(forwardedHeader) == "" {
+		if owner, found := owners.NodeFor(key); found && owner != nodeURL {
+			forwardToNode(owner, w, r)
+			return nil, nil, false // response written by the forward
 		}
-		return sb, t, true
 	}
-	// Poder path (business): sandbox runs in a container managed by Poder
-	t, ok := ts.Get(sb.PoderID)
-	if !ok {
-		http.Error(w, "poder tunnel not available", http.StatusServiceUnavailable)
-		return nil, nil, false
+	http.Error(w, "sandbox tunnel not available", http.StatusServiceUnavailable)
+	return nil, nil, false
+}
+
+// forwardedHeader marks a request already forwarded once between instances, so
+// the receiving node won't forward again (guards against a stale owner map).
+const forwardedHeader = "X-Sandrpod-Forwarded"
+
+// forwardToNode reverse-proxies r to the peer instance that holds the target
+// poder's tunnel. The peer serves the same endpoint, finds the tunnel locally,
+// and proxies through it. FlushInterval=-1 streams chunks immediately so exec
+// stream / SSE stay real-time across the hop.
+func forwardToNode(nodeURL string, w http.ResponseWriter, r *http.Request) {
+	target, err := url.Parse(nodeURL)
+	if err != nil {
+		http.Error(w, "invalid owner node url", http.StatusBadGateway)
+		return
 	}
-	return sb, t, true
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.FlushInterval = -1
+	base := proxy.Director
+	proxy.Director = func(req *http.Request) {
+		base(req)
+		req.Header.Set(forwardedHeader, "1")
+		req.Host = target.Host
+	}
+	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, e error) {
+		log.Printf("inter-node forward to %s failed: %v", nodeURL, e)
+		http.Error(w, "owner node unreachable", http.StatusBadGateway)
+	}
+	proxy.ServeHTTP(w, r)
 }
 
 // proxyHTTP forwards an HTTP request through the tunnel and copies the response.

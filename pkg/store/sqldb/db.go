@@ -81,9 +81,19 @@ func openPostgres(dsn string) (*DB, error) {
 
 // finish runs migrations + startup recovery and wraps the pool with its dialect.
 func finish(sdb *sql.DB, d Dialect) (*DB, error) {
-	if err := migrate(sdb, d); err != nil {
+	// Retry: when several instances boot against a fresh Postgres simultaneously,
+	// concurrent CREATE TABLE IF NOT EXISTS can conflict; the loser retries and
+	// finds the tables already there (idempotent DDL).
+	var mErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if mErr = migrate(sdb, d); mErr == nil {
+			break
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+	if mErr != nil {
 		sdb.Close()
-		return nil, fmt.Errorf("store/sqldb: migrate: %w", err)
+		return nil, fmt.Errorf("store/sqldb: migrate: %w", mErr)
 	}
 	db := &DB{sdb: sdb, d: d}
 	// Jobs left IN_PROGRESS by a crashed server return to PENDING so a poder can
