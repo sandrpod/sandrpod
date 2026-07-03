@@ -542,15 +542,29 @@ def run(ctx, name, code, context_id):
         if res.get("error"):
             click.echo(res["error"], err=True)
             sys.exit(1)
+        # Rich results, E2B-shaped: print the main result's text (DataFrame ASCII,
+        # scalar values) and save each artifact a terminal can't render inline
+        # (png/jpeg/svg/html + structured chart JSON) to a file.
+        import base64
+        import json as _json
+        results = res.get("results")
+        if results:
+            for n, r in enumerate(results, start=1):
+                if r.get("is_main_result") and r.get("text"):
+                    click.echo(r["text"])
+                for key, ext, is_binary in (("png", "png", True), ("jpeg", "jpg", True),
+                                            ("svg", "svg", False), ("html", "html", False)):
+                    if r.get(key):
+                        data = base64.b64decode(r[key]) if is_binary else r[key].encode()
+                        with open(f"result-{n}.{ext}", "wb") as fh:
+                            fh.write(data)
+                        click.echo(f"[saved {key} → result-{n}.{ext}]")
+                if r.get("chart"):
+                    with open(f"result-{n}.chart.json", "w") as fh:
+                        _json.dump(r["chart"], fh, indent=2)
+                    click.echo(f"[chart data → result-{n}.chart.json]")
         elif res.get("text"):
             click.echo(res["text"])
-        images = res.get("images") or []
-        for i, png in enumerate(images):
-            import base64
-            fn = f"plot-{i + 1}.png" if len(images) > 1 else "plot.png"
-            with open(fn, "wb") as fh:
-                fh.write(base64.b64decode(png))
-            click.echo(f"[figure saved → {fn}]")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
