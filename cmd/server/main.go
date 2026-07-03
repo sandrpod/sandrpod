@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -1561,6 +1562,29 @@ func main() {
 		}()
 	}
 
+	// Multi-instance: refresh ownership of tunnels held on this node so peers
+	// keep routing here. A crashed node stops refreshing; its rows expire
+	// (ownerTTL) and routing recovers as the poders reconnect elsewhere.
+	if *nodeURL != "" && stores.TunnelOwners != nil {
+		go func() {
+			ticker := time.NewTicker(20 * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-rootCtx.Done():
+					return
+				case <-ticker.C:
+					for _, k := range tunnelStore.Keys() {
+						_ = stores.TunnelOwners.Claim(k, *nodeURL)
+					}
+					for _, k := range directStore.Keys() {
+						_ = stores.TunnelOwners.Claim(k, *nodeURL)
+					}
+				}
+			}
+		}()
+	}
+
 	if *tlsCert != "" && *tlsKey != "" {
 		log.Printf("API server listening on %s (HTTPS, Control Plane + Tunnel Mode)", addr)
 		if err := server.ListenAndServeTLS(*tlsCert, *tlsKey); err != http.ErrServerClosed {
@@ -1591,7 +1615,11 @@ func sandboxTunnel(name string, r *http.Request, ss podpkg.SandboxRepository, ts
 		http.Error(w, "sandbox not found", http.StatusNotFound)
 		return nil, nil, false
 	}
-	_ = ss.Update(name, func(s *podpkg.SandboxInfo) { s.LastActivity = time.Now() })
+	// Throttle the activity write: at 10k+ rps a DB write per request would
+	// swamp the store, so persist at most once per sandbox per interval.
+	if now := time.Now(); shouldPersistActivity(name, now) {
+		_ = ss.Update(name, func(s *podpkg.SandboxInfo) { s.LastActivity = now })
+	}
 
 	// Pick the local tunnel store + ownership key by path: a direct-agent
 	// sandbox is keyed by its own name, a poder-backed one by its poder id.
@@ -1611,6 +1639,30 @@ func sandboxTunnel(name string, r *http.Request, ss podpkg.SandboxRepository, ts
 	}
 	http.Error(w, "sandbox tunnel not available", http.StatusServiceUnavailable)
 	return nil, nil, false
+}
+
+// ── hot-path activity throttle ────────────────────────────────────────────────
+
+const activityPersistEvery = 30 * time.Second
+
+var (
+	activityMu   sync.Mutex
+	activitySeen = map[string]time.Time{}
+)
+
+// shouldPersistActivity reports whether name's LastActivity is due for a DB
+// write, rate-limiting persistence to once per interval per sandbox. Keeps the
+// idle reaper fed without a write on every proxied request at scale. The map is
+// bounded by the active sandbox count on this instance; a stale entry for a
+// deleted sandbox is harmless and reused if the name recurs.
+func shouldPersistActivity(name string, now time.Time) bool {
+	activityMu.Lock()
+	defer activityMu.Unlock()
+	if last, ok := activitySeen[name]; ok && now.Sub(last) < activityPersistEvery {
+		return false
+	}
+	activitySeen[name] = now
+	return true
 }
 
 // forwardedHeader marks a request already forwarded once between instances, so

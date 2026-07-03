@@ -208,6 +208,18 @@ func (s *TunnelStore) Get(id string) (*PoderTunnel, bool) {
 	return t, ok
 }
 
+// Keys returns the ids of all tunnels currently held on this instance. Used by
+// the multi-instance ownership refresher to keep tunnel_owners.updated_at fresh.
+func (s *TunnelStore) Keys() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	keys := make([]string, 0, len(s.tunnels))
+	for k := range s.tunnels {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
 func (s *TunnelStore) Remove(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

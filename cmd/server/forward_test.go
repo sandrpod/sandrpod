@@ -3,8 +3,11 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/store"
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
@@ -100,5 +103,61 @@ func TestSandboxTunnel_SingleInstanceNoForward(t *testing.T) {
 
 	if ok || rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("single-instance path wrong: ok=%v code=%d", ok, rec.Code)
+	}
+}
+
+// TestForwardToNode_WebSocket proves the inter-node forward transparently
+// proxies a WebSocket (the PTY-shell path): a client dialing the "receiving"
+// node reaches the echo backend standing in for the tunnel-owning node.
+func TestForwardToNode_WebSocket(t *testing.T) {
+	up := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	echo := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := up.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		for {
+			mt, msg, err := c.ReadMessage()
+			if err != nil {
+				return
+			}
+			_ = c.WriteMessage(mt, msg)
+		}
+	}))
+	defer echo.Close()
+
+	fwd := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwardToNode(echo.URL, w, r) // receiving node forwards to the owner
+	}))
+	defer fwd.Close()
+
+	c, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(fwd.URL, "http"), nil)
+	if err != nil {
+		t.Fatalf("dial through forwarder: %v", err)
+	}
+	defer c.Close()
+	if err := c.WriteMessage(websocket.TextMessage, []byte("ping")); err != nil {
+		t.Fatal(err)
+	}
+	_, msg, err := c.ReadMessage()
+	if err != nil || string(msg) != "ping" {
+		t.Fatalf("WS not echoed through forward: msg=%q err=%v", msg, err)
+	}
+}
+
+// TestShouldPersistActivity_Throttles locks in that the hot-path activity write
+// fires at most once per interval per sandbox.
+func TestShouldPersistActivity_Throttles(t *testing.T) {
+	now := time.Now()
+	name := "sb-throttle"
+	if !shouldPersistActivity(name, now) {
+		t.Fatal("first call must persist")
+	}
+	if shouldPersistActivity(name, now.Add(time.Second)) {
+		t.Error("within interval must skip")
+	}
+	if !shouldPersistActivity(name, now.Add(activityPersistEvery+time.Second)) {
+		t.Error("after interval must persist")
 	}
 }

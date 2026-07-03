@@ -28,19 +28,44 @@ For most deployments (hundreds to low thousands of Poders) a single server
 instance on a modest box is fine. Plan a migration path before you approach
 five figures of concurrent Poders.
 
-## Growing past one instance
+## Growing past one instance (load mode)
 
-The store layer is already behind repository interfaces (`pkg/sandpod/repo.go`)
-with a SQLite backend, so the intended path is:
+Multiple active API instances behind a load balancer, all serving traffic and
+sharing one PostgreSQL. Implemented:
 
-1. Swap SQLite for a networked store (Postgres) behind the same interfaces — the
-   DDL is written to be Postgres-compatible.
-2. Run multiple stateless-ish API servers against that shared store. The open
-   item is tunnel affinity: a Poder's tunnel terminates on one server, so
-   proxied calls must reach that server (sticky routing or a tunnel-registry
-   lookup). This is the main horizontal-scale work still outstanding (P2).
-3. Front the servers with a load balancer that supports long-lived WebSocket
-   connections and does not idle them out.
+1. **Shared store** — `-db postgres://…`; the same `pkg/store/sqldb`
+   repositories run on Postgres (connection pool; job claim via
+   `SELECT … FOR UPDATE SKIP LOCKED` so concurrent pollers on different instances
+   claim disjoint jobs).
+2. **Tunnel affinity, solved by inter-node forwarding** — a poder's yamux tunnel
+   still terminates on one instance, but each instance records ownership in the
+   `tunnel_owners` table (keyed by poder id / agent sandbox name) under its
+   `-node-url`. Any instance resolving a sandbox whose tunnel is remote
+   reverse-proxies the request — **HTTP and WebSocket (PTY)** alike — to the
+   owning node. An `X-Sandrpod-Forwarded` loop-guard stops a stale owner map from
+   looping; a per-instance refresher keeps ownership fresh and `ownerTTL` (90 s)
+   expires a crashed node's rows so routing recovers as its poders reconnect.
+   **Set a unique `-node-url` on every instance.**
+3. **Token coherence** — issued keys live in the shared store; an instance
+   validates a peer-issued key via a hash lookup (then caches it), and a periodic
+   index re-sync converges revocations (≤30 s).
+4. **Load balancer** — must allow long-lived WebSocket connections (poders dial
+   in and stay) and spread them across instances; that spread *is* the connection
+   sharding below.
+
+### Capacity model (the ~100k-agent question)
+
+The per-box ceiling is **connection count**, not throughput. Each agent/poder
+holds one persistent tunnel (a yamux session ≈ a few keepalive goroutines), so
+~100k tunnels on a single instance is ~300–400k goroutines + several GB — the
+wall. Horizontal sharding moves past it: the load balancer spreads the ~100k
+inbound tunnels across N instances (~100k/N each) and inter-node forwarding lets
+any instance serve any request. Ten instances ⇒ ~10k tunnels each — comfortable.
+
+Hot paths are kept cheap so the shared DB isn't the new bottleneck: the
+per-request `LastActivity` write is throttled to once per sandbox per 30 s, and
+job claiming is one indexed `SKIP LOCKED` query. Per-tunnel throughput is
+sub-millisecond and yamux-multiplexed, so it is not the limit.
 
 ## Observability
 
@@ -63,8 +88,11 @@ slow VM boots).
 - `SANDRPOD_PODER_IDLE_TIMEOUT` reclaims empty cloud Poders (terminates the VM).
 - `-max-sandboxes-per-owner` and `-rate-limit` bound per-tenant blast radius.
 
-## Known remaining work (P2)
+## Known remaining work
 
-- Multi-instance tunnel affinity / registry (above).
+- Instant cross-instance token revocation (currently ≤30 s eventual; a Postgres
+  `LISTEN/NOTIFY` channel would make it immediate).
+- Heartbeat write volume: each poder's ~10 s heartbeat is a DB write, so a very
+  large fleet benefits from batching those.
 - Persisted per-Poder version reporting for rolling-upgrade visibility.
 - Structured request logging and tracing.
