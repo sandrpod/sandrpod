@@ -471,6 +471,25 @@ class CLIClient:
             path += "?keep_vm=true"
         self._request("DELETE", path)
 
+    # ---- API tokens (admin) ----
+
+    def create_token(self, name: str, role: str = "user") -> Dict[str, Any]:
+        """
+        签发一个 API token（需 admin）。返回体含裸 key（仅此一次），
+        key 为 e2b_<hex> 格式，可直接作 E2B_API_KEY。服务端只存其 hash。
+        """
+        resp = self._request("POST", "/api/v1/tokens", json={"name": name, "role": role})
+        return resp.json()
+
+    def list_tokens(self) -> List[Dict[str, Any]]:
+        """列出已签发的 token（不含裸 key，只有 name/prefix/role/created_at）。"""
+        resp = self._request("GET", "/api/v1/tokens")
+        return resp.json().get("tokens", [])
+
+    def delete_token(self, prefix: str) -> None:
+        """按显示前缀吊销一个 token（立即生效）。"""
+        self._request("DELETE", f"/api/v1/tokens/{prefix}")
+
     def create_sandbox_on_poder(
         self,
         poder_id: str,

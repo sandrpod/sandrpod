@@ -1071,6 +1071,74 @@ def metrics(ctx):
         sys.exit(1)
 
 
+# ========== Token Commands ==========
+
+@cli.group()
+@click.pass_context
+def token(ctx):
+    """Manage API tokens (admin). Issued keys are e2b_<hex> — drop-in E2B_API_KEY."""
+    pass
+
+
+@token.command("create")
+@click.argument("name")
+@click.option("--role", type=click.Choice(["user", "admin"]), default="user",
+              help="Token role (default: user)")
+@click.pass_context
+def token_create(ctx, name, role):
+    """Issue a new API token. The raw key is shown ONCE."""
+    client = ctx.obj["client"]
+    try:
+        t = client.create_token(name, role)
+        key = t.get("key", "")
+        click.echo(f"✓ Issued token for {click.style(t.get('name', ''), bold=True)} (role={t.get('role')})")
+        click.echo()
+        click.echo(f"  {click.style(key, fg='green', bold=True)}")
+        click.echo()
+        click.echo("  ⚠  Save it now — only the hash is stored; the key cannot be shown again.")
+        click.echo(f"  Use as:  E2B_DOMAIN=<your-domain> E2B_API_KEY={key}")
+        click.echo(f"  Revoke:  sandrpod-cli token rm {t.get('prefix')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@token.command("list")
+@click.pass_context
+def token_list(ctx):
+    """List issued tokens (prefix only; raw keys are never shown)."""
+    client = ctx.obj["client"]
+    try:
+        toks = client.list_tokens()
+        if not toks:
+            click.echo("No tokens issued")
+            return
+        click.echo(f"{'PREFIX':<20} {'NAME':<24} {'ROLE':<8} CREATED")
+        click.echo("-" * 72)
+        for t in toks:
+            click.echo(
+                f"{t.get('prefix', '-'):<20} {t.get('name', '-'):<24} "
+                f"{t.get('role', '-'):<8} {t.get('created_at', '-')}"
+            )
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@token.command("rm")
+@click.argument("prefix")
+@click.pass_context
+def token_rm(ctx, prefix):
+    """Revoke a token by its display prefix (e.g. e2b_1a2b3c4d5e6f)."""
+    client = ctx.obj["client"]
+    try:
+        client.delete_token(prefix)
+        click.echo(f"✓ Revoked {prefix}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
 # ========== Poder Commands ==========
 
 @cli.group()

@@ -83,6 +83,14 @@ curl -X DELETE https://api.example.com/api/v1/tokens/e2b_1a2b3c4d5e6f \
   -H "X-Sandrpod-Token: <admin>"
 ```
 
+Or via the CLI (`SANDRPOD_API_URL` + an admin `SANDRPOD_API_TOKEN`):
+
+```bash
+sandrpod-cli token create customer-A --role user   # prints the key ONCE
+sandrpod-cli token list                            # prefix / name / role / created
+sandrpod-cli token rm e2b_1a2b3c4d5e6f             # revoke by prefix
+```
+
 - Self-serve issuance + revocation over the API; survives restart (loaded into
   the in-memory auth index at startup, so the hot path never hits the DB).
 - Hash-only storage: a leaked database yields no usable keys.

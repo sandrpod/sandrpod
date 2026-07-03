@@ -209,6 +209,11 @@ sandrpod-cli job get <job-id>                          # 查 async 创建的 job
 # 可观测性
 sandrpod-cli metrics                                   # 拉取服务端 Prometheus /metrics（需 admin token）
 
+# API token 签发（admin；签发的 key 是 e2b_<hex>，可直接当 E2B_API_KEY；只存 hash、裸 key 只显一次）
+sandrpod-cli token create <name> [--role user|admin]   # 签发，打印裸 key（仅此一次）
+sandrpod-cli token list                                # 列出（只有 prefix/name/role/created）
+sandrpod-cli token rm <prefix>                         # 按前缀吊销（需 -db 持久化；详见 docs/AUTH_AND_KEYS.md）
+
 # Poder 管理
 sandrpod-cli poder list
 sandrpod-cli poder get <poder-id>
