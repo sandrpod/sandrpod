@@ -38,8 +38,11 @@ type controlPlane struct {
 }
 
 func (c *controlPlane) routes(mux *http.ServeMux) {
-	mux.HandleFunc("/sandboxes", c.handleSandboxes)
-	mux.HandleFunc("/sandboxes/", c.handleSandboxByID)
+	// The SDK uses both unversioned and /v2-prefixed control-plane paths.
+	for _, prefix := range []string{"", "/v2"} {
+		mux.HandleFunc(prefix+"/sandboxes", c.handleSandboxes)
+		mux.HandleFunc(prefix+"/sandboxes/", c.handleSandboxByID)
+	}
 	// E2B health probe.
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -130,6 +133,21 @@ func (c *controlPlane) handleSandboxByID(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
+
+	case action == "connect" && r.Method == http.MethodPost:
+		// Sandbox.connect(id): attach to a running sandbox, refreshing its
+		// timeout, and return its info so the SDK can build the envd client.
+		var req ResumeRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Timeout > 0 {
+			c.backend.SetTimeout(ident, sandboxID, req.Timeout)
+		}
+		detail, ok := c.backend.GetSandbox(ident, sandboxID)
+		if !ok {
+			writeErr(w, http.StatusNotFound, "sandbox not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, detail)
 
 	case action == "pause" && r.Method == http.MethodPost:
 		if !c.backend.PauseSandbox(ident, sandboxID) {

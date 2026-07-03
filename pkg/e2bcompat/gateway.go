@@ -43,6 +43,11 @@ type Config struct {
 	// <CodePort>-<sandboxID>.<domain>/execute. CodePort defaults to 49999.
 	Code     CodeInterpreter
 	CodePort int
+	// SandboxResolver resolves the target sandbox for an envd/code request when
+	// it can't be derived from the Host (e.g. HTTP debug mode where the SDK is
+	// pointed at a fixed E2B_SANDBOX_URL). Given the caller's identity it
+	// returns their sandbox ID. Optional; used only as a fallback.
+	SandboxResolver func(identity string) string
 }
 
 // Handler builds the E2B-compatible gateway.
@@ -67,8 +72,12 @@ func Handler(cfg Config) http.Handler {
 	envdHost := envdHostRe(cfg.Domain)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Authenticate.
+		// Authenticate. The control plane uses X-API-KEY / Authorization; envd
+		// uses the X-Access-Token header (the sandbox's envd access token).
 		key := presentedKey(r.Header.Get("X-API-KEY"), r.Header.Get("Authorization"))
+		if key == "" {
+			key = r.Header.Get("X-Access-Token")
+		}
 		ident, ok := cfg.Auth(key)
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, "unauthorized: missing or invalid API key")
@@ -76,31 +85,38 @@ func Handler(cfg Config) http.Handler {
 		}
 		r = r.WithContext(context.WithValue(r.Context(), ctxIdent, ident))
 
-		// Route by host: envd / code-interpreter sub-host vs control plane.
+		// Resolve the target sandbox and whether this is a code-interpreter
+		// request. The SDK sends E2b-Sandbox-Id / E2b-Sandbox-Port headers; we
+		// also accept the Host (<port>-<id>.<domain>) and fall back to the
+		// single-sandbox resolver (fixed sandbox URL in HTTP debug mode).
+		sandbox, isCode := "", false
 		if envdHost != nil {
 			if m := envdHost.FindStringSubmatch(hostOnly(r.Host)); m != nil {
-				r = r.WithContext(context.WithValue(r.Context(), ctxSandbox, m[2]))
-				if m[1] == strconv.Itoa(codePort) {
-					ciMux.ServeHTTP(w, r)
-					return
-				}
-				edMux.ServeHTTP(w, r)
-				return
+				sandbox, isCode = m[2], m[1] == strconv.Itoa(codePort)
 			}
-		} else if sid := r.Header.Get("X-Sandbox-ID"); sid != "" {
-			// Host routing disabled (tests / path mode): an explicit sandbox
-			// id header lets the envd / code-interpreter muxes resolve a target.
-			r = r.WithContext(context.WithValue(r.Context(), ctxSandbox, sid))
-			if r.URL.Path == "/execute" {
+		}
+		if sandbox == "" {
+			if sid := r.Header.Get("E2b-Sandbox-Id"); sid != "" {
+				sandbox = sid
+			} else {
+				sandbox = r.Header.Get("X-Sandbox-ID")
+			}
+		}
+		if p := r.Header.Get("E2b-Sandbox-Port"); p == strconv.Itoa(codePort) {
+			isCode = true
+		}
+
+		isEnvd := isEnvdPath(r.URL.Path)
+		isExec := r.URL.Path == "/execute"
+		if isEnvd || isExec {
+			if sandbox == "" && cfg.SandboxResolver != nil {
+				sandbox = cfg.SandboxResolver(ident)
+			}
+			r = r.WithContext(context.WithValue(r.Context(), ctxSandbox, sandbox))
+			if isCode || isExec {
 				ciMux.ServeHTTP(w, r)
 				return
 			}
-			if isEnvdPath(r.URL.Path) {
-				edMux.ServeHTTP(w, r)
-				return
-			}
-		}
-		if isEnvdPath(r.URL.Path) {
 			edMux.ServeHTTP(w, r)
 			return
 		}

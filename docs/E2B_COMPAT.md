@@ -164,6 +164,34 @@ verification · ☐ not yet.
 | PTY | `pty.*` | ☐ | envd PTY is bidirectional connect streaming — not yet |
 | env vars | `envVars` | ☐ | accepted on create; per-process injection not wired |
 
+### Verified against the REAL unmodified E2B SDK over HTTP (2026-07-03)
+
+Ran the official `e2b` Python SDK **v2.30.0** against a local SandrPod over
+plain HTTP — no TLS, no wildcard DNS — using the SDK's own overrides
+(`E2B_API_URL` + `E2B_SANDBOX_URL` = `http://host:<SANDRPOD_E2B_DEBUG_PORT>`,
+`E2B_VALIDATE_API_KEY=false`). A direct-mode `sandrpod-agent` (embedded toolbox,
+no Docker) served as the sandbox. Passing end-to-end with the unmodified SDK:
+
+- ☑ `Sandbox.connect()` (control plane, HTTP)
+- ☑ `Sandbox.list()` (control plane, `/v2/sandboxes`)
+- ☑ `files.write()` / `files.read()` — real file round-trip
+- ☑ `commands.run("echo …")` — real stdout returned
+
+Getting there fixed a stack of issues only the real SDK reveals: the
+`POST /sandboxes/{id}/connect` endpoint, envd auth via the `X-Access-Token`
+header, sandbox routing via the `E2b-Sandbox-Id`/`E2b-Sandbox-Port` headers,
+multipart file-upload parsing, the array-shaped write response, connect
+streaming-request **envelope** stripping (the 5-byte frame prefix), the
+`cmd`/`argv` → shell translation, and the `/v2` control-plane prefix. Also: E2B
+splits sandbox IDs on `-`, so gateway-issued names must not contain one.
+
+Remaining (honest): `e2b-code-interpreter` `run_code` — the CI SDK builds a
+code-interpreter URL that the fixed `E2B_SANDBOX_URL` override didn't capture in
+this harness (no `/execute` reached the gateway), so the stateful interpreter is
+built + unit-tested but not yet real-SDK-verified. And a production drop-in
+(vanity domain) still needs wildcard DNS + TLS; the binary-protobuf connect path
+exists but this SDK version used `connect+json`.
+
 ### What "◐ needs live verification" means honestly
 
 Three things stand between the current build and an **unmodified E2B SDK passing

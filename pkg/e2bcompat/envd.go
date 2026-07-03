@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -134,53 +135,73 @@ func (e *envd) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/files", e.files)
 }
 
-// ---- filesystem unary handlers ----
+// ---- filesystem unary handlers (JSON or binary-proto negotiated) ----
 
 func (e *envd) fsStat(w http.ResponseWriter, r *http.Request) {
-	var req statReq
-	if !decodeConnect(w, r, &req) {
+	body, proto, ok := readUnary(w, r)
+	if !ok {
 		return
 	}
-	entry, err := e.backend.Stat(sandboxOf(r), req.Path)
+	path := unaryPath(body, proto, func(b []byte) string { return decodeStringField(b, 1) }, func(v *statReq) string { return v.Path })
+	entry, err := e.backend.Stat(sandboxOf(r), path)
 	if err != nil {
 		writeConnectErr(w, err)
 		return
 	}
-	writeConnect(w, statResp{Entry: entry})
+	writeUnary(w, proto, encodeStatResponse(entry), statResp{Entry: entry})
 }
 
 func (e *envd) fsMakeDir(w http.ResponseWriter, r *http.Request) {
-	var req makeDirReq
-	if !decodeConnect(w, r, &req) {
+	body, proto, ok := readUnary(w, r)
+	if !ok {
 		return
 	}
-	entry, err := e.backend.MakeDir(sandboxOf(r), req.Path)
+	path := unaryPath(body, proto, func(b []byte) string { return decodeStringField(b, 1) }, func(v *makeDirReq) string { return v.Path })
+	entry, err := e.backend.MakeDir(sandboxOf(r), path)
 	if err != nil {
 		writeConnectErr(w, err)
 		return
 	}
-	writeConnect(w, entryResp{Entry: entry})
+	writeUnary(w, proto, encodeEntryResponse(entry), entryResp{Entry: entry})
 }
 
 func (e *envd) fsMove(w http.ResponseWriter, r *http.Request) {
-	var req moveReq
-	if !decodeConnect(w, r, &req) {
+	body, proto, ok := readUnary(w, r)
+	if !ok {
 		return
 	}
-	entry, err := e.backend.Move(sandboxOf(r), req.Source, req.Destination)
+	var src, dst string
+	if proto {
+		src, dst = decodeMoveRequest(body)
+	} else {
+		var req moveReq
+		_ = json.Unmarshal(body, &req)
+		src, dst = req.Source, req.Destination
+	}
+	entry, err := e.backend.Move(sandboxOf(r), src, dst)
 	if err != nil {
 		writeConnectErr(w, err)
 		return
 	}
-	writeConnect(w, entryResp{Entry: entry})
+	writeUnary(w, proto, encodeEntryResponse(entry), entryResp{Entry: entry})
 }
 
 func (e *envd) fsListDir(w http.ResponseWriter, r *http.Request) {
-	var req listDirReq
-	if !decodeConnect(w, r, &req) {
+	body, proto, ok := readUnary(w, r)
+	if !ok {
 		return
 	}
-	entries, err := e.backend.ListDir(sandboxOf(r), req.Path, req.Depth)
+	var path string
+	var depth uint32
+	if proto {
+		path, depth = decodeListDirRequest(body)
+	} else {
+		var req listDirReq
+		_ = json.Unmarshal(body, &req)
+		path, depth = req.Path, req.Depth
+	}
+	_ = depth
+	entries, err := e.backend.ListDir(sandboxOf(r), path, depth)
 	if err != nil {
 		writeConnectErr(w, err)
 		return
@@ -188,46 +209,69 @@ func (e *envd) fsListDir(w http.ResponseWriter, r *http.Request) {
 	if entries == nil {
 		entries = []EntryInfo{}
 	}
-	writeConnect(w, listDirResp{Entries: entries})
+	writeUnary(w, proto, encodeListDirResponse(entries), listDirResp{Entries: entries})
 }
 
 func (e *envd) fsRemove(w http.ResponseWriter, r *http.Request) {
-	var req removeReq
-	if !decodeConnect(w, r, &req) {
+	body, proto, ok := readUnary(w, r)
+	if !ok {
 		return
 	}
-	if err := e.backend.Remove(sandboxOf(r), req.Path); err != nil {
+	path := unaryPath(body, proto, func(b []byte) string { return decodeStringField(b, 1) }, func(v *removeReq) string { return v.Path })
+	if err := e.backend.Remove(sandboxOf(r), path); err != nil {
 		writeConnectErr(w, err)
 		return
 	}
-	writeConnect(w, struct{}{})
+	writeUnary(w, proto, nil, struct{}{})
 }
 
 // ---- process handlers ----
 
 func (e *envd) procList(w http.ResponseWriter, r *http.Request) {
-	var req struct{}
-	if !decodeConnect(w, r, &req) {
+	_, proto, ok := readUnary(w, r)
+	if !ok {
 		return
 	}
-	writeConnect(w, listProcResp{Processes: []any{}})
+	writeUnary(w, proto, nil, listProcResp{Processes: []any{}})
 }
 
 // procStart runs the command and emits a connect server-STREAM: a Start event
-// (pid), a Data event per stdout/stderr chunk, then an End event (exit code).
+// (pid), a Data event per stdout/stderr chunk, then an End event. Negotiates
+// JSON vs binary protobuf frames from the request Content-Type.
 func (e *envd) procStart(w http.ResponseWriter, r *http.Request) {
-	var req startReq
-	if !decodeConnect(w, r, &req) {
-		return
+	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<20))
+	proto := isProtoContentType(r.Header.Get("Content-Type"))
+	// Connect STREAMING requests (even JSON) are enveloped with a 5-byte prefix.
+	msg := stripEnvelope(body)
+	var cfg ProcessConfig
+	if proto {
+		cfg = decodeStartRequest(msg)
+	} else {
+		var req startReq
+		_ = json.Unmarshal(msg, &req)
+		cfg = req.Process
 	}
-	res, err := e.backend.StartProcess(sandboxOf(r), req.Process)
+	res, err := e.backend.StartProcess(sandboxOf(r), cfg)
 	if err != nil {
 		writeConnectErr(w, err)
 		return
 	}
+	if proto {
+		w.Header().Set("Content-Type", "application/connect+proto")
+		w.WriteHeader(http.StatusOK)
+		writeEnvelope(w, 0, procStartEvent(res.PID))
+		if len(res.Stdout) > 0 {
+			writeEnvelope(w, 0, procDataEvent(res.Stdout, false))
+		}
+		if len(res.Stderr) > 0 {
+			writeEnvelope(w, 0, procDataEvent(res.Stderr, true))
+		}
+		writeEnvelope(w, 0, procEndEvent(res.ExitCode, "exited"))
+		writeConnectEndFrame(w)
+		return
+	}
 	w.Header().Set("Content-Type", "application/connect+json")
 	w.WriteHeader(http.StatusOK)
-	// StartEvent
 	writeConnectFrame(w, map[string]any{"event": map[string]any{"start": map[string]any{"pid": res.PID}}})
 	if len(res.Stdout) > 0 {
 		writeConnectFrame(w, map[string]any{"event": map[string]any{"data": map[string]any{"stdout": res.Stdout}}})
@@ -238,8 +282,67 @@ func (e *envd) procStart(w http.ResponseWriter, r *http.Request) {
 	writeConnectFrame(w, map[string]any{"event": map[string]any{"end": map[string]any{
 		"exitCode": res.ExitCode, "exited": true, "status": "exited",
 	}}})
-	// connect end-of-stream frame (flag 0x02), empty error = success.
 	writeConnectEndFrame(w)
+}
+
+// ---- unary negotiation helpers ----
+
+// readUnary reads a unary connect request body and reports whether it is binary
+// protobuf. Returns ok=false (and writes a 405) for non-POST.
+func readUnary(w http.ResponseWriter, r *http.Request) ([]byte, bool, bool) {
+	if r.Method != http.MethodPost {
+		writeConnectErrStatus(w, http.StatusMethodNotAllowed, "unimplemented", "POST required")
+		return nil, false, false
+	}
+	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<20))
+	return body, isProtoContentType(r.Header.Get("Content-Type")), true
+}
+
+// unaryPath decodes a single path from either a proto message (via protoFn) or
+// a JSON message (via jsonFn on a *T).
+func unaryPath[T any](body []byte, proto bool, protoFn func([]byte) string, jsonFn func(*T) string) string {
+	if proto {
+		return protoFn(body)
+	}
+	var v T
+	_ = json.Unmarshal(body, &v)
+	return jsonFn(&v)
+}
+
+// writeUnary writes a unary connect response as binary proto or JSON.
+func writeUnary(w http.ResponseWriter, proto bool, protoMsg []byte, jsonMsg any) {
+	if proto {
+		w.Header().Set("Content-Type", "application/proto")
+		w.WriteHeader(http.StatusOK)
+		w.Write(protoMsg)
+		return
+	}
+	writeConnect(w, jsonMsg)
+}
+
+// stripEnvelope removes a connect stream 5-byte frame prefix, returning the
+// message bytes. If the body isn't enveloped it is returned unchanged.
+func stripEnvelope(body []byte) []byte {
+	if len(body) < 5 {
+		return body
+	}
+	n := binary.BigEndian.Uint32(body[1:5])
+	if int(n) <= len(body)-5 {
+		return body[5 : 5+n]
+	}
+	return body[5:]
+}
+
+// writeEnvelope writes one connect stream frame (flag + big-endian length + msg).
+func writeEnvelope(w http.ResponseWriter, flag byte, msg []byte) {
+	var hdr [5]byte
+	hdr[0] = flag
+	binary.BigEndian.PutUint32(hdr[1:], uint32(len(msg)))
+	w.Write(hdr[:])
+	w.Write(msg)
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // ---- file content HTTP ----
@@ -261,16 +364,49 @@ func (e *envd) files(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Write(data)
 	case http.MethodPost, http.MethodPut:
-		data, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 100<<20))
+		data, perr := readFileBody(r)
+		if perr != nil {
+			writeConnectErrStatus(w, http.StatusBadRequest, "invalid_argument", perr.Error())
+			return
+		}
 		entry, err := e.backend.WriteFile(sandboxID, path, data)
 		if err != nil {
 			writeConnectErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, entryResp{Entry: entry})
+		// E2B's write returns an array of written-file entries (a single write
+		// still yields a one-element array).
+		writeJSON(w, http.StatusOK, []EntryInfo{entry})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+// readFileBody extracts the file content from an envd file-write request. E2B's
+// SDK uploads multipart/form-data (the file part); a raw body is also accepted.
+func readFileBody(r *http.Request) ([]byte, error) {
+	ct := r.Header.Get("Content-Type")
+	if strings.HasPrefix(ct, "multipart/") {
+		mr, err := r.MultipartReader()
+		if err != nil {
+			return nil, err
+		}
+		for {
+			part, err := mr.NextPart()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return nil, err
+			}
+			// The file content is the part with a filename (E2B uses "file").
+			if part.FileName() != "" || part.FormName() == "file" {
+				return io.ReadAll(part)
+			}
+		}
+		return nil, nil // no file part → empty write
+	}
+	return io.ReadAll(http.MaxBytesReader(nil, r.Body, 100<<20))
 }
 
 // ---- connect helpers ----

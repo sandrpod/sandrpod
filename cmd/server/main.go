@@ -1388,20 +1388,44 @@ func main() {
 	}
 	handler := buildMux(cfg, stores, tunnelStore, directStore)
 
-	// E2B-compatible gateway (opt-in): serve the unmodified E2B SDK at
-	// api.<domain> + <port>-<sandboxID>.<domain>. See docs/E2B_COMPAT.md.
+	// E2B-compatible gateway (opt-in). Two ways to enable:
+	//   SANDRPOD_E2B_DOMAIN — production: host-routed on the main port
+	//     (api.<domain> + <port>-<sandboxID>.<domain>); needs wildcard DNS/TLS.
+	//   SANDRPOD_E2B_DEBUG_PORT — a plain-HTTP listener that serves ONLY the
+	//     gateway in path mode, for pointing the unmodified E2B SDK at over
+	//     http (E2B_API_URL + E2B_SANDBOX_URL = http://host:<port>,
+	//     E2B_VALIDATE_API_KEY=false). No DNS/TLS required. See docs/E2B_COMPAT.md.
+	e2bDepsVal := e2bDeps{
+		cfg:         cfg,
+		scheduler:   podpkg.NewScheduler(stores.Poders, cfg.APIURL, cfg.Token),
+		sandboxes:   stores.Sandboxes,
+		poders:      stores.Poders,
+		jobs:        stores.Jobs,
+		tunnelStore: tunnelStore,
+		directStore: directStore,
+	}
 	if dom := os.Getenv("SANDRPOD_E2B_DOMAIN"); dom != "" {
-		gw := newE2BGateway(dom, e2bDeps{
-			cfg:         cfg,
-			scheduler:   podpkg.NewScheduler(stores.Poders, cfg.APIURL, cfg.Token),
-			sandboxes:   stores.Sandboxes,
-			poders:      stores.Poders,
-			jobs:        stores.Jobs,
-			tunnelStore: tunnelStore,
-			directStore: directStore,
-		})
-		handler = e2bHostRouter(dom, gw, handler)
+		handler = e2bHostRouter(dom, newE2BGateway(dom, e2bDepsVal), handler)
 		log.Printf("E2B-compatible gateway enabled: api.%s (control plane) + <port>-<id>.%s (envd)", dom, dom)
+	}
+	if dbg := os.Getenv("SANDRPOD_E2B_DEBUG_PORT"); dbg != "" {
+		gw := newE2BGateway("", e2bDepsVal) // path mode, single-sandbox resolver
+		if os.Getenv("SANDRPOD_E2B_DEBUG_LOG") != "" {
+			inner := gw
+			gw = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				lw := &statusRecorder{ResponseWriter: w, status: 200}
+				inner.ServeHTTP(lw, r)
+				log.Printf("E2B %s %s?%s -> %d | apikey=%q auth=%q keys=%v", r.Method, r.URL.Path, r.URL.RawQuery, lw.status,
+					r.Header.Get("X-API-KEY"), r.Header.Get("Authorization"), headerNames(r))
+			})
+		}
+		go func() {
+			addr := ":" + dbg
+			log.Printf("E2B-compatible gateway (HTTP debug) listening on %s — set E2B_API_URL and E2B_SANDBOX_URL to http://<host>%s", addr, addr)
+			if err := http.ListenAndServe(addr, gw); err != nil {
+				log.Printf("E2B debug gateway error: %v", err)
+			}
+		}()
 	}
 
 	// Start the HTTP server

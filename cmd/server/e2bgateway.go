@@ -59,12 +59,34 @@ func e2bHostRouter(domain string, gateway, next http.Handler) http.Handler {
 // newE2BGateway builds the E2B-compatible handler.
 func newE2BGateway(domain string, d e2bDeps) http.Handler {
 	return e2bcompat.Handler(e2bcompat.Config{
-		Domain:    domain,
-		Auth:      d.authenticator(),
-		Sandboxes: &e2bSandboxBackend{d},
-		Envd:      &e2bEnvdBackend{d},
-		Code:      &e2bCodeBackend{d},
+		Domain:          domain,
+		Auth:            d.authenticator(),
+		Sandboxes:       &e2bSandboxBackend{d},
+		Envd:            &e2bEnvdBackend{d},
+		Code:            &e2bCodeBackend{d},
+		SandboxResolver: d.resolveSingleSandbox,
 	})
+}
+
+// resolveSingleSandbox returns the identity's sole running sandbox. Used in
+// HTTP debug mode, where the SDK is pointed at a fixed E2B_SANDBOX_URL and the
+// sandbox ID can't be read from the Host. Returns "" when there is not exactly
+// one candidate (ambiguous → let the envd call 404 clearly).
+func (d e2bDeps) resolveSingleSandbox(ident string) string {
+	var match string
+	for _, sb := range d.sandboxes.List() {
+		if ident != "" && sb.Owner != "" && sb.Owner != ident {
+			continue
+		}
+		if !strings.HasPrefix(sb.Name, "e2b") {
+			continue // only sandboxes created via this gateway
+		}
+		if match != "" {
+			return "" // ambiguous
+		}
+		match = sb.Name
+	}
+	return match
 }
 
 // e2bCodeBackend implements the stateful run_code surface by proxying to the
@@ -185,7 +207,7 @@ func (d e2bDeps) toolboxJSON(name, method, subpath string, query url.Values, req
 type e2bSandboxBackend struct{ d e2bDeps }
 
 func (b *e2bSandboxBackend) CreateSandbox(ident string, req e2bcompat.NewSandbox) (e2bcompat.SandboxDetail, error) {
-	name := "e2b-" + randToken(8)
+	name := "e2b" + randToken(8)
 	create := &podpkg.CreateSandboxRequest{
 		Name:         name,
 		Region:       "local",
@@ -282,8 +304,31 @@ func (b *e2bSandboxBackend) detailFromInfo(sb *podpkg.SandboxInfo) e2bcompat.San
 		TemplateID: e2bTemplateFromLabels(sb.Labels), SandboxID: sb.Name, EnvdVersion: e2bcompat.DefaultEnvdVersion,
 		StartedAt: sb.CreatedAt, CPUCount: 2, MemoryMB: 512, State: stateFor(sb),
 		Metadata: e2bMetaFromLabels(sb.Labels),
+		// The SDK authenticates envd calls with this token (Authorization:
+		// Bearer). Return the sandbox's envd token so it round-trips and the
+		// gateway's authenticator accepts the subsequent envd requests.
+		EnvdAccessToken: b.d.envdToken(sb),
 	}
 }
+
+// envdToken returns (creating if needed) a stable per-sandbox envd access
+// token, stored in the sandbox labels so it survives and the authenticator can
+// recognise it.
+func (d e2bDeps) envdToken(sb *podpkg.SandboxInfo) string {
+	if tok := sb.Labels[e2bEnvdTokenLabel]; tok != "" {
+		return tok
+	}
+	tok, _ := e2bcompat.GenerateAPIKey()
+	_ = d.sandboxes.Update(sb.Name, func(s *podpkg.SandboxInfo) {
+		if s.Labels == nil {
+			s.Labels = map[string]string{}
+		}
+		s.Labels[e2bEnvdTokenLabel] = tok
+	})
+	return tok
+}
+
+const e2bEnvdTokenLabel = "e2b.envd-token"
 
 // E2B metadata + template are stored in SandboxInfo.Labels under a namespace so
 // they don't collide with SandrPod's own labels.
@@ -406,11 +451,20 @@ func (b *e2bEnvdBackend) WriteFile(name, path string, data []byte) (e2bcompat.En
 }
 
 func (b *e2bEnvdBackend) StartProcess(name string, cfg e2bcompat.ProcessConfig) (e2bcompat.ProcResult, error) {
-	cmd := cfg.Cmd
+	// E2B commands.run sends an argv (often cmd="/bin/bash", args=["-l","-c",
+	// "<script>"]). Extract the actual script after a "-c" flag; otherwise run
+	// the reconstructed command line.
+	code := cfg.Cmd
 	if len(cfg.Args) > 0 {
-		cmd += " " + strings.Join(cfg.Args, " ")
+		code = strings.TrimSpace(cfg.Cmd + " " + strings.Join(cfg.Args, " "))
+		for i, a := range cfg.Args {
+			if a == "-c" && i+1 < len(cfg.Args) {
+				code = cfg.Args[i+1]
+				break
+			}
+		}
 	}
-	reqBody := map[string]any{"language": "bash", "code": cmd, "timeout": 120}
+	reqBody := map[string]any{"language": "bash", "code": code, "timeout": 120}
 	var res struct {
 		ExitCode int    `json:"exit_code"`
 		Stdout   string `json:"stdout"`
@@ -456,4 +510,21 @@ func randToken(n int) string {
 		panic("crypto/rand unavailable: " + err.Error())
 	}
 	return hex.EncodeToString(b)
+}
+
+// statusRecorder captures the response status for debug logging.
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (s *statusRecorder) WriteHeader(code int) { s.status = code; s.ResponseWriter.WriteHeader(code) }
+
+// headerNames lists request header keys for debug logging.
+func headerNames(r *http.Request) []string {
+	names := make([]string, 0, len(r.Header))
+	for k := range r.Header {
+		names = append(names, k)
+	}
+	return names
 }
