@@ -81,15 +81,17 @@ go run ./cmd/toolbox -port 8080
 
 ## Architecture Overview
 
-SandrPod is an open-source, self-hostable sandbox platform for AI agents — a
-drop-in alternative to hosted services like E2B. It provides fast, isolated code
-execution environments, exposes **both** a native REST API and the **E2B
-wire-protocol** (the unmodified E2B SDK works against it), and schedules
-sandboxes across eight cloud providers (incl. Aliyun/Tencent), plain Docker, or a
-bare machine via `sandrpod-agent`.
+SandrPod is open-source, self-hosted **execution infrastructure (a control
+plane) for AI agents**. It turns your own substrate into on-demand sandboxes and
+rests on three pillars: **run anywhere you own** (8 clouds incl. Aliyun/Tencent,
+plain Docker, or a bare machine with no Docker via `sandrpod-agent`); **speak any
+SDK** (native REST/Python/TS, LangChain/deepagents, and the unmodified E2B SDK as
+a drop-in); **stay in control** (reverse-tunnel workers with zero inbound ports,
+opt-in permission gate + decision audit, self-hosted data).
 
-定位：开源、可自托管的 E2B 替代方案 —— 把原封不动的 E2B SDK 指向你自己的多云基础设施
-（含阿里云/腾讯云）。同时保留 LangChain/deepagents 原生集成与员工机守护模式。
+定位：面向 AI Agent 的自托管执行基础设施 / 控制平面 —— 三根支柱：跑在你拥有的任何地方、
+想说哪套 SDK 就说哪套、全程你说了算。E2B 兼容是"支撑特性/证明点"，不是身份；不要把产品
+框成"E2B 替代品"。详见 [[product-positioning]]。
 
 ### Core Components
 

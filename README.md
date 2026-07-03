@@ -3,18 +3,19 @@
 </p>
 
 <p align="center">
-  <strong>The open-source, self-hostable E2B alternative — bring your own cloud.</strong>
+  <strong>Self-hosted execution infrastructure for AI agents.</strong><br/>
+  Run agent code on any cloud, any machine — or none at all. Speak any SDK. Keep full control.
 </p>
 
 <p align="center">
-  Point the <em>unmodified</em> E2B SDK at your own infrastructure. Run agent code
-  sandboxes on AWS, GCP, Azure, Aliyun, Tencent, and more — no data leaves your cloud.
+  <em>Your clouds. Your machines. Your rules.</em>
 </p>
 
 <p align="center">
   <a href="https://pypi.org/project/langchain-sandrpod/"><img src="https://img.shields.io/pypi/v/langchain-sandrpod?color=3B82F6&label=langchain-sandrpod" alt="PyPI"/></a>
-  <img src="https://img.shields.io/badge/E2B%20SDK-drop--in%20compatible-8B5CF6" alt="E2B compatible"/>
+  <img src="https://img.shields.io/badge/self--hosted-open%20source-16A34A" alt="Self-hosted"/>
   <img src="https://img.shields.io/badge/clouds-8%20providers-0EA5E9" alt="Multi-cloud"/>
+  <img src="https://img.shields.io/badge/E2B%20SDK-drop--in-8B5CF6" alt="E2B compatible"/>
   <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go" alt="Go"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
 </p>
@@ -23,48 +24,83 @@
 
 ## Overview
 
-**SandrPod** is an open-source, self-hostable sandbox platform for AI agents — a
-drop-in alternative to hosted services like E2B. Agents create isolated code
-execution environments, run code in them, and tear them down on demand, using
-**the same E2B SDK you already know** — pointed at infrastructure you own.
+**SandrPod** is the control plane for AI agent code execution — open source and
+self-hosted. It turns your own infrastructure into a fleet of on-demand sandboxes
+that agents create, run code in, and tear down, while you keep ownership of where
+that code runs, what it can touch, and where the data lives.
 
-Two things make it different from a hosted sandbox service:
+Hosted sandbox services make you rent their runtime in their region. SandrPod
+inverts that: **you** bring the substrate — any cloud, plain Docker, or a bare
+machine — and SandrPod is the thin, portable layer that schedules, tunnels, and
+governs execution across it. It rests on three pillars:
 
-1. **Drop-in E2B compatibility.** SandrPod speaks E2B's exact wire protocol
-   (control plane + `envd`). The unmodified `e2b` / `e2b-code-interpreter` SDKs
-   work against it with nothing but two env vars. No migration, no code changes.
-2. **Bring your own cloud.** One binary schedules sandboxes across **eight cloud
-   providers** — including **Aliyun and Tencent** — or on plain Docker, or on a
-   bare machine with no Docker at all. Your agents' code and data stay on your
-   infrastructure.
-
-Under the hood a central API server connects to worker nodes (**Poder**) over
-WebSocket reverse tunnels; each sandbox runs a **Toolbox** service for shell,
-file I/O, PTY, and persistent sessions. Workers need **no inbound ports** —
-everything flows through the tunnel.
+- **Run anywhere you own** — 8 clouds (incl. Aliyun & Tencent), Docker, or a
+  machine with no Docker at all.
+- **Speak any SDK** — a native REST/Python/TS API, LangChain/deepagents, and the
+  **unmodified E2B SDK** as a drop-in.
+- **Stay in control** — reverse-tunnel workers with zero inbound ports, an opt-in
+  permission gate + decision audit, and self-hosted data that never leaves your infra.
 
 ---
 
-## Why SandrPod
+## The three pillars
 
-|  | Hosted E2B | **SandrPod** |
+### 🌍 Run anywhere you own
+
+One binary schedules sandboxes across whatever infrastructure you have:
+
+**AWS · GCP · Azure · Aliyun · Tencent · DigitalOcean · Hetzner · Oracle** —
+plus plain **Docker**, or a **bare machine with no Docker** via `sandrpod-agent`.
+
+Aliyun and Tencent make China-region and data-residency deployments first-class —
+something hosted services don't offer. Each provider has a guide under [`docs/`](docs/)
+([AWS](docs/AWS_PROVISIONING.md), [GCP](docs/GCP_PROVISIONING.md),
+[Aliyun](docs/ALIYUN_PROVISIONING.md), [Tencent](docs/TENCENT_PROVISIONING.md), …).
+Remote exec uses each cloud's managed run-command API where it exists (AWS SSM,
+Aliyun CloudAssist, Azure Run Command, Tencent TAT, Oracle Instance Agent) and an
+ephemeral-key SSH path elsewhere (GCP, DigitalOcean, Hetzner).
+
+### 🔌 Speak any SDK
+
+SandrPod isn't tied to one client. It exposes a native REST API and Python/TS
+SDKs, a first-class **LangChain/deepagents** backend, **and** the full **E2B
+wire protocol** — so the *unmodified* `e2b` / `e2b-code-interpreter` SDKs work
+against it with nothing but two env vars. Bring the ecosystem you already use;
+migrate nothing.
+
+### 🛡️ Stay in control
+
+- **Zero inbound ports.** Workers dial *out* to the control plane over a WebSocket
+  reverse tunnel — run them behind NAT, in a private subnet, or on a laptop.
+- **Governance, not just isolation.** Opt-in employee-PC mode adds a per-machine
+  permission gate (path consent, command denylist, PTY consent) and a decision
+  audit pipeline (NDJSON + central HTTP upload) — turning "run agent code" into
+  "*govern* what agents may touch on real machines."
+- **Your data stays yours.** Self-hosted, Apache 2.0, no phone-home.
+
+---
+
+## SandrPod vs. hosted sandbox services
+
+|  | Hosted (E2B, Modal, …) | **SandrPod** |
 |---|---|---|
 | **License** | Closed | Apache 2.0, open source |
-| **Where it runs** | E2B's infra | Self-host anywhere |
-| **Clouds** | E2B-managed | AWS · GCP · Azure · **Aliyun** · **Tencent** · DigitalOcean · Hetzner · Oracle |
-| **China clouds** | ✗ | ✓ Aliyun + Tencent |
-| **Data residency** | E2B's region | Your account, your region |
-| **SDK** | E2B SDK | **The same E2B SDK** (drop-in) + native Python/TS + LangChain |
+| **Where it runs** | Their infra / region | Your cloud, Docker, or bare metal |
+| **Clouds** | Vendor-managed | AWS · GCP · Azure · **Aliyun** · **Tencent** · DO · Hetzner · Oracle |
+| **China regions** | ✗ | ✓ Aliyun + Tencent |
 | **No-Docker mode** | — | `sandrpod-agent`: any machine becomes a sandbox |
-| **Employee-PC guardrails** | — | Opt-in permission gate + decision audit |
+| **SDKs** | Their SDK | Native + LangChain + **drop-in E2B** |
+| **Inbound ports on workers** | n/a | **None** (reverse tunnel) |
+| **Governance / audit** | — | Opt-in permission gate + decision audit |
+| **Data residency** | Their region | Your account, your region |
 
 ---
 
 ## Drop-in E2B compatibility
 
-Already have code on the E2B SDK? Point it at your SandrPod and it just works —
-`Sandbox.create`, `files.*`, `commands.*` (foreground/background/PTY),
-`run_code`, `watch_dir`, `get_metrics`, `pause`/`resume`:
+One example of "speak any SDK": already have code on the E2B SDK? Point it at your
+SandrPod and it just works — `Sandbox.create`, `files.*`, `commands.*`
+(foreground/background/PTY), `run_code`, `watch_dir`, `get_metrics`, `pause`/`resume`:
 
 ```python
 import os
@@ -82,76 +118,44 @@ ci = CI.create()
 print(ci.run_code("import numpy as np; np.arange(6).sum()").text)   # → 15
 ```
 
-For a true zero-config drop-in (no env vars, just a domain), run the gateway
-behind a wildcard domain — `SANDRPOD_E2B_DOMAIN=sandbox.you.com` with
-`*.sandbox.you.com` DNS + TLS. The full surface, wire-protocol details, and the
-verified coverage matrix (tested against the **real, unmodified** E2B SDK over a
-real container) are in **[docs/E2B_COMPAT.md](docs/E2B_COMPAT.md)**.
-
----
-
-## Bring your own cloud
-
-The provider layer (`pkg/provider/`) provisions sandbox-hosting VMs across:
-
-**AWS · GCP · Azure · Aliyun · Tencent · DigitalOcean · Hetzner · Oracle**
-
-Each has a provisioning guide under [`docs/`](docs/) (e.g.
-[AWS](docs/AWS_PROVISIONING.md), [GCP](docs/GCP_PROVISIONING.md),
-[Aliyun](docs/ALIYUN_PROVISIONING.md), [Tencent](docs/TENCENT_PROVISIONING.md)).
-Remote execution uses each cloud's managed run-command API where available (AWS
-SSM, Aliyun CloudAssist, Azure Run Command, Tencent TAT, Oracle Instance Agent)
-and falls back to an ephemeral-key SSH path for the rest (GCP, DigitalOcean,
-Hetzner). Prefer to run on your own hardware? Use plain Docker, or
-`sandrpod-agent` for a machine with no Docker at all.
-
-### Key features
-
-- **Drop-in E2B SDK** — the unmodified `e2b` / `e2b-code-interpreter` SDKs, on your infra
-- **8-cloud scheduling** — including Aliyun & Tencent; the scheduler picks the least-loaded node
-- **Self-hostable & open** — Apache 2.0; your code and data never leave your cloud
-- **Instant sandboxes** — isolated Docker environments in seconds
-- **Full sandbox surface** — files, background commands, streaming, PTY, stateful code interpreter, directory watch, metrics, pause/resume
-- **Direct agent mode** — register any machine as a sandbox without Docker via `sandrpod-agent`
-- **Reverse-tunnel architecture** — workers dial in; no inbound ports required
-- **LangChain / deepagents native** — `langchain-sandrpod` gives any agent a filesystem + shell
-- **Persistent sessions** — shell state (cwd, env) survives across calls
-- **SQLite persistence** — durable state with one `-db` flag; in-memory by default
-- **Employee-PC mode (opt-in)** — path-consent permission gate + NDJSON decision audit
+For a zero-config drop-in (no env vars, just a domain), run the gateway behind a
+wildcard domain — `SANDRPOD_E2B_DOMAIN=sandbox.you.com` + `*.sandbox.you.com` DNS
++ TLS. Full surface, wire-protocol details, and the coverage matrix (verified
+against the **real, unmodified** E2B SDK over a real container) are in
+**[docs/E2B_COMPAT.md](docs/E2B_COMPAT.md)**.
 
 ---
 
 ## Architecture
 
 ```
-E2B SDK ─┐
+E2B SDK ──┐
 Native SDK ├─→ API Server (Control Plane, :8080)
-CLI ──────┘         ↕ WebSocket + yamux reverse tunnel
-               Poder (Worker) ──→ Toolbox (Sandbox container)
+LangChain ─┤         ↕ WebSocket + yamux reverse tunnel
+CLI ───────┘    Poder (Worker) ──→ Toolbox (Sandbox container)
 
-               sandrpod-agent  ──→ (direct mode, local machine as sandbox)
+                sandrpod-agent  ──→ (direct mode, any machine as a sandbox)
 ```
 
 | Component | Description |
 |-----------|-------------|
-| **API Server** | REST control plane + E2B-compatible gateway. Sandbox CRUD, job scheduling, tunnel proxying |
-| **Poder** | Worker node. Persistent WebSocket tunnel to the API Server; manages Docker container lifecycle |
+| **API Server** | The control plane: native REST + E2B-compatible gateway, sandbox CRUD, scheduling, tunnel proxying |
+| **Poder** | Worker node. Persistent WebSocket tunnel to the control plane; manages Docker container lifecycle |
 | **sandrpod-agent** | Registers the local machine directly as a sandbox with an embedded Toolbox — no Docker required |
 | **sandrpod-tray** | Optional user-session GUI for employee-PC mode: tray icon + consent prompts + local settings page |
-| **Toolbox** | Code execution service inside each sandbox. PTY, file ops, background processes, sessions |
+| **Toolbox** | Execution service inside each sandbox. PTY, file ops, background processes, sessions |
 
-> **Employee-PC mode (opt-in)**: when `sandrpod-agent` runs on a real
-> employee laptop rather than a server, you can enable a per-PC permission gate
-> (path consent + command denylist + PTY consent) and a decision-audit pipeline
-> that ships every allow/deny/warn event to a central HTTP endpoint. Both layers
-> are off by default (`--permission-mode=off`) and fully described in
-> **[docs/PERMISSION_AND_AUDIT.md](docs/PERMISSION_AND_AUDIT.md)**.
+> **Employee-PC mode (opt-in)**: when `sandrpod-agent` runs on a real employee
+> laptop rather than a server, enable a per-PC permission gate (path consent +
+> command denylist + PTY consent) and a decision-audit pipeline that ships every
+> allow/deny/warn event to a central HTTP endpoint. Both are off by default
+> (`--permission-mode=off`) — see **[docs/PERMISSION_AND_AUDIT.md](docs/PERMISSION_AND_AUDIT.md)**.
 
 ---
 
 ## Getting Started
 
-### 1. Start the API Server
+### 1. Start the control plane
 
 ```bash
 # In-memory mode (default)
@@ -161,7 +165,7 @@ go run ./cmd/server -port 8080
 go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
 ```
 
-### 2. Start a Poder Worker (Docker)
+### 2. Add a worker (Docker)
 
 ```bash
 docker run -d --name sandrpod-poder --restart=unless-stopped \
@@ -171,56 +175,42 @@ docker run -d --name sandrpod-poder --restart=unless-stopped \
   sandrpod/poder:latest
 ```
 
-> Poder requires no open inbound ports. It establishes a WebSocket reverse tunnel to the API Server on startup.
+> No inbound ports required — Poder dials out to the control plane over a WebSocket reverse tunnel.
 
-### 3. Talk to it with the E2B SDK
-
-```bash
-pip install e2b
-```
-
-```python
-import os
-os.environ.update(E2B_API_KEY="e2b_key", E2B_API_URL="http://localhost:8080",
-                  E2B_SANDBOX_URL="http://localhost:8080", E2B_VALIDATE_API_KEY="false")
-from e2b import Sandbox
-sbx = Sandbox.create()
-print(sbx.commands.run("echo hello from SandrPod").stdout)
-```
-
-See **[docs/E2B_COMPAT.md](docs/E2B_COMPAT.md)** to enable the gateway
-(`SANDRPOD_E2B_DOMAIN` / debug listener) and for the full compatibility matrix.
-
-### 4. Direct Agent Mode (no Docker)
+Or turn **any machine into a sandbox** with no Docker at all:
 
 ```bash
 go run ./cmd/agent -api-url=http://localhost:8080 -name=my-machine
 ```
 
-### 5. Employee-PC Mode (permission gate + audit)
+### 3. Run code — pick your SDK
+
+```python
+# Native
+from langchain_sandrpod import SandrPodClient
+sb = SandrPodClient(api_url="http://localhost:8080").get_sandbox("my-sandbox")
+sb.execute("echo hello from SandrPod")
+
+# …or the unmodified E2B SDK (set E2B_API_URL/E2B_SANDBOX_URL to your server)
+from e2b import Sandbox
+print(Sandbox.create().commands.run("echo hello from SandrPod").stdout)
+```
+
+### 4. Govern it (employee-PC mode)
 
 ```bash
-# Start the tray companion (user-session, shows 🛡 icon in the menu bar)
-sandrpod-tray serve
-
-# Start the agent with permission gate and audit upload
-go run ./cmd/agent \
-  -api-url=http://localhost:8080 \
-  -name=my-laptop \
+sandrpod-tray serve                       # user-session tray + consent dialogs (🛡)
+go run ./cmd/agent -api-url=http://localhost:8080 -name=my-laptop \
   -permission-mode=prompt \
   -audit-upload-url=https://your-platform/api/audit/decisions/batch
 ```
 
-Permission modes: `off` (default, legacy behavior) | `prompt` (consent dialog for paths outside `work_dir`) | `strict` (silent deny outside `work_dir`, headless servers).
-
-See **[docs/PERMISSION_AND_AUDIT.md](docs/PERMISSION_AND_AUDIT.md)** for the full architecture, `permissions.json` schema, `sandrpod-tray` CLI reference, and audit HTTP protocol.
+Permission modes: `off` (default) | `prompt` (consent dialog outside `work_dir`) | `strict` (silent deny outside `work_dir`).
+Full architecture, `permissions.json` schema, tray CLI, and audit protocol: **[docs/PERMISSION_AND_AUDIT.md](docs/PERMISSION_AND_AUDIT.md)**.
 
 ---
 
 ## LangChain / deepagents Integration
-
-Prefer a native SDK over the E2B one? `langchain-sandrpod` wires sandboxes
-straight into deepagents:
 
 ```bash
 pip install langchain-sandrpod
@@ -234,12 +224,11 @@ from langchain_openai import ChatOpenAI
 model = ChatOpenAI(model="gpt-4o", temperature=0)
 client = SandrPodClient(api_url="http://localhost:8080")
 
-# Connect to an existing sandbox
 sb = client.get_sandbox("my-sandbox")
 agent = create_deep_agent(model=model, backend=sb)
 result = agent.invoke({"messages": [{"role": "user", "content": "Write a quicksort and run it"}]})
 
-# Or use the context manager to auto-create and clean up
+# Or auto-create + clean up
 with client.sandbox("temp-sb") as sb:
     agent = create_deep_agent(model=model, backend=sb)
     result = agent.invoke({"messages": [...]})
@@ -255,7 +244,7 @@ See [`pkg/sdk/python/langchain_sandrpod/examples/`](pkg/sdk/python/langchain_san
 pip install sandrpod-cli
 sandrpod-cli set-api-url http://localhost:8080
 
-# Sandbox operations (--provider: local | aws | gcp | azure | aliyun | tencent | digitalocean | hetzner | oracle)
+# --provider: local | aws | gcp | azure | aliyun | tencent | digitalocean | hetzner | oracle
 sandrpod-cli list
 sandrpod-cli create my-sandbox --provider local --image sandrpod/toolbox:latest
 sandrpod-cli create gpu-box --provider gcp --region asia-east1-a --instance-type e2-medium
@@ -272,7 +261,7 @@ sandrpod-cli poder delete <poder-id>
 
 ## API Reference
 
-SandrPod exposes **two** HTTP surfaces: its own native REST API, and — when the
+SandrPod speaks **two** HTTP surfaces: its own native REST API, and — when the
 E2B gateway is enabled — the full E2B control-plane + `envd` protocol.
 
 **Native API**
