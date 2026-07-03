@@ -110,6 +110,30 @@
   .stat .l { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
   .spin { display: inline-block; width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* custom modals — replace native alert / prompt / confirm */
+  dialog.app-modal { width: min(560px, 94vw); }
+  .modal-body-wrap { padding: 22px; display: flex; flex-direction: column; gap: 14px; }
+  .modal-label { font-size: 0.82rem; color: var(--muted); margin-top: -4px; }
+  .modal-hint { font-size: 0.72rem; color: var(--muted); text-align: right; }
+  .modal-input {
+    width: 100%; font: inherit; color: var(--text); background: var(--surface-2);
+    border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; resize: vertical;
+  }
+  .modal-input.mono { font-family: var(--mono); font-size: 0.9rem; }
+  .modal-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .modal-output {
+    margin: 0; font-family: var(--mono); font-size: 0.85rem; line-height: 1.5;
+    white-space: pre-wrap; word-break: break-word; color: var(--text);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 10px;
+    padding: 12px 14px; max-height: 52vh; overflow: auto;
+  }
+  .modal-msg { margin: 0; color: var(--muted); font-size: 0.92rem; line-height: 1.5; }
+  dialog h2.err { color: oklch(82% 0.09 20); }
+  button.danger-solid { background: var(--danger); color: oklch(22% 0.05 20); border-color: transparent; font-weight: 600; }
+  button.danger-solid:hover { border-color: transparent; filter: brightness(1.08); }
+  dialog[open] { animation: pop .14s ease; }
+  @keyframes pop { from { transform: translateY(6px) scale(.985); opacity: 0; } to { transform: none; opacity: 1; } }
 </style>
 </head>
 <body>
@@ -204,6 +228,74 @@ async function api(method, path, body) {
 
 function esc(s) { return String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
 
+// ---- custom modals (replace native alert / prompt / confirm) ----
+function buildDialog(inner) {
+  const dlg = document.createElement("dialog");
+  dlg.className = "app-modal";
+  dlg.innerHTML = inner;
+  document.body.appendChild(dlg);
+  return dlg;
+}
+function promptModal({ title, label = "", value = "", placeholder = "", multiline = false, ok = "OK", mono = false }) {
+  return new Promise((resolve) => {
+    const control = multiline
+      ? `<textarea class="modal-input mono" rows="7" placeholder="${esc(placeholder)}"></textarea>`
+      : `<input type="text" class="modal-input${mono ? " mono" : ""}" placeholder="${esc(placeholder)}" />`;
+    const dlg = buildDialog(`<form>
+      <h2>${esc(title)}</h2>
+      ${label ? `<div class="modal-label">${esc(label)}</div>` : ""}
+      ${control}
+      ${multiline ? `<div class="modal-hint">⌘ / Ctrl + Enter to run</div>` : ""}
+      <div class="dialog-actions">
+        <button type="button" class="ghost" data-cancel>Cancel</button>
+        <button type="submit" class="primary">${esc(ok)}</button>
+      </div></form>`);
+    const input = dlg.querySelector(".modal-input");
+    const form = dlg.querySelector("form");
+    input.value = value;
+    const finish = (v) => { resolve(v); dlg.close(); dlg.remove(); };
+    form.addEventListener("submit", (e) => { e.preventDefault(); finish(input.value); });
+    dlg.querySelector("[data-cancel]").addEventListener("click", () => finish(null));
+    dlg.addEventListener("cancel", (e) => { e.preventDefault(); finish(null); });
+    if (multiline) input.addEventListener("keydown", (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "Enter") form.requestSubmit();
+    });
+    dlg.showModal();
+    input.focus();
+    if (!multiline) input.select();
+  });
+}
+function messageModal(title, body, { variant = "" } = {}) {
+  return new Promise((resolve) => {
+    const dlg = buildDialog(`<div class="modal-body-wrap">
+      <h2 class="${variant === "error" ? "err" : ""}">${esc(title)}</h2>
+      <pre class="modal-output">${esc(body)}</pre>
+      <div class="dialog-actions"><button type="button" class="primary" data-ok>Close</button></div></div>`);
+    const finish = () => { resolve(); dlg.close(); dlg.remove(); };
+    dlg.querySelector("[data-ok]").addEventListener("click", finish);
+    dlg.addEventListener("cancel", (e) => { e.preventDefault(); finish(); });
+    dlg.showModal();
+    dlg.querySelector("[data-ok]").focus();
+  });
+}
+function confirmModal(title, message, { ok = "Confirm", danger = false } = {}) {
+  return new Promise((resolve) => {
+    const dlg = buildDialog(`<div class="modal-body-wrap">
+      <h2>${esc(title)}</h2>
+      <p class="modal-msg">${esc(message)}</p>
+      <div class="dialog-actions">
+        <button type="button" class="ghost" data-cancel>Cancel</button>
+        <button type="button" class="${danger ? "danger-solid" : "primary"}" data-ok>${esc(ok)}</button>
+      </div></div>`);
+    const finish = (v) => { resolve(v); dlg.close(); dlg.remove(); };
+    dlg.querySelector("[data-ok]").addEventListener("click", () => finish(true));
+    dlg.querySelector("[data-cancel]").addEventListener("click", () => finish(false));
+    dlg.addEventListener("cancel", (e) => { e.preventDefault(); finish(false); });
+    dlg.showModal();
+    dlg.querySelector("[data-ok]").focus();
+  });
+}
+
 function renderStats(sandboxes) {
   const by = {};
   for (const s of sandboxes) by[s.state] = (by[s.state] || 0) + 1;
@@ -257,21 +349,23 @@ listEl.addEventListener("click", async (e) => {
   if (!btn) return;
   const name = btn.dataset.name;
   if (btn.dataset.act === "delete") {
-    if (!confirm(`Delete sandbox "${name}"?`)) return;
+    if (!(await confirmModal("Delete sandbox", `Delete "${name}"? This can't be undone.`, { ok: "Delete", danger: true }))) return;
     btn.disabled = true;
     try { await api("DELETE", `/api/v1/sandboxes/${encodeURIComponent(name)}`); await refresh(); }
-    catch (err) { alert(err.message); btn.disabled = false; }
+    catch (err) { await messageModal("Error", err.message, { variant: "error" }); btn.disabled = false; }
   } else if (btn.dataset.act === "exec") {
-    const cmd = prompt(`Command to run in "${name}":`, "echo hello");
+    const cmd = await promptModal({ title: `Run — ${name}`, label: "Shell command", value: "echo hello", ok: "Run", mono: true });
     if (!cmd) return;
     try {
       const r = await api("POST", `/api/v1/sandboxes/execute?sandbox=${encodeURIComponent(name)}`,
         { language: "bash", code: cmd, timeout: 30 });
       const out = [r.stdout, r.stderr].filter(Boolean).join("\n") || "(no output)";
-      alert(`exit ${r.exit_code}\n\n${out}`);
-    } catch (err) { alert(err.message); }
+      await messageModal(`exit ${r.exit_code}`, out, { variant: r.exit_code ? "error" : "" });
+    } catch (err) { await messageModal("Error", err.message, { variant: "error" }); }
   } else if (btn.dataset.act === "code") {
-    const code = prompt(`Run code in a STATEFUL kernel on "${name}" (variables persist across runs):`, "x = 40; x + 2");
+    const code = await promptModal({ title: `Code — ${name}`,
+      label: "Python — stateful kernel (variables persist across runs)",
+      value: "x = 40\nx + 2", multiline: true, ok: "Run", mono: true });
     if (!code) return;
     const tb = `/api/v1/sandboxes/${encodeURIComponent(name)}/toolbox`;
     try {
@@ -280,20 +374,21 @@ listEl.addEventListener("click", async (e) => {
         codeContexts[name] = ctx.id;
       }
       const r = await api("POST", `${tb}/code-interpreter/execute`, { code, context_id: codeContexts[name] });
-      const out = r.error ? `Error:\n${r.error}` : ([r.stdout, r.text].filter(Boolean).join("\n") || "(no output)");
-      alert(out);
+      if (r.error) await messageModal("Error", r.error, { variant: "error" });
+      else await messageModal("Result", [r.stdout, r.text].filter(Boolean).join("\n") || "(no output)");
     } catch (err) {
       delete codeContexts[name]; // context may be stale (e.g. sandbox recreated)
-      alert(err.message);
+      await messageModal("Error", err.message, { variant: "error" });
     }
   } else if (btn.dataset.act === "stats") {
     try {
       const m = await api("GET", `/api/v1/sandboxes/${encodeURIComponent(name)}/toolbox/metrics`);
       const gib = (b) => (Number(b || 0) / 1073741824).toFixed(2) + " GiB";
-      alert(`CPU:    ${(m.cpu_used_pct || 0).toFixed(1)}% of ${m.cpu_count || 0} cores\n` +
-            `Memory: ${gib(m.mem_used)} / ${gib(m.mem_total)}\n` +
-            `Disk:   ${gib(m.disk_used)} / ${gib(m.disk_total)}`);
-    } catch (err) { alert(err.message); }
+      await messageModal(`Resource usage — ${name}`,
+        `CPU     ${(m.cpu_used_pct || 0).toFixed(1)}%  of ${m.cpu_count || 0} cores\n` +
+        `Memory  ${gib(m.mem_used)} / ${gib(m.mem_total)}\n` +
+        `Disk    ${gib(m.disk_used)} / ${gib(m.disk_total)}`);
+    } catch (err) { await messageModal("Error", err.message, { variant: "error" }); }
   }
 });
 
@@ -320,7 +415,7 @@ $("#newForm").addEventListener("submit", async (e) => {
     $("#newDialog").close();
     e.target.reset();
     await refresh();
-  } catch (err) { alert(err.message); }
+  } catch (err) { await messageModal("Error", err.message, { variant: "error" }); }
 });
 
 refresh();
