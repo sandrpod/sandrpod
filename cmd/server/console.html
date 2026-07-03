@@ -129,6 +129,7 @@
     padding: 12px 14px; max-height: 52vh; overflow: auto;
   }
   .modal-msg { margin: 0; color: var(--muted); font-size: 0.92rem; line-height: 1.5; }
+  .modal-img { max-width: 100%; border-radius: 8px; background: #fff; border: 1px solid var(--line); display: block; }
   dialog h2.err { color: oklch(82% 0.09 20); }
   button.danger-solid { background: var(--danger); color: oklch(22% 0.05 20); border-color: transparent; font-weight: 600; }
   button.danger-solid:hover { border-color: transparent; filter: brightness(1.08); }
@@ -265,11 +266,13 @@ function promptModal({ title, label = "", value = "", placeholder = "", multilin
     if (!multiline) input.select();
   });
 }
-function messageModal(title, body, { variant = "" } = {}) {
+function messageModal(title, body, { variant = "", images = [] } = {}) {
   return new Promise((resolve) => {
+    const imgs = (images || []).map(png => `<img class="modal-img" src="data:image/png;base64,${png}" alt="figure" />`).join("");
+    const pre = body ? `<pre class="modal-output">${esc(body)}</pre>` : "";
     const dlg = buildDialog(`<div class="modal-body-wrap">
       <h2 class="${variant === "error" ? "err" : ""}">${esc(title)}</h2>
-      <pre class="modal-output">${esc(body)}</pre>
+      ${pre}${imgs}
       <div class="dialog-actions"><button type="button" class="primary" data-ok>Close</button></div></div>`);
     const finish = () => { resolve(); dlg.close(); dlg.remove(); };
     dlg.querySelector("[data-ok]").addEventListener("click", finish);
@@ -374,8 +377,12 @@ listEl.addEventListener("click", async (e) => {
         codeContexts[name] = ctx.id;
       }
       const r = await api("POST", `${tb}/code-interpreter/execute`, { code, context_id: codeContexts[name] });
-      if (r.error) await messageModal("Error", r.error, { variant: "error" });
-      else await messageModal("Result", [r.stdout, r.text].filter(Boolean).join("\n") || "(no output)");
+      if (r.error) { await messageModal("Error", r.error, { variant: "error" }); }
+      else {
+        const text = [r.stdout, r.text].filter(Boolean).join("\n");
+        const images = r.images || [];
+        await messageModal("Result", text || (images.length ? "" : "(no output)"), { images });
+      }
     } catch (err) {
       delete codeContexts[name]; // context may be stale (e.g. sandbox recreated)
       await messageModal("Error", err.message, { variant: "error" });

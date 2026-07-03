@@ -21,6 +21,9 @@ type CodeExecution struct {
 	Stderr string
 	Text   string // value of the final expression (main result)
 	Error  string // traceback if the cell raised
+	// Images are base64-encoded PNGs of matplotlib figures the cell produced;
+	// emitted as E2B result messages so the SDK's Execution.results carries them.
+	Images []string
 }
 
 // CodeContext is an E2B code-interpreter context ({id, language, cwd}).
@@ -150,8 +153,16 @@ func (c *codeInterp) execute(w http.ResponseWriter, r *http.Request) {
 			"type": "error", "name": "Error",
 			"value": firstLine(ex.Error), "traceback": ex.Error,
 		})
-	} else if ex.Text != "" {
-		enc.Encode(map[string]any{"type": "result", "text": ex.Text, "is_main_result": true})
+	} else {
+		// Rich results: matplotlib figures as PNG, then the final expression.
+		// E2B aggregates every "result" message into Execution.results.
+		for _, img := range ex.Images {
+			enc.Encode(map[string]any{"type": "result", "png": img, "is_main_result": false})
+			flush()
+		}
+		if ex.Text != "" {
+			enc.Encode(map[string]any{"type": "result", "text": ex.Text, "is_main_result": true})
+		}
 	}
 	enc.Encode(map[string]any{"type": "end_of_execution"})
 	flush()

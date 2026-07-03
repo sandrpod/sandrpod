@@ -81,6 +81,8 @@ export interface CodeResult {
   text: string;
   /** Traceback if the cell raised. */
   error: string;
+  /** Base64-encoded PNGs of any matplotlib figures the cell produced. */
+  images?: string[];
 }
 
 /** One filesystem change from a directory watcher. */

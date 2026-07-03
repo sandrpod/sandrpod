@@ -162,7 +162,7 @@ verification · ☐ not yet.
 | envd watch | `files.watch_dir` | ☑ | fsnotify watcher, poll-based CreateWatcher/GetWatcherEvents/RemoveWatcher; verified live |
 | envd process | `commands.run` (fg+bg) / `list`/`kill`/`send_stdin`/`connect` | ☑ | full pid-addressed table; real streaming; verified live |
 | PTY | `pty.create/send_stdin/resize/kill` | ☑ | rides the Process service (pty flags); verified live |
-| code interpreter | `runCode` + contexts | ☑ | **stateful** kernel + create/list/restart/remove contexts; verified live; charts need jupyter in the image |
+| code interpreter | `runCode` + contexts | ☑ | **stateful** kernel + create/list/restart/remove contexts; **matplotlib charts** captured as PNG → `Execution.results[].png`; verified live |
 | metadata | create/list `metadata` | ☑ | stored in labels, filterable |
 | env vars | `envVars` | ◐ | accepted on create; per-process injection via the process table's `envs` |
 

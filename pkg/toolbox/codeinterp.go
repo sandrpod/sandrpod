@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 )
@@ -30,6 +31,22 @@ import (
 const pyDriver = `
 import sys, io, json, base64, ast, traceback
 _ns = {"__name__": "__main__"}
+def _capture_images():
+    # Grab any open matplotlib figures as PNG (only if matplotlib was used, so
+    # there is zero cost otherwise), then close them so they don't accumulate.
+    plt = sys.modules.get("matplotlib.pyplot")
+    if plt is None:
+        return []
+    imgs = []
+    try:
+        for num in plt.get_fignums():
+            buf = io.BytesIO()
+            plt.figure(num).savefig(buf, format="png", bbox_inches="tight")
+            imgs.append(base64.b64encode(buf.getvalue()).decode("ascii"))
+        plt.close("all")
+    except Exception:
+        pass
+    return imgs
 def _run(src):
     out, err, text, error = io.StringIO(), io.StringIO(), None, None
     so, se = sys.stdout, sys.stderr
@@ -48,7 +65,8 @@ def _run(src):
         error = traceback.format_exc()
     finally:
         sys.stdout, sys.stderr = so, se
-    return {"stdout": out.getvalue(), "stderr": err.getvalue(), "text": text, "error": error}
+    return {"stdout": out.getvalue(), "stderr": err.getvalue(), "text": text,
+            "error": error, "images": _capture_images()}
 for line in sys.stdin:
     line = line.strip()
     if not line:
@@ -69,6 +87,9 @@ type CodeResult struct {
 	Stderr string `json:"stderr"`
 	Text   string `json:"text"`  // value of the final expression, if any
 	Error  string `json:"error"` // traceback, if the cell raised
+	// Images holds base64-encoded PNGs of any matplotlib figures the cell left
+	// open (captured then closed after each run).
+	Images []string `json:"images,omitempty"`
 }
 
 // kernel is one persistent interpreter process.
@@ -150,6 +171,9 @@ func (m *KernelManager) get(contextID string) (*kernel, error) {
 		return k, nil
 	}
 	cmd := exec.Command(m.python, "-c", pyDriver)
+	// Force matplotlib's non-interactive Agg backend so plt.show() is a no-op
+	// headless and figures stay in memory for us to capture as PNG.
+	cmd.Env = append(os.Environ(), "MPLBACKEND=Agg")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

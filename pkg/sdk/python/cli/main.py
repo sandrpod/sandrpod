@@ -544,6 +544,13 @@ def run(ctx, name, code, context_id):
             sys.exit(1)
         elif res.get("text"):
             click.echo(res["text"])
+        images = res.get("images") or []
+        for i, png in enumerate(images):
+            import base64
+            fn = f"plot-{i + 1}.png" if len(images) > 1 else "plot.png"
+            with open(fn, "wb") as fh:
+                fh.write(base64.b64decode(png))
+            click.echo(f"[figure saved → {fn}]")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
