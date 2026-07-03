@@ -20,6 +20,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -151,33 +152,36 @@ func (d e2bDeps) authenticator() e2bcompat.Authenticator {
 
 // toolboxDo performs an HTTP call to a sandbox's toolbox over the tunnel and
 // returns the response. subpath is the toolbox path (e.g. "files/info").
-func (d e2bDeps) toolboxDo(name, method, subpath string, query url.Values, body io.Reader, contentType string) (*http.Response, error) {
+// toolboxTarget resolves the tunnel and URL for a sandbox's toolbox subpath,
+// choosing the direct-agent or poder route by the sandbox's proxy URL.
+func (d e2bDeps) toolboxTarget(name, subpath string) (*tunnel.PoderTunnel, string, error) {
 	sb, ok := d.sandboxes.Get(name)
 	if !ok {
-		return nil, e2bcompat.NotFoundError{Msg: "sandbox not found"}
+		return nil, "", e2bcompat.NotFoundError{Msg: "sandbox not found"}
 	}
-	var (
-		t      *tunnel.PoderTunnel
-		target string
-	)
 	if strings.HasPrefix(sb.ProxyURL, "direct://") {
 		dt, ok := d.directStore.Get(name)
 		if !ok {
-			return nil, e2bcompat.NotFoundError{Msg: "agent offline"}
+			return nil, "", e2bcompat.NotFoundError{Msg: "agent offline"}
 		}
-		t, target = dt, "http://agent/"+subpath
-	} else {
-		pt, ok := d.tunnelStore.Get(sb.PoderID)
-		if !ok {
-			return nil, e2bcompat.NotFoundError{Msg: "poder offline"}
-		}
-		t, target = pt, "http://poder/toolbox/"+name+"/"+subpath
+		return dt, "http://agent/" + subpath, nil
+	}
+	pt, ok := d.tunnelStore.Get(sb.PoderID)
+	if !ok {
+		return nil, "", e2bcompat.NotFoundError{Msg: "poder offline"}
+	}
+	return pt, "http://poder/toolbox/" + name + "/" + subpath, nil
+}
+
+func (d e2bDeps) toolboxDo(name, method, subpath string, query url.Values, body io.Reader, contentType string) (*http.Response, error) {
+	t, target, err := d.toolboxTarget(name, subpath)
+	if err != nil {
+		return nil, err
 	}
 	if q := query.Encode(); q != "" {
 		target += "?" + q
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
 		cancel()
@@ -191,7 +195,54 @@ func (d e2bDeps) toolboxDo(name, method, subpath string, query url.Values, body 
 		cancel()
 		return nil, err
 	}
+	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: cancel}
 	return resp, nil
+}
+
+// toolboxStream opens a long-lived streaming request to the toolbox (e.g. the
+// process event stream). Unlike toolboxDo it uses no request timeout; the
+// returned ReadCloser cancels the underlying context on Close, tearing down the
+// tunnel stream promptly when the client disconnects.
+func (d e2bDeps) toolboxStream(name, method, subpath string, query url.Values) (io.ReadCloser, error) {
+	t, target, err := d.toolboxTarget(name, subpath)
+	if err != nil {
+		return nil, err
+	}
+	if q := query.Encode(); q != "" {
+		target += "?" + q
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, method, target, nil)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	resp, err := t.Client.Do(req)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		cancel()
+		if resp.StatusCode == http.StatusNotFound {
+			return nil, e2bcompat.NotFoundError{Msg: "process not found"}
+		}
+		return nil, fmt.Errorf("toolbox %s: %s", subpath, strings.TrimSpace(string(b)))
+	}
+	return &cancelBody{ReadCloser: resp.Body, cancel: cancel}, nil
+}
+
+// cancelBody cancels a request context when the response body is closed.
+type cancelBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelBody) Close() error {
+	c.cancel()
+	return c.ReadCloser.Close()
 }
 
 // toolboxJSON does a toolbox call and decodes a JSON response into out.
@@ -496,6 +547,77 @@ func (b *e2bEnvdBackend) StartProcess(name string, cfg e2bcompat.ProcessConfig) 
 	return e2bcompat.ProcResult{
 		PID: 1, Stdout: []byte(res.Stdout), Stderr: []byte(res.Stderr), ExitCode: int32(res.ExitCode),
 	}, nil
+}
+
+// ─── EnvdProcBackend: pid-addressed process table (toolbox /procmgr/*) ─────────
+
+// StartProc spawns a process via the managed table and returns its live event
+// stream. E2B's argv (e.g. /bin/bash -l -c "<script>") is run verbatim.
+func (b *e2bEnvdBackend) StartProc(name string, cfg e2bcompat.ProcessConfig, pty *e2bcompat.PTYSize, stdin bool) (io.ReadCloser, error) {
+	reqBody := map[string]any{"cmd": cfg.Cmd, "args": cfg.Args, "envs": cfg.Envs}
+	if cfg.Cwd != nil {
+		reqBody["cwd"] = *cfg.Cwd
+	}
+	if pty != nil {
+		reqBody["pty"] = true
+		reqBody["rows"] = pty.Rows
+		reqBody["cols"] = pty.Cols
+	}
+	var sr struct {
+		PID uint32 `json:"pid"`
+	}
+	if err := b.d.toolboxJSON(name, http.MethodPost, "procmgr/start", nil, reqBody, &sr); err != nil {
+		return nil, err
+	}
+	return b.d.toolboxStream(name, http.MethodGet, "procmgr/stream", url.Values{"pid": {strconv.FormatUint(uint64(sr.PID), 10)}})
+}
+
+// ConnectProc re-attaches to a running process's output stream by pid.
+func (b *e2bEnvdBackend) ConnectProc(name string, pid uint32) (io.ReadCloser, error) {
+	return b.d.toolboxStream(name, http.MethodGet, "procmgr/stream", url.Values{"pid": {strconv.FormatUint(uint64(pid), 10)}})
+}
+
+// ListProcs returns the running processes.
+func (b *e2bEnvdBackend) ListProcs(name string) ([]e2bcompat.ProcInfo, error) {
+	var raw []struct {
+		PID  uint32   `json:"pid"`
+		Tag  string   `json:"tag"`
+		Cmd  string   `json:"cmd"`
+		Args []string `json:"args"`
+		Cwd  string   `json:"cwd"`
+	}
+	if err := b.d.toolboxJSON(name, http.MethodGet, "procmgr/list", nil, nil, &raw); err != nil {
+		return nil, err
+	}
+	out := make([]e2bcompat.ProcInfo, 0, len(raw))
+	for _, p := range raw {
+		out = append(out, e2bcompat.ProcInfo{PID: p.PID, Tag: p.Tag, Cmd: p.Cmd, Args: p.Args, Cwd: p.Cwd})
+	}
+	return out, nil
+}
+
+// SendProcInput writes to a process's stdin (or PTY master when isPTY).
+func (b *e2bEnvdBackend) SendProcInput(name string, pid uint32, data []byte, isPTY bool) error {
+	return b.d.toolboxJSON(name, http.MethodPost, "procmgr/input", nil,
+		map[string]any{"pid": pid, "data": data, "pty": isPTY}, nil)
+}
+
+// SignalProc sends a signal (kill) to a process.
+func (b *e2bEnvdBackend) SignalProc(name string, pid uint32, signal int32) error {
+	return b.d.toolboxJSON(name, http.MethodPost, "procmgr/signal", nil,
+		map[string]any{"pid": pid, "signal": signal}, nil)
+}
+
+// ResizeProc resizes a PTY process's window.
+func (b *e2bEnvdBackend) ResizeProc(name string, pid uint32, rows, cols uint32) error {
+	return b.d.toolboxJSON(name, http.MethodPost, "procmgr/resize", nil,
+		map[string]any{"pid": pid, "rows": rows, "cols": cols}, nil)
+}
+
+// CloseProcStdin closes a process's stdin.
+func (b *e2bEnvdBackend) CloseProcStdin(name string, pid uint32) error {
+	return b.d.toolboxJSON(name, http.MethodPost, "procmgr/stdin-close", nil,
+		map[string]any{"pid": pid}, nil)
 }
 
 // toolboxFileInfo mirrors pkg/toolbox FileInfo ({name,path,is_dir,size}).

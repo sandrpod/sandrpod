@@ -96,12 +96,23 @@ type Server struct {
 	// (/code-interpreter/execute). Lazily created on first use.
 	kernels     *KernelManager
 	kernelsOnce sync.Once
+
+	// procs backs the E2B-compatible pid-addressed process table
+	// (/procmgr/*: background commands, connect, stdin, signal, PTY).
+	procs     *ProcManager
+	procsOnce sync.Once
 }
 
 // codeInterpreter returns the lazily-initialized kernel manager.
 func (s *Server) codeInterpreter() *KernelManager {
 	s.kernelsOnce.Do(func() { s.kernels = NewKernelManager("python3") })
 	return s.kernels
+}
+
+// procManager returns the lazily-initialized managed process table.
+func (s *Server) procManager() *ProcManager {
+	s.procsOnce.Do(func() { s.procs = NewProcManager() })
+	return s.procs
 }
 
 // codeInterpreterHandler implements POST /code-interpreter/execute:
@@ -265,6 +276,15 @@ func (s *Server) Handler() http.Handler {
 	// Session routes
 	mux.HandleFunc("/process/session", a(s.sessionHandler))
 	mux.HandleFunc("/process/session/", a(s.sessionHandler))
+
+	// Managed process table (E2B Process service: background/connect/stdin/signal/PTY).
+	mux.HandleFunc("/procmgr/start", a(s.procStartHandler))
+	mux.HandleFunc("/procmgr/list", a(s.procListHandler))
+	mux.HandleFunc("/procmgr/stream", a(s.procStreamHandler))
+	mux.HandleFunc("/procmgr/input", a(s.procInputHandler))
+	mux.HandleFunc("/procmgr/signal", a(s.procSignalHandler))
+	mux.HandleFunc("/procmgr/stdin-close", a(s.procStdinCloseHandler))
+	mux.HandleFunc("/procmgr/resize", a(s.procResizeHandler))
 
 	// Optional MCP bridge. The bridge owns "/mcp" and any "/mcp/..." subpath
 	// (manifest, tool calls). Mounted only when an MCP handler was installed

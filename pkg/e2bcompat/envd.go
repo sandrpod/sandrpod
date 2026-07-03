@@ -112,9 +112,10 @@ type ProcResult struct {
 type startReq struct {
 	Process ProcessConfig `json:"process"`
 	Tag     *string       `json:"tag,omitempty"`
-}
-type listProcResp struct {
-	Processes []any `json:"processes"`
+	Stdin   bool          `json:"stdin,omitempty"`
+	PTY     *struct {
+		Size PTYSize `json:"size"`
+	} `json:"pty,omitempty"`
 }
 
 // envd routes the connect-rpc + file-content HTTP endpoints.
@@ -132,6 +133,11 @@ func (e *envd) routes(mux *http.ServeMux) {
 	// Process service.
 	mux.HandleFunc("/process.Process/List", e.procList)
 	mux.HandleFunc("/process.Process/Start", e.procStart)
+	mux.HandleFunc("/process.Process/Connect", e.procConnect)
+	mux.HandleFunc("/process.Process/SendInput", e.procSendInput)
+	mux.HandleFunc("/process.Process/SendSignal", e.procSendSignal)
+	mux.HandleFunc("/process.Process/Update", e.procUpdate)
+	mux.HandleFunc("/process.Process/CloseStdin", e.procCloseStdin)
 	// File content (plain HTTP): GET reads, POST writes; ?path=…
 	mux.HandleFunc("/files", e.files)
 }
@@ -227,23 +233,14 @@ func (e *envd) fsRemove(w http.ResponseWriter, r *http.Request) {
 }
 
 // ---- process handlers ----
+// The Start/Connect/List/SendInput/SendSignal/Update handlers live in
+// process.go; they use the rich EnvdProcBackend when available. procStartBuffered
+// below is the fallback for backends that only implement run-to-completion.
 
-func (e *envd) procList(w http.ResponseWriter, r *http.Request) {
-	_, proto, ok := readUnary(w, r)
-	if !ok {
-		return
-	}
-	writeUnary(w, proto, nil, listProcResp{Processes: []any{}})
-}
-
-// procStart runs the command and emits a connect server-STREAM: a Start event
-// (pid), a Data event per stdout/stderr chunk, then an End event. Negotiates
-// JSON vs binary protobuf frames from the request Content-Type.
-func (e *envd) procStart(w http.ResponseWriter, r *http.Request) {
-	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<20))
-	proto := isProtoContentType(r.Header.Get("Content-Type"))
-	// Connect STREAMING requests (even JSON) are enveloped with a 5-byte prefix.
-	msg := stripEnvelope(body)
+// procStartBuffered synthesizes a Start server-stream from a single buffered
+// StartProcess result (start event, one data frame per stream, end event). Used
+// when the backend does not implement EnvdProcBackend.
+func (e *envd) procStartBuffered(w http.ResponseWriter, r *http.Request, msg []byte, proto bool) {
 	var cfg ProcessConfig
 	if proto {
 		cfg = decodeStartRequest(msg)
@@ -262,10 +259,10 @@ func (e *envd) procStart(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		writeEnvelope(w, 0, procStartEvent(res.PID))
 		if len(res.Stdout) > 0 {
-			writeEnvelope(w, 0, procDataEvent(res.Stdout, false))
+			writeEnvelope(w, 0, procDataEvent(res.Stdout, chStdout))
 		}
 		if len(res.Stderr) > 0 {
-			writeEnvelope(w, 0, procDataEvent(res.Stderr, true))
+			writeEnvelope(w, 0, procDataEvent(res.Stderr, chStderr))
 		}
 		writeEnvelope(w, 0, procEndEvent(res.ExitCode, "exited"))
 		writeConnectEndFrame(w)
@@ -448,22 +445,6 @@ func collectWrites(r *http.Request, queryPath string) ([]fileWrite, error) {
 }
 
 // ---- connect helpers ----
-
-func decodeConnect(w http.ResponseWriter, r *http.Request, v any) bool {
-	if r.Method != http.MethodPost {
-		writeConnectErrStatus(w, http.StatusMethodNotAllowed, "unimplemented", "POST required")
-		return false
-	}
-	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 16<<20))
-	if len(body) == 0 {
-		return true // empty request message is valid (e.g. List)
-	}
-	if err := json.Unmarshal(body, v); err != nil {
-		writeConnectErrStatus(w, http.StatusBadRequest, "invalid_argument", err.Error())
-		return false
-	}
-	return true
-}
 
 func writeConnect(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")

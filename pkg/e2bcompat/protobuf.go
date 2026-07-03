@@ -224,13 +224,16 @@ func procStartEvent(pid uint32) []byte {
 	return wrapStartResponse(encodeMsgField(1, start))
 }
 
-// procDataEvent encodes ProcessEvent{data=2: DataEvent{stdout=1|stderr=2}}.
-func procDataEvent(data []byte, stderr bool) []byte {
-	field := protowire.Number(1)
-	if stderr {
-		field = 2
-	}
-	inner := protowire.AppendTag(nil, field, protowire.BytesType)
+// Process output channels for procDataEvent (DataEvent field numbers).
+const (
+	chStdout = 1
+	chStderr = 2
+	chPTY    = 3
+)
+
+// procDataEvent encodes ProcessEvent{data=2: DataEvent{stdout=1|stderr=2|pty=3}}.
+func procDataEvent(data []byte, channel int) []byte {
+	inner := protowire.AppendTag(nil, protowire.Number(channel), protowire.BytesType)
 	inner = protowire.AppendBytes(inner, data)
 	return wrapStartResponse(encodeMsgField(2, inner))
 }

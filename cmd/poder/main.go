@@ -40,6 +40,35 @@ func env(key, defaultVal string) string {
 	return defaultVal
 }
 
+// streamProxyClient proxies toolbox responses that may stream for a long time
+// (process event streams, PTY, background commands). It has no overall timeout —
+// cancellation rides on the request context, which the API server cancels when
+// it closes its side — so long-lived streams aren't cut off mid-flight.
+var streamProxyClient = &http.Client{}
+
+// flushingCopy relays a streaming response body to w, flushing after every
+// chunk so events reach the client in real time (E2B's connect streams depend
+// on incremental delivery). It returns on EOF or the first write error (client
+// gone).
+func flushingCopy(w http.ResponseWriter, r io.Reader) {
+	flusher, _ := w.(http.Flusher)
+	buf := make([]byte, 32<<10)
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			if _, err := w.Write(buf[:n]); err != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			return
+		}
+	}
+}
+
 var (
 	apiURL            = flag.String("api-url", env("API_URL", "http://localhost:8080"), "API Server URL")
 	apiToken          = flag.String("token", env("SANDRPOD_TOKEN", ""), "API Server bearer token")
@@ -462,8 +491,10 @@ func main() {
 		for k, v := range r.Header {
 			req.Header[k] = v
 		}
-		client := &http.Client{Timeout: 30 * time.Second}
-		resp, err := client.Do(req)
+		// No client timeout: toolbox responses may stream indefinitely (E2B
+		// background commands, PTY, process event streams). Cancellation rides
+		// on r.Context(), which fires when the API server closes its side.
+		resp, err := streamProxyClient.Do(req)
 		if err != nil {
 			log.Printf("Failed to call toolbox: %v", err)
 			http.Error(w, "Failed to proxy request", http.StatusInternalServerError)
@@ -474,7 +505,7 @@ func main() {
 			w.Header()[k] = v
 		}
 		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
+		flushingCopy(w, resp.Body)
 	})
 
 	mux.HandleFunc("/pty/", func(w http.ResponseWriter, r *http.Request) {
