@@ -1419,13 +1419,20 @@ func main() {
 					r.Header.Get("X-API-KEY"), r.Header.Get("Authorization"), headerNames(r))
 			})
 		}
-		go func() {
-			addr := ":" + dbg
-			log.Printf("E2B-compatible gateway (HTTP debug) listening on %s — set E2B_API_URL and E2B_SANDBOX_URL to http://<host>%s", addr, addr)
-			if err := http.ListenAndServe(addr, gw); err != nil {
-				log.Printf("E2B debug gateway error: %v", err)
-			}
-		}()
+		// Bind the control-plane port plus the fixed envd (49983) and jupyter
+		// (49999) ports so E2B_DEBUG=true clients — which target localhost:<port>
+		// per get_host — reach the same gateway. Path routing (/sandboxes vs
+		// /filesystem.* vs /execute) does the dispatch regardless of port.
+		for _, addr := range []string{":" + dbg, ":49983", ":49999"} {
+			addr := addr
+			go func() {
+				log.Printf("E2B-compatible gateway (HTTP debug) listening on %s", addr)
+				if err := http.ListenAndServe(addr, gw); err != nil {
+					log.Printf("E2B debug gateway %s error: %v", addr, err)
+				}
+			}()
+		}
+		log.Printf("E2B debug: set E2B_DEBUG=true + E2B_API_URL=http://localhost:%s (envd/jupyter auto on :49983/:49999)", dbg)
 	}
 
 	// Start the HTTP server

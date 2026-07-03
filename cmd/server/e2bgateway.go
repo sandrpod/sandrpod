@@ -111,15 +111,12 @@ func (b *e2bCodeBackend) RunCode(name, contextID, code string) (e2bcompat.CodeEx
 // disabled it accepts any e2b_<hex>-shaped key anonymously.
 func (d e2bDeps) authenticator() e2bcompat.Authenticator {
 	return func(key string) (string, bool) {
-		if key == "" {
-			return "", false
-		}
 		authOff := d.cfg.Token == "" && len(d.cfg.Tokens) == 0 &&
 			(d.cfg.Registry == nil || len(d.cfg.Registry.get()) == 0)
 		if authOff {
-			if e2bcompat.IsE2BKey(key) {
-				return "", true // anonymous
-			}
+			return "", true // auth disabled: accept anything (incl. empty)
+		}
+		if key == "" {
 			return "", false
 		}
 		if id, ok := resolveToken(d.cfg, key); ok {
@@ -387,12 +384,14 @@ func (b *e2bEnvdBackend) Stat(name, path string) (e2bcompat.EntryInfo, error) {
 }
 
 func (b *e2bEnvdBackend) ListDir(name, path string, _ uint32) ([]e2bcompat.EntryInfo, error) {
-	var list []toolboxFileInfo
-	if err := b.d.toolboxJSON(name, http.MethodGet, "files", url.Values{"path": {path}}, nil, &list); err != nil {
+	var resp struct {
+		Files []toolboxFileInfo `json:"files"`
+	}
+	if err := b.d.toolboxJSON(name, http.MethodGet, "files", url.Values{"path": {path}}, nil, &resp); err != nil {
 		return nil, err
 	}
-	out := make([]e2bcompat.EntryInfo, 0, len(list))
-	for _, fi := range list {
+	out := make([]e2bcompat.EntryInfo, 0, len(resp.Files))
+	for _, fi := range resp.Files {
 		out = append(out, fi.toEntry())
 	}
 	return out, nil
@@ -414,7 +413,7 @@ func (b *e2bEnvdBackend) Move(name, src, dst string) (e2bcompat.EntryInfo, error
 }
 
 func (b *e2bEnvdBackend) Remove(name, path string) error {
-	return b.d.toolboxJSON(name, http.MethodPost, "files/delete", url.Values{"path": {path}}, nil, nil)
+	return b.d.toolboxJSON(name, http.MethodDelete, "files/delete", url.Values{"path": {path}}, nil, nil)
 }
 
 func (b *e2bEnvdBackend) ReadFile(name, path string) ([]byte, error) {
@@ -470,7 +469,7 @@ func (b *e2bEnvdBackend) StartProcess(name string, cfg e2bcompat.ProcessConfig) 
 		Stdout   string `json:"stdout"`
 		Stderr   string `json:"stderr"`
 	}
-	if err := b.d.toolboxJSON(name, http.MethodPost, "execute", nil, reqBody, &res); err != nil {
+	if err := b.d.toolboxJSON(name, http.MethodPost, "process", nil, reqBody, &res); err != nil {
 		return e2bcompat.ProcResult{}, err
 	}
 	return e2bcompat.ProcResult{

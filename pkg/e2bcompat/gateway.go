@@ -102,6 +102,10 @@ func Handler(cfg Config) http.Handler {
 				sandbox = r.Header.Get("X-Sandbox-ID")
 			}
 		}
+		// E2B's debug mode uses a placeholder id; resolve it to the real one.
+		if sandbox == "debug_sandbox_id" {
+			sandbox = ""
+		}
 		if p := r.Header.Get("E2b-Sandbox-Port"); p == strconv.Itoa(codePort) {
 			isCode = true
 		}

@@ -164,33 +164,43 @@ verification · ☐ not yet.
 | PTY | `pty.*` | ☐ | envd PTY is bidirectional connect streaming — not yet |
 | env vars | `envVars` | ☐ | accepted on create; per-process injection not wired |
 
-### Verified against the REAL unmodified E2B SDK over HTTP (2026-07-03)
+### Verified against the REAL unmodified E2B SDK over HTTP + a real container (2026-07-03)
 
-Ran the official `e2b` Python SDK **v2.30.0** against a local SandrPod over
-plain HTTP — no TLS, no wildcard DNS — using the SDK's own overrides
-(`E2B_API_URL` + `E2B_SANDBOX_URL` = `http://host:<SANDRPOD_E2B_DEBUG_PORT>`,
-`E2B_VALIDATE_API_KEY=false`). A direct-mode `sandrpod-agent` (embedded toolbox,
-no Docker) served as the sandbox. Passing end-to-end with the unmodified SDK:
+Ran the official `e2b` **v2.30.0** and `e2b-code-interpreter` Python SDKs against
+a local SandrPod over plain HTTP — no TLS, no wildcard DNS — with a **real
+Docker toolbox container** behind a docker-run poder. **23/23 real-SDK
+operations pass end-to-end.**
 
-- ☑ `Sandbox.connect()` (control plane, HTTP)
-- ☑ `Sandbox.list()` (control plane, `/v2/sandboxes`)
-- ☑ `files.write()` / `files.read()` — real file round-trip
-- ☑ `commands.run("echo …")` — real stdout returned
+Base SDK (`E2B_API_URL`+`E2B_SANDBOX_URL`=`http://host:3333`,
+`E2B_VALIDATE_API_KEY=false`) — **17/17**:
+`Sandbox.create` (real container), `is_running`, `get_info`, `set_timeout`,
+`list`, `kill`; `files.write/read/exists/list/make_dir/rename/remove/get_info`;
+`commands.run` (echo / `python3` / pwd).
 
-Getting there fixed a stack of issues only the real SDK reveals: the
-`POST /sandboxes/{id}/connect` endpoint, envd auth via the `X-Access-Token`
-header, sandbox routing via the `E2b-Sandbox-Id`/`E2b-Sandbox-Port` headers,
-multipart file-upload parsing, the array-shaped write response, connect
-streaming-request **envelope** stripping (the 5-byte frame prefix), the
-`cmd`/`argv` → shell translation, and the `/v2` control-plane prefix. Also: E2B
-splits sandbox IDs on `-`, so gateway-issued names must not contain one.
+Code interpreter (`E2B_DEBUG=true`, single sandbox) — **6/6**:
+stateful `run_code` (`a=100` then `a*2` → `200`), stdout capture, multiline
+loops, error capture (`1/0` → `ZeroDivisionError`), imports
+(`math.sqrt(16)` → `4.0`).
 
-Remaining (honest): `e2b-code-interpreter` `run_code` — the CI SDK builds a
-code-interpreter URL that the fixed `E2B_SANDBOX_URL` override didn't capture in
-this harness (no `/execute` reached the gateway), so the stateful interpreter is
-built + unit-tested but not yet real-SDK-verified. And a production drop-in
-(vanity domain) still needs wildcard DNS + TLS; the binary-protobuf connect path
-exists but this SDK version used `connect+json`.
+Getting there fixed a stack of issues only the real SDK + real container reveal:
+`POST /sandboxes/{id}/connect`; envd auth via `X-Access-Token`; sandbox routing
+via `E2b-Sandbox-Id`/`E2b-Sandbox-Port`; multipart upload parsing; array-shaped
+write response; connect streaming-request **envelope** stripping (5-byte prefix);
+`cmd`/`argv` → shell translation; the `/v2` control-plane prefix; the toolbox
+mapping (`/files` returns `{files:[…]}`, delete needs `DELETE`, exec is
+`/process`); per-sandbox `e2b_<hex>` envd tokens; and the fact that E2B's
+`get_host` for the code-interpreter port ignores `E2B_SANDBOX_URL` — it only
+works under `E2B_DEBUG=true` at `localhost:49999`, so the debug listener binds
+`:49983`+`:49999` and treats the `debug_sandbox_id` placeholder via the
+single-sandbox resolver. E2B also splits sandbox IDs on `-`, so gateway-issued
+names contain none.
+
+Not yet covered (honest): background `commands.run(background=True)` (the
+StartProcess bridge is run-to-completion, not streaming); PTY; `pause`/`resume`
+(no snapshot-pause); multi-sandbox code-interpreter under `E2B_DEBUG` (that mode
+is single-sandbox by design — production uses host-based routing). A production
+vanity-domain drop-in still needs wildcard DNS + TLS; the hand-rolled
+binary-protobuf connect path exists but this SDK negotiated `connect+json`.
 
 ### What "◐ needs live verification" means honestly
 
