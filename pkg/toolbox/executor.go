@@ -242,6 +242,23 @@ func (e *Executor) Execute(ctx context.Context, language, code string) (*Process
 	return e.ExecuteStream(ctx, language, code, nil)
 }
 
+// streamPipe reads r in chunks, accumulating each into buf (for the final
+// ProcessResult) and emitting it immediately via emit so streaming clients get
+// output in real time. It returns when r reaches EOF or errors.
+func streamPipe(r io.Reader, event string, buf *bytes.Buffer, emit func(event, data string)) {
+	b := make([]byte, 4096)
+	for {
+		n, err := r.Read(b)
+		if n > 0 {
+			buf.Write(b[:n])
+			emit(event, string(b[:n]))
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
 // StreamCallback is a callback for streaming output events
 type StreamCallback func(event string, data string)
 
@@ -328,18 +345,31 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 		return nil, fmt.Errorf("failed to start command: %w", err)
 	}
 
-	// Read stdout and stderr concurrently
+	// Read stdout and stderr concurrently. Each chunk is both accumulated into a
+	// buffer (for the final ProcessResult) and, when a callback is set, emitted
+	// immediately so streaming clients see output in real time rather than all at
+	// once when the command exits. The callback is serialized with a mutex since
+	// the two readers run concurrently.
 	var wg sync.WaitGroup
 	var stdout, stderr bytes.Buffer
+	var cbMu sync.Mutex
+	emit := func(event, data string) {
+		if callback == nil {
+			return
+		}
+		cbMu.Lock()
+		callback(event, data)
+		cbMu.Unlock()
+	}
 
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		io.Copy(&stdout, stdoutPipe) //nolint:errcheck
+		streamPipe(stdoutPipe, "stdout", &stdout, emit)
 	}()
 	go func() {
 		defer wg.Done()
-		io.Copy(&stderr, stderrPipe) //nolint:errcheck
+		streamPipe(stderrPipe, "stderr", &stderr, emit)
 	}()
 
 	// Wait for completion or context cancellation
@@ -376,15 +406,8 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 			}
 		}
 
-		// Deliver final output via callback
-		if callback != nil {
-			if stdout.Len() > 0 {
-				callback("stdout", stdout.String())
-			}
-			if stderr.Len() > 0 {
-				callback("stderr", stderr.String())
-			}
-		}
+		// Output was already emitted to the callback incrementally by the
+		// streamPipe readers above; nothing more to deliver here.
 
 		return &ProcessResult{
 			ExitCode:  exitCode,

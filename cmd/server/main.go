@@ -819,7 +819,9 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			defer resp.Body.Close()
 			maps.Copy(w.Header(), resp.Header)
 			w.WriteHeader(resp.StatusCode)
-			io.Copy(w, resp.Body)
+			// Flush each chunk so streamed output reaches the client in real time
+			// — a plain io.Copy here would re-buffer the toolbox/poder stream.
+			flushCopy(w, resp.Body)
 			return
 		}
 
@@ -1542,6 +1544,28 @@ func proxyHTTP(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w http.
 	io.Copy(w, resp.Body)
 }
 
+// flushCopy relays a streaming response body to w, flushing after every chunk
+// so streamed output (SSE execution output, MCP event streams) reaches the
+// client in real time instead of being re-buffered by a plain io.Copy.
+func flushCopy(w http.ResponseWriter, r io.Reader) {
+	flusher, _ := w.(http.Flusher)
+	buf := make([]byte, 32<<10)
+	for {
+		n, readErr := r.Read(buf)
+		if n > 0 {
+			if _, wErr := w.Write(buf[:n]); wErr != nil {
+				return
+			}
+			if flusher != nil {
+				flusher.Flush()
+			}
+		}
+		if readErr != nil {
+			return
+		}
+	}
+}
+
 // proxyHTTPStreaming forwards an HTTP request through the tunnel like
 // proxyHTTP, but uses the tunnel's streaming client (no buffering, no idle
 // timeout) and flushes the response writer after every chunk so SSE events
@@ -1567,23 +1591,7 @@ func proxyHTTPStreaming(t *tunnel.PoderTunnel, r *http.Request, targetURL string
 	defer resp.Body.Close()
 	maps.Copy(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-
-	flusher, _ := w.(http.Flusher)
-	buf := make([]byte, 4096)
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if n > 0 {
-			if _, wErr := w.Write(buf[:n]); wErr != nil {
-				return
-			}
-			if flusher != nil {
-				flusher.Flush()
-			}
-		}
-		if readErr != nil {
-			return
-		}
-	}
+	flushCopy(w, resp.Body)
 }
 
 // proxyHTTPErr is like proxyHTTP but returns an error if the upstream failed.

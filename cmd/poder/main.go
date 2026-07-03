@@ -351,8 +351,7 @@ func main() {
 				toolboxReq.Header[k] = v
 			}
 		}
-		client := &http.Client{Timeout: 0}
-		resp, err := client.Do(toolboxReq)
+		resp, err := streamProxyClient.Do(toolboxReq)
 		if err != nil {
 			log.Printf("Failed to call toolbox stream: %v", err)
 			http.Error(w, "Failed to execute code", http.StatusInternalServerError)
@@ -363,7 +362,10 @@ func main() {
 			w.Header()[k] = v
 		}
 		w.WriteHeader(resp.StatusCode)
-		io.Copy(w, resp.Body)
+		// Flush each chunk so streamed execution output reaches the client in
+		// real time — the toolbox /stream flushes per-event, but a plain io.Copy
+		// here would re-buffer it. (Same fix as the /toolbox/ proxy.)
+		flushingCopy(w, resp.Body)
 	})
 
 	mux.HandleFunc("/logs", func(w http.ResponseWriter, r *http.Request) {
