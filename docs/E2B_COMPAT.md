@@ -139,3 +139,45 @@ pass/fail/NA) in this doc as phases land.
 - Teams/billing/dashboard endpoints beyond what `create` transitively needs.
 - Exact parity of E2B's network-transform rules and MCP-server bundling.
 - Byte-for-byte error message parity (status codes + error shape suffice).
+
+---
+
+## 7. Implementation status (as of 2026-07-03)
+
+Built in `pkg/e2bcompat` (gateway + wire types) and `cmd/server/e2bgateway.go`
+(backends over scheduler/store/toolbox), enabled by `SANDRPOD_E2B_DOMAIN`.
+
+Legend: ☑ built + unit-tested to the spec · ◐ built, needs live/real-SDK
+verification · ☐ not yet.
+
+| Surface | SDK call | Status | Notes |
+|---|---|---|---|
+| Control: create | `Sandbox.create` | ☑ | E2B schema, `X-API-KEY`, `e2b_<hex>` keys; maps to a local sandbox |
+| Control: get/list/kill | `getInfo`/`list`/`kill` | ☑ | owner-scoped; metadata round-trips via labels + filter |
+| Control: set timeout / refresh | `setTimeout` | ☑ | maps to per-sandbox `ttl_seconds` |
+| Control: pause/resume | `pause`/`resume` | ☐ | returns unsupported (SandrPod has no snapshot-pause yet) |
+| envd filesystem | `files.list/stat/makeDir/rename/remove` | ◐ | connect-JSON handlers + toolbox mapping; unit-tested with fakes |
+| envd file content | `files.read`/`write` | ◐ | plain-HTTP; toolbox download/upload mapping |
+| envd process | `commands.run` | ◐ | connect server-stream (start→data→end→eos); toolbox `execute` |
+| code interpreter | `runCode` | ◐ | **stateful** kernel verified with real python3; NDJSON stream; charts need jupyter in the image |
+| metadata | create/list `metadata` | ☑ | stored in labels, filterable |
+| PTY | `pty.*` | ☐ | envd PTY is bidirectional connect streaming — not yet |
+| env vars | `envVars` | ☐ | accepted on create; per-process injection not wired |
+
+### What "◐ needs live verification" means honestly
+
+Three things stand between the current build and an **unmodified E2B SDK passing
+end-to-end**, none of which can be exercised without a running deployment:
+
+1. **Wildcard DNS + TLS** for `*.<domain>` so the SDK can reach
+   `<port>-<sandboxID>.<domain>`. Deployment infra, not code.
+2. **Binary-protobuf connect path.** The handlers speak connect **JSON**
+   (valid per the connect spec and unit-tested). E2B's JS/Python clients may
+   default to binary protobuf; if so, a buf-generated binary path must be added
+   alongside the JSON one.
+3. **A real toolbox + jupyter image** to confirm the envd↔toolbox field
+   mapping and rich code-interpreter results.
+
+The conformance harness in §5 (run the real `e2b`/`e2b-code-interpreter` SDK
+against a local SandrPod) is the gate that turns every ◐ into ☑. Until then the
+wire contract is verified against the spec with unit tests, not against the SDK.

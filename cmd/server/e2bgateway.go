@@ -200,7 +200,22 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, req e2bcompat.NewSandbox
 	if err != nil {
 		return e2bcompat.SandboxDetail{}, err
 	}
-	return b.detailFromInfo(sb, req.TemplateID, req.Metadata), nil
+	// Persist E2B metadata + template as labels so get/list round-trip them.
+	if len(req.Metadata) > 0 || req.TemplateID != "" {
+		_ = b.d.sandboxes.Update(name, func(s *podpkg.SandboxInfo) {
+			if s.Labels == nil {
+				s.Labels = map[string]string{}
+			}
+			for k, v := range req.Metadata {
+				s.Labels[e2bMetaPrefix+k] = v
+			}
+			if req.TemplateID != "" {
+				s.Labels[e2bTemplateLabel] = req.TemplateID
+			}
+		})
+		sb, _ = b.d.sandboxes.Get(name)
+	}
+	return b.detailFromInfo(sb), nil
 }
 
 func (b *e2bSandboxBackend) GetSandbox(ident, sandboxID string) (e2bcompat.SandboxDetail, bool) {
@@ -208,19 +223,23 @@ func (b *e2bSandboxBackend) GetSandbox(ident, sandboxID string) (e2bcompat.Sandb
 	if !ok || !b.owns(ident, sb) {
 		return e2bcompat.SandboxDetail{}, false
 	}
-	return b.detailFromInfo(sb, "base", nil), true
+	return b.detailFromInfo(sb), true
 }
 
-func (b *e2bSandboxBackend) ListSandboxes(ident string, _ map[string]string) []e2bcompat.ListedSandbox {
+func (b *e2bSandboxBackend) ListSandboxes(ident string, filter map[string]string) []e2bcompat.ListedSandbox {
 	var out []e2bcompat.ListedSandbox
 	for _, sb := range b.d.sandboxes.List() {
 		if !b.owns(ident, sb) {
 			continue
 		}
+		meta := e2bMetaFromLabels(sb.Labels)
+		if !metaMatches(meta, filter) {
+			continue
+		}
 		out = append(out, e2bcompat.ListedSandbox{
-			TemplateID: "base", SandboxID: sb.Name, StartedAt: sb.CreatedAt,
+			TemplateID: e2bTemplateFromLabels(sb.Labels), SandboxID: sb.Name, StartedAt: sb.CreatedAt,
 			CPUCount: 2, MemoryMB: 512, State: stateFor(sb),
-			EnvdVersion: e2bcompat.DefaultEnvdVersion,
+			EnvdVersion: e2bcompat.DefaultEnvdVersion, Metadata: meta,
 		})
 	}
 	return out
@@ -258,12 +277,49 @@ func (b *e2bSandboxBackend) owns(ident string, sb *podpkg.SandboxInfo) bool {
 	return ident == "" || sb.Owner == "" || sb.Owner == ident
 }
 
-func (b *e2bSandboxBackend) detailFromInfo(sb *podpkg.SandboxInfo, templateID string, meta map[string]string) e2bcompat.SandboxDetail {
+func (b *e2bSandboxBackend) detailFromInfo(sb *podpkg.SandboxInfo) e2bcompat.SandboxDetail {
 	return e2bcompat.SandboxDetail{
-		TemplateID: templateID, SandboxID: sb.Name, EnvdVersion: e2bcompat.DefaultEnvdVersion,
+		TemplateID: e2bTemplateFromLabels(sb.Labels), SandboxID: sb.Name, EnvdVersion: e2bcompat.DefaultEnvdVersion,
 		StartedAt: sb.CreatedAt, CPUCount: 2, MemoryMB: 512, State: stateFor(sb),
-		Metadata: meta,
+		Metadata: e2bMetaFromLabels(sb.Labels),
 	}
+}
+
+// E2B metadata + template are stored in SandboxInfo.Labels under a namespace so
+// they don't collide with SandrPod's own labels.
+const (
+	e2bMetaPrefix    = "e2b.meta/"
+	e2bTemplateLabel = "e2b.template"
+)
+
+func e2bMetaFromLabels(labels map[string]string) map[string]string {
+	var out map[string]string
+	for k, v := range labels {
+		if suffix, ok := strings.CutPrefix(k, e2bMetaPrefix); ok {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[suffix] = v
+		}
+	}
+	return out
+}
+
+func e2bTemplateFromLabels(labels map[string]string) string {
+	if t := labels[e2bTemplateLabel]; t != "" {
+		return t
+	}
+	return "base"
+}
+
+// metaMatches reports whether meta contains every key=value in filter.
+func metaMatches(meta, filter map[string]string) bool {
+	for k, v := range filter {
+		if meta[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func stateFor(sb *podpkg.SandboxInfo) e2bcompat.SandboxState {
