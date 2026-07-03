@@ -30,6 +30,21 @@ type SandboxBackend interface {
 	// Pause/Resume; if unsupported the backend may return false.
 	PauseSandbox(ident, sandboxID string) bool
 	ResumeSandbox(ident, sandboxID string, seconds int32) (SandboxDetail, bool)
+	// GetMetrics returns resource metrics for a sandbox (empty slice if none).
+	GetMetrics(ident, sandboxID string) ([]SandboxMetric, bool)
+}
+
+// SandboxMetric is one resource-usage sample (E2B SandboxMetric shape).
+type SandboxMetric struct {
+	CPUCount      int     `json:"cpuCount"`
+	CPUUsedPct    float64 `json:"cpuUsedPct"`
+	DiskTotal     uint64  `json:"diskTotal"`
+	DiskUsed      uint64  `json:"diskUsed"`
+	MemCache      uint64  `json:"memCache"`
+	MemTotal      uint64  `json:"memTotal"`
+	MemUsed       uint64  `json:"memUsed"`
+	Timestamp     string  `json:"timestamp"`     // RFC3339
+	TimestampUnix int64   `json:"timestampUnix"` // seconds
 }
 
 // controlPlane serves the E2B REST API.
@@ -135,10 +150,17 @@ func (c *controlPlane) handleSandboxByID(w http.ResponseWriter, r *http.Request)
 		w.WriteHeader(http.StatusNoContent)
 
 	case action == "connect" && r.Method == http.MethodPost:
-		// Sandbox.connect(id): attach to a running sandbox, refreshing its
-		// timeout, and return its info so the SDK can build the envd client.
+		// Sandbox.connect(id): attach to a sandbox, auto-resuming it if paused,
+		// refreshing its timeout, and returning its info so the SDK can build the
+		// envd client. Resume is idempotent for a running sandbox; it reports
+		// unsupported for direct-agent sandboxes, where we fall back to a plain
+		// get.
 		var req ResumeRequest
 		_ = json.NewDecoder(r.Body).Decode(&req)
+		if detail, ok := c.backend.ResumeSandbox(ident, sandboxID, req.Timeout); ok {
+			writeJSON(w, http.StatusOK, detail)
+			return
+		}
 		if req.Timeout > 0 {
 			c.backend.SetTimeout(ident, sandboxID, req.Timeout)
 		}
@@ -169,6 +191,17 @@ func (c *controlPlane) handleSandboxByID(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		writeJSON(w, http.StatusCreated, sandboxFromDetail(detail))
+
+	case action == "metrics" && r.Method == http.MethodGet:
+		metrics, ok := c.backend.GetMetrics(ident, sandboxID)
+		if !ok {
+			writeErr(w, http.StatusNotFound, "sandbox not found")
+			return
+		}
+		if metrics == nil {
+			metrics = []SandboxMetric{}
+		}
+		writeJSON(w, http.StatusOK, metrics)
 
 	default:
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")

@@ -68,6 +68,10 @@ func (f *fakeSandboxes) ResumeSandbox(_, id string, _ int32) (SandboxDetail, boo
 	d, ok := f.created[id]
 	return d, ok
 }
+func (f *fakeSandboxes) GetMetrics(_, id string) ([]SandboxMetric, bool) {
+	_, ok := f.created[id]
+	return []SandboxMetric{}, ok
+}
 
 type fakeEnvd struct{ files map[string][]byte }
 

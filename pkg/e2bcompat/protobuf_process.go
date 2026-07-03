@@ -288,6 +288,67 @@ func decodeSubMessagePID(b []byte, field protowire.Number) uint32 {
 	return 0
 }
 
+// decodeBoolField decodes a bool at `field` in a message (varint != 0).
+func decodeBoolField(b []byte, field protowire.Number) bool {
+	for len(b) > 0 {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			break
+		}
+		b = b[n:]
+		if num == field && typ == protowire.VarintType {
+			v, vn := protowire.ConsumeVarint(b)
+			if vn < 0 {
+				break
+			}
+			return v != 0
+		}
+		fn := protowire.ConsumeFieldValue(num, typ, b)
+		if fn < 0 {
+			break
+		}
+		b = b[fn:]
+	}
+	return false
+}
+
+// encodeCreateWatcherResponse encodes CreateWatcherResponse{watcher_id=1}.
+func encodeCreateWatcherResponse(id string) []byte {
+	out := protowire.AppendTag(nil, 1, protowire.BytesType)
+	return protowire.AppendString(out, id)
+}
+
+// watchEventTypeEnum maps an E2B EventType name to its enum number.
+func watchEventTypeEnum(name string) uint64 {
+	switch name {
+	case "EVENT_TYPE_CREATE":
+		return 1
+	case "EVENT_TYPE_WRITE":
+		return 2
+	case "EVENT_TYPE_REMOVE":
+		return 3
+	case "EVENT_TYPE_RENAME":
+		return 4
+	case "EVENT_TYPE_CHMOD":
+		return 5
+	}
+	return 0
+}
+
+// encodeWatcherEventsResponse encodes GetWatcherEventsResponse{events=1:
+// FilesystemEvent{name=1, type=2}}.
+func encodeWatcherEventsResponse(events []WatchEvent) []byte {
+	var out []byte
+	for _, ev := range events {
+		fe := protowire.AppendTag(nil, 1, protowire.BytesType)
+		fe = protowire.AppendString(fe, ev.Name)
+		fe = protowire.AppendTag(fe, 2, protowire.VarintType)
+		fe = protowire.AppendVarint(fe, watchEventTypeEnum(ev.Type))
+		out = append(out, encodeMsgField(1, fe)...)
+	}
+	return out
+}
+
 // encodeListResponse encodes ListResponse{processes=1: ProcessInfo{config=1:
 // ProcessConfig{cmd=1,args=2,cwd=4}, pid=2, tag=3}}.
 func encodeListResponse(procs []ProcInfo) []byte {

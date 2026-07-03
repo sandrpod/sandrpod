@@ -173,6 +173,32 @@ func (d e2bDeps) toolboxTarget(name, subpath string) (*tunnel.PoderTunnel, strin
 	return pt, "http://poder/toolbox/" + name + "/" + subpath, nil
 }
 
+// poderPodAction invokes a pod lifecycle action on the sandbox's poder
+// ("stop" = pause, "start" = resume). Only poder-backed sandboxes support it.
+func (d e2bDeps) poderPodAction(sb *podpkg.SandboxInfo, action string) error {
+	pt, ok := d.tunnelStore.Get(sb.PoderID)
+	if !ok {
+		return e2bcompat.NotFoundError{Msg: "poder offline"}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		"http://poder/sandboxes/"+sb.Name+"/"+action, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := pt.Client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("poder %s: %s", action, strings.TrimSpace(string(b)))
+	}
+	return nil
+}
+
 func (d e2bDeps) toolboxDo(name, method, subpath string, query url.Values, body io.Reader, contentType string) (*http.Response, error) {
 	t, target, err := d.toolboxTarget(name, subpath)
 	if err != nil {
@@ -357,11 +383,64 @@ func (b *e2bSandboxBackend) SetTimeout(ident, sandboxID string, seconds int32) b
 	return true
 }
 
-// Pause/Resume are not yet backed (SandrPod has no snapshot-pause); report
-// unsupported so the SDK surfaces a clear error rather than hanging.
-func (b *e2bSandboxBackend) PauseSandbox(ident, sandboxID string) bool { return false }
-func (b *e2bSandboxBackend) ResumeSandbox(ident, sandboxID string, _ int32) (e2bcompat.SandboxDetail, bool) {
-	return e2bcompat.SandboxDetail{}, false
+// PauseSandbox freezes the sandbox container (docker pause via the poder),
+// preserving its state. Direct-agent sandboxes (a user's own machine) can't be
+// paused. E2B's pause is a VM snapshot; SandrPod freezes in place, which keeps
+// the sandbox ID valid for a later resume/connect.
+func (b *e2bSandboxBackend) PauseSandbox(ident, sandboxID string) bool {
+	sb, ok := b.d.sandboxes.Get(sandboxID)
+	if !ok || !b.owns(ident, sb) || strings.HasPrefix(sb.ProxyURL, "direct://") {
+		return false
+	}
+	if err := b.d.poderPodAction(sb, "stop"); err != nil {
+		return false
+	}
+	b.d.sandboxes.Update(sandboxID, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopped })
+	return true
+}
+
+// ResumeSandbox unfreezes a paused sandbox and refreshes its idle timeout.
+func (b *e2bSandboxBackend) ResumeSandbox(ident, sandboxID string, seconds int32) (e2bcompat.SandboxDetail, bool) {
+	sb, ok := b.d.sandboxes.Get(sandboxID)
+	if !ok || !b.owns(ident, sb) || strings.HasPrefix(sb.ProxyURL, "direct://") {
+		return e2bcompat.SandboxDetail{}, false
+	}
+	if err := b.d.poderPodAction(sb, "start"); err != nil {
+		return e2bcompat.SandboxDetail{}, false
+	}
+	b.d.sandboxes.Update(sandboxID, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateRunning })
+	if seconds > 0 {
+		b.SetTimeout(ident, sandboxID, seconds)
+	}
+	sb, _ = b.d.sandboxes.Get(sandboxID)
+	return b.detailFromInfo(sb), true
+}
+
+// GetMetrics returns a single current resource sample for the sandbox, wrapped
+// in the E2B list shape.
+func (b *e2bSandboxBackend) GetMetrics(ident, sandboxID string) ([]e2bcompat.SandboxMetric, bool) {
+	sb, ok := b.d.sandboxes.Get(sandboxID)
+	if !ok || !b.owns(ident, sb) {
+		return nil, false
+	}
+	var m struct {
+		CPUCount   int     `json:"cpu_count"`
+		CPUUsedPct float64 `json:"cpu_used_pct"`
+		MemTotal   uint64  `json:"mem_total"`
+		MemUsed    uint64  `json:"mem_used"`
+		DiskTotal  uint64  `json:"disk_total"`
+		DiskUsed   uint64  `json:"disk_used"`
+	}
+	if err := b.d.toolboxJSON(sandboxID, http.MethodGet, "metrics", nil, nil, &m); err != nil {
+		return []e2bcompat.SandboxMetric{}, true // best-effort: empty on error
+	}
+	now := time.Now().UTC()
+	return []e2bcompat.SandboxMetric{{
+		CPUCount: m.CPUCount, CPUUsedPct: m.CPUUsedPct,
+		MemTotal: m.MemTotal, MemUsed: m.MemUsed,
+		DiskTotal: m.DiskTotal, DiskUsed: m.DiskUsed,
+		Timestamp: now.Format(time.RFC3339), TimestampUnix: now.Unix(),
+	}}, true
 }
 
 func (b *e2bSandboxBackend) owns(ident string, sb *podpkg.SandboxInfo) bool {
@@ -618,6 +697,60 @@ func (b *e2bEnvdBackend) ResizeProc(name string, pid uint32, rows, cols uint32) 
 func (b *e2bEnvdBackend) CloseProcStdin(name string, pid uint32) error {
 	return b.d.toolboxJSON(name, http.MethodPost, "procmgr/stdin-close", nil,
 		map[string]any{"pid": pid}, nil)
+}
+
+// ─── EnvdWatchBackend: directory watch (toolbox /watch/*) ──────────────────────
+
+// CreateWatcher starts watching a directory and returns a watcher id.
+func (b *e2bEnvdBackend) CreateWatcher(name, path string, recursive bool) (string, error) {
+	var res struct {
+		WatcherID string `json:"watcher_id"`
+	}
+	err := b.d.toolboxJSON(name, http.MethodPost, "watch/create", nil,
+		map[string]any{"path": path, "recursive": recursive}, &res)
+	return res.WatcherID, err
+}
+
+// GetWatcherEvents drains the events accrued for a watcher.
+func (b *e2bEnvdBackend) GetWatcherEvents(name, watcherID string) ([]e2bcompat.WatchEvent, error) {
+	var res struct {
+		Events []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		} `json:"events"`
+	}
+	if err := b.d.toolboxJSON(name, http.MethodGet, "watch/events",
+		url.Values{"id": {watcherID}}, nil, &res); err != nil {
+		return nil, err
+	}
+	out := make([]e2bcompat.WatchEvent, 0, len(res.Events))
+	for _, ev := range res.Events {
+		out = append(out, e2bcompat.WatchEvent{Name: ev.Name, Type: watchTypeToE2B(ev.Type)})
+	}
+	return out, nil
+}
+
+// RemoveWatcher stops a watcher.
+func (b *e2bEnvdBackend) RemoveWatcher(name, watcherID string) error {
+	return b.d.toolboxJSON(name, http.MethodPost, "watch/remove", nil,
+		map[string]any{"watcher_id": watcherID}, nil)
+}
+
+// watchTypeToE2B maps the toolbox event-type name to the E2B EventType enum name.
+func watchTypeToE2B(t string) string {
+	switch t {
+	case "create":
+		return "EVENT_TYPE_CREATE"
+	case "write":
+		return "EVENT_TYPE_WRITE"
+	case "remove":
+		return "EVENT_TYPE_REMOVE"
+	case "rename":
+		return "EVENT_TYPE_RENAME"
+	case "chmod":
+		return "EVENT_TYPE_CHMOD"
+	}
+	return "EVENT_TYPE_UNSPECIFIED"
 }
 
 // toolboxFileInfo mirrors pkg/toolbox FileInfo ({name,path,is_dir,size}).

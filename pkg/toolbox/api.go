@@ -101,6 +101,16 @@ type Server struct {
 	// (/procmgr/*: background commands, connect, stdin, signal, PTY).
 	procs     *ProcManager
 	procsOnce sync.Once
+
+	// watchers backs the E2B-compatible directory watch surface (/watch/*).
+	watchers     *WatchManager
+	watchersOnce sync.Once
+}
+
+// watchManager returns the lazily-initialized filesystem watch manager.
+func (s *Server) watchManager() *WatchManager {
+	s.watchersOnce.Do(func() { s.watchers = NewWatchManager() })
+	return s.watchers
 }
 
 // codeInterpreter returns the lazily-initialized kernel manager.
@@ -285,6 +295,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/procmgr/signal", a(s.procSignalHandler))
 	mux.HandleFunc("/procmgr/stdin-close", a(s.procStdinCloseHandler))
 	mux.HandleFunc("/procmgr/resize", a(s.procResizeHandler))
+
+	// Filesystem watch (E2B watch_dir) + resource metrics (E2B get_metrics).
+	mux.HandleFunc("/watch/create", a(s.watchCreateHandler))
+	mux.HandleFunc("/watch/events", a(s.watchEventsHandler))
+	mux.HandleFunc("/watch/remove", a(s.watchRemoveHandler))
+	mux.HandleFunc("/metrics", a(s.metricsHandler))
 
 	// Optional MCP bridge. The bridge owns "/mcp" and any "/mcp/..." subpath
 	// (manifest, tool calls). Mounted only when an MCP handler was installed

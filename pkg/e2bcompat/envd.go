@@ -130,6 +130,9 @@ func (e *envd) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/filesystem.Filesystem/Move", e.fsMove)
 	mux.HandleFunc("/filesystem.Filesystem/ListDir", e.fsListDir)
 	mux.HandleFunc("/filesystem.Filesystem/Remove", e.fsRemove)
+	mux.HandleFunc("/filesystem.Filesystem/CreateWatcher", e.fsCreateWatcher)
+	mux.HandleFunc("/filesystem.Filesystem/GetWatcherEvents", e.fsGetWatcherEvents)
+	mux.HandleFunc("/filesystem.Filesystem/RemoveWatcher", e.fsRemoveWatcher)
 	// Process service.
 	mux.HandleFunc("/process.Process/List", e.procList)
 	mux.HandleFunc("/process.Process/Start", e.procStart)

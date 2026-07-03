@@ -155,21 +155,24 @@ verification · ☐ not yet.
 | Control: create | `Sandbox.create` | ☑ | E2B schema, `X-API-KEY`, `e2b_<hex>` keys; maps to a local sandbox |
 | Control: get/list/kill | `getInfo`/`list`/`kill` | ☑ | owner-scoped; metadata round-trips via labels + filter |
 | Control: set timeout / refresh | `setTimeout` | ☑ | maps to per-sandbox `ttl_seconds` |
-| Control: pause/resume | `pause`/`resume` | ☐ | returns unsupported (SandrPod has no snapshot-pause yet) |
-| envd filesystem | `files.list/stat/makeDir/rename/remove` | ◐ | connect-JSON handlers + toolbox mapping; unit-tested with fakes |
-| envd file content | `files.read`/`write` | ◐ | plain-HTTP; toolbox download/upload mapping |
-| envd process | `commands.run` | ◐ | connect server-stream (start→data→end→eos); toolbox `execute` |
-| code interpreter | `runCode` | ◐ | **stateful** kernel verified with real python3; NDJSON stream; charts need jupyter in the image |
+| Control: pause/resume | `pause`/`resume`/`connect` | ☑ | freezes the container via the poder (docker pause); `connect` auto-resumes; verified live |
+| Control: metrics | `get_metrics` | ☑ | toolbox reads `/proc` (cpu/mem) + statfs (disk); verified live |
+| envd filesystem | `files.list/stat/makeDir/rename/remove` | ☑ | connect handlers + toolbox mapping; verified live |
+| envd file content | `files.read`/`write`/`write_files` | ☑ | plain-HTTP; batch multipart write; verified live |
+| envd watch | `files.watch_dir` | ☑ | fsnotify watcher, poll-based CreateWatcher/GetWatcherEvents/RemoveWatcher; verified live |
+| envd process | `commands.run` (fg+bg) / `list`/`kill`/`send_stdin`/`connect` | ☑ | full pid-addressed table; real streaming; verified live |
+| PTY | `pty.create/send_stdin/resize/kill` | ☑ | rides the Process service (pty flags); verified live |
+| code interpreter | `runCode` + contexts | ☑ | **stateful** kernel + create/list/restart/remove contexts; verified live; charts need jupyter in the image |
 | metadata | create/list `metadata` | ☑ | stored in labels, filterable |
-| PTY | `pty.*` | ☐ | envd PTY is bidirectional connect streaming — not yet |
-| env vars | `envVars` | ☐ | accepted on create; per-process injection not wired |
+| env vars | `envVars` | ◐ | accepted on create; per-process injection via the process table's `envs` |
 
 ### Verified against the REAL unmodified E2B SDK over HTTP + a real container (2026-07-03)
 
 Ran the official `e2b` **v2.30.0** and `e2b-code-interpreter` Python SDKs against
 a local SandrPod over plain HTTP — no TLS, no wildcard DNS — with a **real
-Docker toolbox container** behind a docker-run poder. **23/23 real-SDK
-operations pass end-to-end.**
+Docker toolbox container** behind a docker-run poder. The base surface is
+**23/23**; waves 1–3 (below) then closed the rest of the SDK — background
+commands, PTY, watch_dir, metrics, pause/resume — each verified the same way.
 
 Base SDK (`E2B_API_URL`+`E2B_SANDBOX_URL`=`http://host:3333`,
 `E2B_VALIDATE_API_KEY=false`) — **17/17**:
@@ -195,12 +198,33 @@ works under `E2B_DEBUG=true` at `localhost:49999`, so the debug listener binds
 single-sandbox resolver. E2B also splits sandbox IDs on `-`, so gateway-issued
 names contain none.
 
-Not yet covered (honest): background `commands.run(background=True)` (the
-StartProcess bridge is run-to-completion, not streaming); PTY; `pause`/`resume`
-(no snapshot-pause); multi-sandbox code-interpreter under `E2B_DEBUG` (that mode
-is single-sandbox by design — production uses host-based routing). A production
-vanity-domain drop-in still needs wildcard DNS + TLS; the hand-rolled
-binary-protobuf connect path exists but this SDK negotiated `connect+json`.
+#### Full SDK-surface sweep (waves 1–3, 2026-07-03)
+
+A follow-up pass closed the remaining gaps and verified each against the real
+container over HTTP:
+
+- **Wave 1** — `files.write_files` (batch multipart), `files.get_info`,
+  `commands.list`, code-interpreter contexts (`create/list/restart/remove`,
+  stateful: `z=7` then `z*6=42`, `NameError` after restart).
+- **Wave 2** — the full **Process service**: `commands.run(background=True)`
+  (real pid), `commands.list`/`kill`/`send_stdin`/`connect`, incremental
+  streaming (`on_stdout` gets 3 separate chunks), and **PTY**
+  (`pty.create/send_stdin/resize/kill` — a real terminal session with bracketed
+  paste + prompt). This also surfaced and fixed a **poder streaming bug**: the
+  `/toolbox/` proxy used a 30 s client timeout + non-flushing `io.Copy`, which
+  stalled every long-lived stream — now a no-timeout client + `flushingCopy`
+  (benefits all tunnel streaming, not just E2B).
+- **Wave 3** — `files.watch_dir` (fsnotify → CREATE/WRITE events), `get_metrics`
+  (real `/proc` cpu/mem + statfs disk), and `pause`/`resume` (poder docker
+  pause; `Sandbox.connect` auto-resumes and runs commands after).
+
+Still out of scope: multi-sandbox code-interpreter under `E2B_DEBUG` (that mode
+is single-sandbox by design — production uses host-based routing); a production
+vanity-domain drop-in still needs wildcard DNS + TLS. The hand-rolled
+binary-protobuf connect path exists (and now covers the Process/watch messages)
+but this SDK negotiated `connect+json`. E2B `pause` is a VM snapshot; SandrPod
+freezes in place — the sandbox ID stays valid for resume, which is what the SDK
+observes.
 
 ### What "◐ needs live verification" means honestly
 
