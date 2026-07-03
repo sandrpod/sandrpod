@@ -1444,7 +1444,14 @@ func main() {
 		Handler:           handler,
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
-		WriteTimeout:      120 * time.Second,
+		// No global write deadline: this server holds long-lived responses —
+		// tunnelled toolbox streams, PTY sessions, SSE, and the E2B drop-in's
+		// synchronous Sandbox.create() which blocks minutes while a cloud VM
+		// provisions. A 120s WriteTimeout silently truncated all of them (a
+		// cold GCP create → 502 at the reverse proxy). Per-request bounds come
+		// from ReadTimeout + each handler's own context (create uses a 20-min
+		// detached context; proxies set their own deadlines).
+		WriteTimeout: 0,
 	}
 
 	rootCtx, rootCancel := context.WithCancel(context.Background())
