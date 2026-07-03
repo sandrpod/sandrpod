@@ -180,6 +180,9 @@ const $ = (s) => document.querySelector(s);
 const listEl = $("#list"), statusEl = $("#status"), statsEl = $("#stats");
 let token = sessionStorage.getItem("sandrpod_token") || "";
 $("#token").value = token;
+// Per-sandbox stateful code-interpreter context, created lazily so variables
+// persist across "Code…" runs on the same card.
+const codeContexts = {};
 
 function headers(json) {
   const h = {};
@@ -225,6 +228,8 @@ function card(s) {
     </div>
     <div class="card-actions">
       <button class="ghost" data-act="exec" data-name="${esc(s.name)}">Run…</button>
+      <button class="ghost" data-act="code" data-name="${esc(s.name)}">Code…</button>
+      <button class="ghost" data-act="stats" data-name="${esc(s.name)}">Stats</button>
       <button class="ghost danger" data-act="delete" data-name="${esc(s.name)}">Delete</button>
     </div>
   </div>`;
@@ -263,6 +268,30 @@ listEl.addEventListener("click", async (e) => {
       const r = await api("POST", `/api/v1/sandboxes/execute?sandbox=${encodeURIComponent(name)}`,
         { language: "bash", code: cmd, timeout: 30 });
       alert(`exit ${r.exit_code}\n\n${r.output || "(no output)"}`);
+    } catch (err) { alert(err.message); }
+  } else if (btn.dataset.act === "code") {
+    const code = prompt(`Run code in a STATEFUL kernel on "${name}" (variables persist across runs):`, "x = 40; x + 2");
+    if (!code) return;
+    const tb = `/api/v1/sandboxes/${encodeURIComponent(name)}/toolbox`;
+    try {
+      if (!codeContexts[name]) {
+        const ctx = await api("POST", `${tb}/code-interpreter/contexts`, { language: "python", cwd: "" });
+        codeContexts[name] = ctx.id;
+      }
+      const r = await api("POST", `${tb}/code-interpreter/execute`, { code, context_id: codeContexts[name] });
+      const out = r.error ? `Error:\n${r.error}` : ([r.stdout, r.text].filter(Boolean).join("\n") || "(no output)");
+      alert(out);
+    } catch (err) {
+      delete codeContexts[name]; // context may be stale (e.g. sandbox recreated)
+      alert(err.message);
+    }
+  } else if (btn.dataset.act === "stats") {
+    try {
+      const m = await api("GET", `/api/v1/sandboxes/${encodeURIComponent(name)}/toolbox/metrics`);
+      const gib = (b) => (Number(b || 0) / 1073741824).toFixed(2) + " GiB";
+      alert(`CPU:    ${(m.cpu_used_pct || 0).toFixed(1)}% of ${m.cpu_count || 0} cores\n` +
+            `Memory: ${gib(m.mem_used)} / ${gib(m.mem_total)}\n` +
+            `Disk:   ${gib(m.disk_used)} / ${gib(m.disk_total)}`);
     } catch (err) { alert(err.message); }
   }
 });

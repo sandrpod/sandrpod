@@ -54,6 +54,40 @@ export interface ExecuteResult {
   truncated?: boolean;
 }
 
+/** Per-sandbox live resource usage (bytes for memory/disk). */
+export interface SandboxMetrics {
+  cpu_count: number;
+  cpu_used_pct: number;
+  mem_total: number;
+  mem_used: number;
+  disk_total: number;
+  disk_used: number;
+}
+
+/** A stateful code-interpreter context (isolated namespace). */
+export interface CodeContext {
+  id: string;
+  language: string;
+  cwd: string;
+}
+
+/** Result of a stateful runCode call. */
+export interface CodeResult {
+  stdout: string;
+  stderr: string;
+  /** Value of the final expression, if any. */
+  text: string;
+  /** Traceback if the cell raised. */
+  error: string;
+}
+
+/** One filesystem change from a directory watcher. */
+export interface WatchEvent {
+  name: string;
+  /** create | write | remove | rename | chmod */
+  type: string;
+}
+
 export interface ClientOptions {
   apiUrl?: string;
   token?: string;
@@ -199,6 +233,128 @@ export class SandrPodClient {
       { language: "bash", code: command, timeout: timeoutSec },
       timeoutSec * 1000 + 5_000,
     );
+  }
+
+  // ---- per-sandbox resource stats (toolbox /metrics) ----
+
+  /** Live CPU / memory / disk usage for one sandbox. */
+  async stats(name: string): Promise<SandboxMetrics> {
+    return this.request<SandboxMetrics>("GET", this.toolboxPath(name, "metrics"));
+  }
+
+  // ---- stateful code interpreter (toolbox /code-interpreter/*) ----
+
+  /**
+   * Run code in a stateful kernel. Variables persist across calls that share
+   * the same `contextId` (Jupyter-style), unlike {@link execute}.
+   */
+  async runCode(name: string, code: string, contextId?: string): Promise<CodeResult> {
+    const body: Record<string, unknown> = { code };
+    if (contextId) body.context_id = contextId;
+    return this.request<CodeResult>(
+      "POST",
+      this.toolboxPath(name, "code-interpreter/execute"),
+      body,
+    );
+  }
+
+  /** Create a new stateful context (isolated namespace). */
+  async createCodeContext(name: string, language = "python", cwd = ""): Promise<CodeContext> {
+    return this.request<CodeContext>(
+      "POST",
+      this.toolboxPath(name, "code-interpreter/contexts"),
+      { language, cwd },
+    );
+  }
+
+  /** List stateful contexts. */
+  async listCodeContexts(name: string): Promise<CodeContext[]> {
+    const r = await this.request<CodeContext[] | null>(
+      "GET",
+      this.toolboxPath(name, "code-interpreter/contexts"),
+    );
+    return r ?? [];
+  }
+
+  /** Restart a context's kernel (clears its variables, keeps the id). */
+  async restartCodeContext(name: string, contextId: string): Promise<void> {
+    await this.request<unknown>(
+      "POST",
+      this.toolboxPath(name, `code-interpreter/contexts/${encodeURIComponent(contextId)}/restart`),
+    );
+  }
+
+  /** Remove a context and its kernel. */
+  async removeCodeContext(name: string, contextId: string): Promise<void> {
+    await this.request<unknown>(
+      "DELETE",
+      this.toolboxPath(name, `code-interpreter/contexts/${encodeURIComponent(contextId)}`),
+    );
+  }
+
+  // ---- directory watch (toolbox /watch/*) ----
+
+  /** Start watching a directory; returns a handle to poll events and stop. */
+  async watchDir(name: string, path: string, recursive = false): Promise<WatchHandle> {
+    const r = await this.request<{ watcher_id: string }>(
+      "POST",
+      this.toolboxPath(name, "watch/create"),
+      { path, recursive },
+    );
+    return new WatchHandle(this, name, r.watcher_id);
+  }
+
+  /** @internal Used by {@link WatchHandle}. */
+  async _watchEvents(name: string, watcherId: string): Promise<WatchEvent[]> {
+    const r = await this.request<{ events: WatchEvent[] | null }>(
+      "GET",
+      this.toolboxPath(name, `watch/events?id=${encodeURIComponent(watcherId)}`),
+    );
+    return r.events ?? [];
+  }
+
+  /** @internal Used by {@link WatchHandle}. */
+  async _watchRemove(name: string, watcherId: string): Promise<void> {
+    await this.request<unknown>(
+      "POST",
+      this.toolboxPath(name, "watch/remove"),
+      { watcher_id: watcherId },
+    );
+  }
+
+  private toolboxPath(name: string, sub: string): string {
+    return `/api/v1/sandboxes/${encodeURIComponent(name)}/toolbox/${sub}`;
+  }
+}
+
+/**
+ * Poll handle for a directory watcher. Call {@link getNewEvents} to fetch the
+ * events accrued since the last call, and {@link stop} when done.
+ */
+export class WatchHandle {
+  private closed = false;
+
+  constructor(
+    private readonly client: SandrPodClient,
+    private readonly sandbox: string,
+    readonly watcherId: string,
+  ) {}
+
+  /** Events since the last call (`[{ name, type }]`). */
+  async getNewEvents(): Promise<WatchEvent[]> {
+    if (this.closed) return [];
+    return this.client._watchEvents(this.sandbox, this.watcherId);
+  }
+
+  /** Stop the watcher (idempotent). */
+  async stop(): Promise<void> {
+    if (this.closed) return;
+    this.closed = true;
+    try {
+      await this.client._watchRemove(this.sandbox, this.watcherId);
+    } catch {
+      /* best-effort */
+    }
   }
 }
 
