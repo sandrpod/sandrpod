@@ -404,3 +404,50 @@ func parseConnectFrames(t *testing.T, b []byte) []map[string]any {
 	}
 	return out
 }
+
+// ---- auth: code-interpreter debug relaxation ----
+
+// TestCodePathAuthRelaxation locks in the gateway rule that lets the E2B
+// code-interpreter (which talks to the local Jupyter kernel *without* any
+// X-API-KEY/token under E2B_DEBUG=true) reach the code handler in path/debug
+// mode, while every other path — and production domain mode — stays strict.
+func TestCodePathAuthRelaxation(t *testing.T) {
+	newGW := func(domain string) http.Handler {
+		return Handler(Config{
+			Domain:    domain,
+			Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+			Sandboxes: newFakeSandboxes(),
+			Envd:      newFakeEnvd(),
+			Code:      &fakeCode{},
+		})
+	}
+	post := func(h http.Handler, path, key string) int {
+		body, _ := json.Marshal(map[string]string{"code": "echo"})
+		req := httptest.NewRequest("POST", path, bytes.NewReader(body))
+		if key != "" {
+			req.Header.Set("X-API-KEY", key)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	debug := newGW("")
+	// Code path, no credential, debug mode → must NOT 401 (reaches handler).
+	if code := post(debug, "/execute", ""); code == http.StatusUnauthorized {
+		t.Errorf("/execute no-key (debug): want non-401, got 401")
+	}
+	// A *present but invalid* key is still rejected — the relaxation is only
+	// for the no-credential case the SDK actually produces.
+	if code := post(debug, "/execute", "not-an-e2b-key"); code != http.StatusUnauthorized {
+		t.Errorf("/execute bad key (debug): want 401, got %d", code)
+	}
+	// Non-code paths keep requiring auth.
+	if code := post(debug, "/sandboxes", ""); code != http.StatusUnauthorized {
+		t.Errorf("/sandboxes no-key (debug): want 401, got %d", code)
+	}
+	// Production domain mode never relaxes (the SDK sends the envd token there).
+	if code := post(newGW("app.example.com"), "/execute", ""); code != http.StatusUnauthorized {
+		t.Errorf("/execute no-key (domain): want 401, got %d", code)
+	}
+}

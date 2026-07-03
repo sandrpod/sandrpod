@@ -80,8 +80,19 @@ func Handler(cfg Config) http.Handler {
 		}
 		ident, ok := cfg.Auth(key)
 		if !ok {
-			writeErr(w, http.StatusUnauthorized, "unauthorized: missing or invalid API key")
-			return
+			// E2B's code-interpreter talks to the local Jupyter kernel
+			// unauthenticated under E2B_DEBUG=true — its /execute + /contexts
+			// calls carry no X-API-KEY/token at all. In path/debug mode (no
+			// vanity domain) tolerate that for those code paths so the debug
+			// port is usable against an auth-enabled server; the single-sandbox
+			// resolver still scopes execution. Domain (production) mode, where
+			// the SDK does send the envd token, stays strict.
+			codePath := r.URL.Path == "/execute" || strings.HasPrefix(r.URL.Path, "/contexts")
+			if cfg.Domain != "" || key != "" || !codePath {
+				writeErr(w, http.StatusUnauthorized, "unauthorized: missing or invalid API key")
+				return
+			}
+			ident = "" // anonymous; the resolver picks the sole sandbox
 		}
 		r = r.WithContext(context.WithValue(r.Context(), ctxIdent, ident))
 

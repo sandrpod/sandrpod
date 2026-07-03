@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -150,8 +151,26 @@ func (d e2bDeps) authenticator() e2bcompat.Authenticator {
 		if id, ok := resolveToken(d.cfg, key); ok {
 			return id.Name, true
 		}
-		return "", false
+		// Per-sandbox envd access tokens: the gateway mints these (envdToken)
+		// and stores them in a sandbox label. The SDK presents them for envd /
+		// code calls as Authorization: Bearer, so accept a key matching one and
+		// authenticate as the owning sandbox's identity. resolveToken only knows
+		// server tokens; without this, every envd op 401s once server auth is on
+		// (the local, auth-off harness never exercised this path).
+		return d.envdTokenIdentity(key)
 	}
+}
+
+// envdTokenIdentity reports the identity owning the sandbox whose envd access
+// token equals key. Constant-time compare avoids leaking the token via timing.
+func (d e2bDeps) envdTokenIdentity(key string) (string, bool) {
+	for _, sb := range d.sandboxes.List() {
+		tok := sb.Labels[e2bEnvdTokenLabel]
+		if tok != "" && subtle.ConstantTimeCompare([]byte(tok), []byte(key)) == 1 {
+			return sb.Owner, true
+		}
+	}
+	return "", false
 }
 
 // ─── toolbox call helper ──────────────────────────────────────────────────────
