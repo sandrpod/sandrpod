@@ -49,9 +49,11 @@ export interface Job {
 }
 
 export interface ExecuteResult {
-  output: string;
   exit_code: number;
-  truncated?: boolean;
+  stdout: string;
+  stderr: string;
+  started_at?: string;
+  ended_at?: string;
 }
 
 /** Per-sandbox live resource usage (bytes for memory/disk). */

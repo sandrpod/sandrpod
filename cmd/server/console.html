@@ -267,7 +267,8 @@ listEl.addEventListener("click", async (e) => {
     try {
       const r = await api("POST", `/api/v1/sandboxes/execute?sandbox=${encodeURIComponent(name)}`,
         { language: "bash", code: cmd, timeout: 30 });
-      alert(`exit ${r.exit_code}\n\n${r.output || "(no output)"}`);
+      const out = [r.stdout, r.stderr].filter(Boolean).join("\n") || "(no output)";
+      alert(`exit ${r.exit_code}\n\n${out}`);
     } catch (err) { alert(err.message); }
   } else if (btn.dataset.act === "code") {
     const code = prompt(`Run code in a STATEFUL kernel on "${name}" (variables persist across runs):`, "x = 40; x + 2");

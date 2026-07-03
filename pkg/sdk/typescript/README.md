@@ -29,7 +29,7 @@ const { sandbox } = await client.createSandbox(
 );
 
 const res = await client.execute(sandbox.name, "echo hello");
-console.log(res.output);
+console.log(res.stdout);
 
 // Stateful kernel — variables persist across runs in the same context.
 await client.runCode(sandbox.name, "x = 40", "ctx1");
