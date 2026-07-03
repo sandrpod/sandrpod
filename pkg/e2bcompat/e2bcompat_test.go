@@ -133,6 +133,15 @@ func (f *fakeCode) RunCode(_, ctx, code string) (CodeExecution, error) {
 	}
 }
 
+func (f *fakeCode) CreateContext(_, language, cwd string) (CodeContext, error) {
+	return CodeContext{ID: "ctx1", Language: language, Cwd: cwd}, nil
+}
+func (f *fakeCode) ListContexts(_ string) ([]CodeContext, error) {
+	return []CodeContext{{ID: "ctx1", Language: "python"}}, nil
+}
+func (f *fakeCode) RemoveContext(_, _ string) error  { return nil }
+func (f *fakeCode) RestartContext(_, _ string) error { return nil }
+
 func testGateway() http.Handler {
 	return Handler(Config{
 		Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },

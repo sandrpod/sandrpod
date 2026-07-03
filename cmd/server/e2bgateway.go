@@ -107,6 +107,27 @@ func (b *e2bCodeBackend) RunCode(name, contextID, code string) (e2bcompat.CodeEx
 	return e2bcompat.CodeExecution{Stdout: res.Stdout, Stderr: res.Stderr, Text: res.Text, Error: res.Error}, nil
 }
 
+func (b *e2bCodeBackend) CreateContext(name, language, cwd string) (e2bcompat.CodeContext, error) {
+	var ctx e2bcompat.CodeContext
+	err := b.d.toolboxJSON(name, http.MethodPost, "code-interpreter/contexts",
+		nil, map[string]string{"language": language, "cwd": cwd}, &ctx)
+	return ctx, err
+}
+
+func (b *e2bCodeBackend) ListContexts(name string) ([]e2bcompat.CodeContext, error) {
+	var out []e2bcompat.CodeContext
+	err := b.d.toolboxJSON(name, http.MethodGet, "code-interpreter/contexts", nil, nil, &out)
+	return out, err
+}
+
+func (b *e2bCodeBackend) RemoveContext(name, contextID string) error {
+	return b.d.toolboxJSON(name, http.MethodDelete, "code-interpreter/contexts/"+contextID, nil, nil, nil)
+}
+
+func (b *e2bCodeBackend) RestartContext(name, contextID string) error {
+	return b.d.toolboxJSON(name, http.MethodPost, "code-interpreter/contexts/"+contextID+"/restart", nil, nil, nil)
+}
+
 // authenticator maps a presented E2B key to a SandrPod identity. When auth is
 // disabled it accepts any e2b_<hex>-shaped key anonymously.
 func (d e2bDeps) authenticator() e2bcompat.Authenticator {

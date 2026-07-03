@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
@@ -349,13 +350,13 @@ func writeEnvelope(w http.ResponseWriter, flag byte, msg []byte) {
 
 func (e *envd) files(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
-	if path == "" {
-		http.Error(w, "path query param required", http.StatusBadRequest)
-		return
-	}
 	sandboxID := sandboxOf(r)
 	switch r.Method {
 	case http.MethodGet:
+		if path == "" {
+			http.Error(w, "path query param required", http.StatusBadRequest)
+			return
+		}
 		data, err := e.backend.ReadFile(sandboxID, path)
 		if err != nil {
 			writeConnectErr(w, err)
@@ -364,33 +365,55 @@ func (e *envd) files(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Write(data)
 	case http.MethodPost, http.MethodPut:
-		data, perr := readFileBody(r)
+		writes, perr := collectWrites(r, path)
 		if perr != nil {
 			writeConnectErrStatus(w, http.StatusBadRequest, "invalid_argument", perr.Error())
 			return
 		}
-		entry, err := e.backend.WriteFile(sandboxID, path, data)
-		if err != nil {
-			writeConnectErr(w, err)
-			return
+		out := make([]EntryInfo, 0, len(writes))
+		for _, wr := range writes {
+			entry, err := e.backend.WriteFile(sandboxID, wr.path, wr.data)
+			if err != nil {
+				writeConnectErr(w, err)
+				return
+			}
+			out = append(out, entry)
 		}
-		// E2B's write returns an array of written-file entries (a single write
-		// still yields a one-element array).
-		writeJSON(w, http.StatusOK, []EntryInfo{entry})
+		// E2B's write returns an array of written-file entries (one per file;
+		// a single write still yields a one-element array).
+		writeJSON(w, http.StatusOK, out)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
 }
 
-// readFileBody extracts the file content from an envd file-write request. E2B's
-// SDK uploads multipart/form-data (the file part); a raw body is also accepted.
-func readFileBody(r *http.Request) ([]byte, error) {
+type fileWrite struct {
+	path string
+	data []byte
+}
+
+// rawFilename extracts the full (un-based) filename param from a
+// Content-Disposition header, preserving any directory in the path.
+func rawFilename(cd string) string {
+	_, params, err := mime.ParseMediaType(cd)
+	if err != nil {
+		return ""
+	}
+	return params["filename"]
+}
+
+// collectWrites extracts one-or-more files to write from an envd file-write
+// request. E2B uploads multipart/form-data where each "file" part's FILENAME is
+// the destination path (batch write_files); a single write puts the path in the
+// query too. A raw (octet-stream) body writes the query path.
+func collectWrites(r *http.Request, queryPath string) ([]fileWrite, error) {
 	ct := r.Header.Get("Content-Type")
 	if strings.HasPrefix(ct, "multipart/") {
 		mr, err := r.MultipartReader()
 		if err != nil {
 			return nil, err
 		}
+		var out []fileWrite
 		for {
 			part, err := mr.NextPart()
 			if err == io.EOF {
@@ -399,14 +422,29 @@ func readFileBody(r *http.Request) ([]byte, error) {
 			if err != nil {
 				return nil, err
 			}
-			// The file content is the part with a filename (E2B uses "file").
-			if part.FileName() != "" || part.FormName() == "file" {
-				return io.ReadAll(part)
+			if part.FormName() != "file" {
+				continue
 			}
+			data, err := io.ReadAll(part)
+			if err != nil {
+				return nil, err
+			}
+			// Each part's filename is the FULL destination path. Parse it from
+			// Content-Disposition directly — part.FileName() runs filepath.Base
+			// and would drop the directory (/tmp/a.txt → a.txt).
+			p := rawFilename(part.Header.Get("Content-Disposition"))
+			if p == "" {
+				p = queryPath
+			}
+			out = append(out, fileWrite{path: p, data: data})
 		}
-		return nil, nil // no file part → empty write
+		return out, nil
 	}
-	return io.ReadAll(http.MaxBytesReader(nil, r.Body, 100<<20))
+	data, err := io.ReadAll(http.MaxBytesReader(nil, r.Body, 100<<20))
+	if err != nil {
+		return nil, err
+	}
+	return []fileWrite{{path: queryPath, data: data}}, nil
 }
 
 // ---- connect helpers ----

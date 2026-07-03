@@ -13,7 +13,9 @@ package toolbox
 
 import (
 	"bufio"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -77,11 +79,19 @@ type kernel struct {
 	stdout *bufio.Reader
 }
 
+// ContextInfo is an E2B code-interpreter context.
+type ContextInfo struct {
+	ID       string `json:"id"`
+	Language string `json:"language"`
+	Cwd      string `json:"cwd"`
+}
+
 // KernelManager owns per-context kernels.
 type KernelManager struct {
-	mu      sync.Mutex
-	kernels map[string]*kernel
-	python  string // python3 executable
+	mu       sync.Mutex
+	kernels  map[string]*kernel
+	contexts map[string]ContextInfo
+	python   string // python3 executable
 }
 
 // NewKernelManager returns a manager using the given python3 executable
@@ -90,7 +100,47 @@ func NewKernelManager(python string) *KernelManager {
 	if python == "" {
 		python = "python3"
 	}
-	return &KernelManager{kernels: map[string]*kernel{}, python: python}
+	return &KernelManager{kernels: map[string]*kernel{}, contexts: map[string]ContextInfo{}, python: python}
+}
+
+// CreateContext registers a new context and returns its id. The kernel starts
+// lazily on the first Execute.
+func (m *KernelManager) CreateContext(language, cwd string) ContextInfo {
+	if language == "" {
+		language = "python"
+	}
+	b := make([]byte, 8)
+	_, _ = rand.Read(b)
+	ci := ContextInfo{ID: hex.EncodeToString(b), Language: language, Cwd: cwd}
+	m.mu.Lock()
+	m.contexts[ci.ID] = ci
+	m.mu.Unlock()
+	return ci
+}
+
+// ListContexts returns the registered contexts.
+func (m *KernelManager) ListContexts() []ContextInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]ContextInfo, 0, len(m.contexts))
+	for _, ci := range m.contexts {
+		out = append(out, ci)
+	}
+	return out
+}
+
+// Restart tears down a context's kernel but keeps the context registered; the
+// next Execute starts a fresh kernel (clean namespace).
+func (m *KernelManager) Restart(contextID string) {
+	m.mu.Lock()
+	k, ok := m.kernels[contextID]
+	delete(m.kernels, contextID)
+	m.mu.Unlock()
+	if ok {
+		_ = k.stdin.Close()
+		_ = k.cmd.Process.Kill()
+		_ = k.cmd.Wait()
+	}
 }
 
 func (m *KernelManager) get(contextID string) (*kernel, error) {
@@ -140,11 +190,12 @@ func (m *KernelManager) Execute(contextID, code string) (CodeResult, error) {
 	return res, nil
 }
 
-// Close tears down a context's kernel (idempotent).
+// Close tears down a context's kernel and unregisters it (idempotent).
 func (m *KernelManager) Close(contextID string) {
 	m.mu.Lock()
 	k, ok := m.kernels[contextID]
 	delete(m.kernels, contextID)
+	delete(m.contexts, contextID)
 	m.mu.Unlock()
 	if ok {
 		_ = k.stdin.Close()

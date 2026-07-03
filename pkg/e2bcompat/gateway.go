@@ -111,13 +111,13 @@ func Handler(cfg Config) http.Handler {
 		}
 
 		isEnvd := isEnvdPath(r.URL.Path)
-		isExec := r.URL.Path == "/execute"
-		if isEnvd || isExec {
+		isCodePath := r.URL.Path == "/execute" || strings.HasPrefix(r.URL.Path, "/contexts")
+		if isEnvd || isCodePath {
 			if sandbox == "" && cfg.SandboxResolver != nil {
 				sandbox = cfg.SandboxResolver(ident)
 			}
 			r = r.WithContext(context.WithValue(r.Context(), ctxSandbox, sandbox))
-			if isCode || isExec {
+			if isCode || isCodePath {
 				ciMux.ServeHTTP(w, r)
 				return
 			}

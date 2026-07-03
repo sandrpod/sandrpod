@@ -132,6 +132,42 @@ func (s *Server) codeInterpreterHandler(w http.ResponseWriter, r *http.Request) 
 	_ = json.NewEncoder(w).Encode(res)
 }
 
+// codeContextsHandler: POST creates a context, GET lists them.
+func (s *Server) codeContextsHandler(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodPost:
+		var req struct {
+			Language string `json:"language"`
+			Cwd      string `json:"cwd"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		ci := s.codeInterpreter().CreateContext(req.Language, req.Cwd)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ci)
+	case http.MethodGet:
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(s.codeInterpreter().ListContexts())
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// codeContextByIDHandler: DELETE /contexts/{id} removes; POST /contexts/{id}/restart restarts.
+func (s *Server) codeContextByIDHandler(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, "/code-interpreter/contexts/")
+	id, action, _ := strings.Cut(rest, "/")
+	switch {
+	case action == "restart" && r.Method == http.MethodPost:
+		s.codeInterpreter().Restart(id)
+		w.WriteHeader(http.StatusNoContent)
+	case action == "" && r.Method == http.MethodDelete:
+		s.codeInterpreter().Close(id)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
 // SetMCPHandler installs the optional MCP bridge handler mounted at /mcp.
 // Call before Start(); calling after the mux is built has no effect on the
 // already-served handler.
@@ -217,8 +253,10 @@ func (s *Server) Handler() http.Handler {
 	// Port preview proxy (web services started inside the sandbox)
 	mux.HandleFunc("/proxy/", a(s.proxyPortHandler))
 
-	// E2B-compatible stateful code interpreter (run_code)
+	// E2B-compatible stateful code interpreter (run_code + contexts)
 	mux.HandleFunc("/code-interpreter/execute", a(s.codeInterpreterHandler))
+	mux.HandleFunc("/code-interpreter/contexts", a(s.codeContextsHandler))
+	mux.HandleFunc("/code-interpreter/contexts/", a(s.codeContextByIDHandler))
 
 	// PTY routes
 	mux.HandleFunc("/pty/create", a(s.ptyCreateHandler))
