@@ -1388,6 +1388,22 @@ func main() {
 	}
 	handler := buildMux(cfg, stores, tunnelStore, directStore)
 
+	// E2B-compatible gateway (opt-in): serve the unmodified E2B SDK at
+	// api.<domain> + <port>-<sandboxID>.<domain>. See docs/E2B_COMPAT.md.
+	if dom := os.Getenv("SANDRPOD_E2B_DOMAIN"); dom != "" {
+		gw := newE2BGateway(dom, e2bDeps{
+			cfg:         cfg,
+			scheduler:   podpkg.NewScheduler(stores.Poders, cfg.APIURL, cfg.Token),
+			sandboxes:   stores.Sandboxes,
+			poders:      stores.Poders,
+			jobs:        stores.Jobs,
+			tunnelStore: tunnelStore,
+			directStore: directStore,
+		})
+		handler = e2bHostRouter(dom, gw, handler)
+		log.Printf("E2B-compatible gateway enabled: api.%s (control plane) + <port>-<id>.%s (envd)", dom, dom)
+	}
+
 	// Start the HTTP server
 	addr := fmt.Sprintf(":%d", *port)
 	server := &http.Server{
