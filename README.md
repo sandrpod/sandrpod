@@ -234,6 +234,16 @@ with client.sandbox("temp-sb") as sb:
     result = agent.invoke({"messages": [...]})
 ```
 
+The backend also exposes richer per-sandbox capabilities directly:
+
+```python
+sb.run_code("x = 40", context="ctx1")          # stateful Jupyter-style kernel
+sb.run_code("x + 2", context="ctx1")["text"]   # → "42" (x persisted)
+sb.metrics()                                    # {cpu_count, cpu_used_pct, mem_*, disk_*}
+with sb.watch_dir("/workspace") as w:           # filesystem watch
+    events = w.get_new_events()
+```
+
 See [`pkg/sdk/python/langchain_sandrpod/examples/`](pkg/sdk/python/langchain_sandrpod/examples/) for full examples.
 
 ---
@@ -248,8 +258,12 @@ sandrpod-cli set-api-url http://localhost:8080
 sandrpod-cli list
 sandrpod-cli create my-sandbox --provider local --image sandrpod/toolbox:latest
 sandrpod-cli create gpu-box --provider gcp --region asia-east1-a --instance-type e2-medium
-sandrpod-cli execute my-sandbox "ls /workspace"
-sandrpod-cli shell my-sandbox          # interactive PTY
+sandrpod-cli execute my-sandbox "ls /workspace"     # one-shot (stateless)
+sandrpod-cli stream my-sandbox "make build"         # real-time streamed output
+sandrpod-cli run my-sandbox "z = 10" --context c1   # stateful kernel — z persists in context c1
+sandrpod-cli stats my-sandbox                       # live CPU / memory / disk
+sandrpod-cli fs watch my-sandbox /workspace         # print filesystem events
+sandrpod-cli shell my-sandbox                       # interactive PTY
 sandrpod-cli delete my-sandbox
 
 # Poder management

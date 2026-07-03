@@ -745,3 +745,140 @@ class SandrPodSandbox(BaseSandbox):
             {"path": fp} for fp in (data.get("files") or [])
         ]
         return GlobResult(matches=matches)
+
+    # ------------------------------------------------------------------
+    # Per-sandbox resource stats (toolbox /metrics)
+    # ------------------------------------------------------------------
+    def metrics(self) -> dict:
+        """返回该沙箱实时的 CPU/内存/磁盘用量
+
+        {cpu_count, cpu_used_pct, mem_total, mem_used, disk_total, disk_used}。
+        """
+        resp = self._http.get(self._toolbox_url("metrics"), timeout=self._FILE_HTTP_TIMEOUT)
+        resp.raise_for_status()
+        return resp.json() or {}
+
+    # ------------------------------------------------------------------
+    # Stateful code interpreter (toolbox /code-interpreter/*)
+    # ------------------------------------------------------------------
+    def run_code(
+        self,
+        code: str,
+        *,
+        context: str | None = None,
+        timeout: int | None = None,
+    ) -> dict:
+        """在**有状态**内核里执行代码；同一 context 内变量跨调用保留。
+
+        返回 ``{"stdout", "stderr", "text", "error"}``。与 :meth:`execute`
+        （每次全新进程、无状态）不同，run_code 走持久 Python 内核（Jupyter
+        式）：先 ``x = 1``，之后再调用 ``x + 1`` 能读到 ``x``。
+        """
+        eff = timeout if timeout is not None else self._default_timeout
+        body: dict = {"code": code}
+        if context:
+            body["context_id"] = context
+        resp = self._http.post(
+            self._toolbox_url("code-interpreter/execute"),
+            json=body,
+            timeout=eff + self._HTTP_BUFFER_SECS,
+        )
+        resp.raise_for_status()
+        return resp.json() or {}
+
+    def create_code_context(self, *, language: str = "python", cwd: str = "") -> dict:
+        """创建一个新的有状态上下文（独立命名空间）；返回 {id, language, cwd}。"""
+        resp = self._http.post(
+            self._toolbox_url("code-interpreter/contexts"),
+            json={"language": language, "cwd": cwd},
+            timeout=self._FILE_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json() or {}
+
+    def list_code_contexts(self) -> list[dict]:
+        """列出所有有状态上下文。"""
+        resp = self._http.get(
+            self._toolbox_url("code-interpreter/contexts"),
+            timeout=self._FILE_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json() or []
+
+    def restart_code_context(self, context_id: str) -> None:
+        """重启上下文的内核（清空其命名空间，保留 id）。"""
+        resp = self._http.post(
+            self._toolbox_url(f"code-interpreter/contexts/{context_id}/restart"),
+            timeout=self._FILE_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+
+    def remove_code_context(self, context_id: str) -> None:
+        """销毁一个上下文及其内核。"""
+        resp = self._http.delete(
+            self._toolbox_url(f"code-interpreter/contexts/{context_id}"),
+            timeout=self._FILE_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+
+    # ------------------------------------------------------------------
+    # Directory watch (toolbox /watch/*)
+    # ------------------------------------------------------------------
+    def watch_dir(self, path: str, *, recursive: bool = False) -> "WatchHandle":
+        """监视目录，返回一个句柄：``get_new_events()`` 轮询增量事件，``stop()`` 结束。
+
+        也可当上下文管理器用：``with sb.watch_dir("/x") as w: ...``。
+        """
+        resp = self._http.post(
+            self._toolbox_url("watch/create"),
+            json={"path": path, "recursive": recursive},
+            timeout=self._FILE_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        watcher_id = (resp.json() or {}).get("watcher_id", "")
+        return WatchHandle(self, watcher_id)
+
+
+class WatchHandle:
+    """目录 watcher 的轮询句柄。
+
+    ``get_new_events()`` 返回自上次调用以来累积的文件系统事件；``stop()``
+    结束监视。支持上下文管理器协议（退出时自动 stop）。
+    """
+
+    def __init__(self, sandbox: "SandrPodSandbox", watcher_id: str) -> None:
+        self._sandbox = sandbox
+        self._watcher_id = watcher_id
+        self._closed = False
+
+    def get_new_events(self) -> list[dict]:
+        """返回自上次调用以来累积的事件 ``[{"name", "type"}]``。"""
+        if self._closed:
+            return []
+        resp = self._sandbox._http.get(
+            self._sandbox._toolbox_url("watch/events"),
+            params={"id": self._watcher_id},
+            timeout=self._sandbox._FILE_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return (resp.json() or {}).get("events", []) or []
+
+    def stop(self) -> None:
+        """停止 watcher（幂等）。"""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._sandbox._http.post(
+                self._sandbox._toolbox_url("watch/remove"),
+                json={"watcher_id": self._watcher_id},
+                timeout=self._sandbox._FILE_HTTP_TIMEOUT,
+            )
+        except Exception:
+            pass
+
+    def __enter__(self) -> "WatchHandle":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.stop()

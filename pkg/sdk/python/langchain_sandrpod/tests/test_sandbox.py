@@ -299,3 +299,78 @@ def test_no_auth_header_when_no_token(monkeypatch):
     sb.execute("echo ok")
 
     assert "authorization" not in route.calls.last.request.headers
+
+
+# ------------------------------------------------------------------ #
+# metrics / run_code / contexts / watch  (promoted from E2B compat)    #
+# ------------------------------------------------------------------ #
+
+TB = f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/toolbox"
+
+
+@respx.mock
+def test_metrics_returns_usage():
+    respx.get(f"{TB}/metrics").mock(
+        return_value=httpx.Response(200, json={"cpu_count": 4, "cpu_used_pct": 1.5,
+                                               "mem_total": 100, "mem_used": 10,
+                                               "disk_total": 200, "disk_used": 20})
+    )
+    m = _make_sandbox().metrics()
+    assert m["cpu_count"] == 4 and m["mem_used"] == 10
+
+
+@respx.mock
+def test_run_code_sends_context_and_returns_result():
+    route = respx.post(f"{TB}/code-interpreter/execute").mock(
+        return_value=httpx.Response(200, json={"stdout": "", "stderr": "", "text": "42", "error": ""})
+    )
+    res = _make_sandbox().run_code("a * 6", context="ctx1")
+    assert res["text"] == "42"
+    assert json.loads(route.calls[0].request.content) == {"code": "a * 6", "context_id": "ctx1"}
+
+
+@respx.mock
+def test_run_code_omits_context_when_none():
+    route = respx.post(f"{TB}/code-interpreter/execute").mock(
+        return_value=httpx.Response(200, json={"text": "1"})
+    )
+    _make_sandbox().run_code("1")
+    assert json.loads(route.calls[0].request.content) == {"code": "1"}
+
+
+@respx.mock
+def test_code_context_lifecycle():
+    respx.post(f"{TB}/code-interpreter/contexts").mock(
+        return_value=httpx.Response(200, json={"id": "c1", "language": "python", "cwd": ""})
+    )
+    respx.get(f"{TB}/code-interpreter/contexts").mock(
+        return_value=httpx.Response(200, json=[{"id": "c1", "language": "python", "cwd": ""}])
+    )
+    restart = respx.post(f"{TB}/code-interpreter/contexts/c1/restart").mock(
+        return_value=httpx.Response(204)
+    )
+    remove = respx.delete(f"{TB}/code-interpreter/contexts/c1").mock(
+        return_value=httpx.Response(204)
+    )
+    sb = _make_sandbox()
+    assert sb.create_code_context()["id"] == "c1"
+    assert [c["id"] for c in sb.list_code_contexts()] == ["c1"]
+    sb.restart_code_context("c1")
+    sb.remove_code_context("c1")
+    assert restart.called and remove.called
+
+
+@respx.mock
+def test_watch_dir_handle():
+    respx.post(f"{TB}/watch/create").mock(
+        return_value=httpx.Response(200, json={"watcher_id": "w1"})
+    )
+    respx.get(f"{TB}/watch/events").mock(
+        return_value=httpx.Response(200, json={"events": [{"name": "a.txt", "type": "create"}]})
+    )
+    removed = respx.post(f"{TB}/watch/remove").mock(return_value=httpx.Response(204))
+    sb = _make_sandbox()
+    with sb.watch_dir("/tmp") as h:
+        events = h.get_new_events()
+    assert events == [{"name": "a.txt", "type": "create"}]
+    assert removed.called  # context manager stopped it

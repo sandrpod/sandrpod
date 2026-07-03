@@ -186,11 +186,22 @@ sandrpod-cli create <name> --ttl 3600 --cpu 2 --memory 2048  # 闲置 TTL(秒) +
 sandrpod-cli create <name> --no-wait                   # 异步：立即返回 job id，不等 RUNNING
 sandrpod-cli start/stop/delete <name>
 sandrpod-cli logs <name> [--tail N]
-sandrpod-cli execute <name> "ls /workspace"            # 一次性执行
-sandrpod-cli stream <name> "for i in 1 2 3; do echo $i; sleep 1; done"  # 流式输出
+sandrpod-cli execute <name> "ls /workspace"            # 一次性执行（无状态）
+sandrpod-cli stream <name> "for i in 1 2 3; do echo $i; sleep 1; done"  # 流式输出（实时）
 sandrpod-cli shell <name>                              # 交互式 PTY（需 websocket-client；Ctrl-] 退出）
 sandrpod-cli preview <name> <port> [path]              # 访问沙箱内 localhost:<port> 的 web 服务
 sandrpod-cli snapshot <name> [--image repo:tag]        # docker commit 成镜像
+
+# 有状态代码解释器（Jupyter 式，变量跨调用保留）
+sandrpod-cli run <name> "z = 10" --context <ctx-id>    # 在有状态内核里执行；同 context 内 z 保留
+sandrpod-cli context create <name>                     # 新建上下文（独立命名空间），打印 id
+sandrpod-cli context list <name>                       # 列出上下文
+sandrpod-cli context restart <name> <ctx-id>           # 重启内核（清空命名空间，保留 id）
+sandrpod-cli context rm <name> <ctx-id>                # 销毁上下文
+
+# 目录监视 + 每沙箱资源
+sandrpod-cli fs watch <name> <path> [--recursive]      # 监视目录，实时打印 create/write/remove 等事件
+sandrpod-cli stats <name>                              # 单沙箱 CPU/内存/磁盘用量（区别于下面服务端 metrics）
 
 # Job（异步创建）
 sandrpod-cli job get <job-id>                          # 查 async 创建的 job 状态/错误/结果

@@ -502,6 +502,126 @@ def snapshot(ctx, name, image):
         sys.exit(1)
 
 
+# ========== Observability & Code Interpreter ==========
+
+@cli.command()
+@click.argument("name")
+@click.pass_context
+def stats(ctx, name):
+    """Show a sandbox's live CPU / memory / disk usage (per-sandbox, not server metrics)."""
+    client = ctx.obj["client"]
+    try:
+        m = client.get_sandbox_stats(name)
+
+        def gib(b):
+            return f"{(b or 0) / 1024 / 1024 / 1024:.2f} GiB"
+
+        click.echo(f"CPU:    {m.get('cpu_used_pct', 0):.1f}% of {m.get('cpu_count', 0)} cores")
+        click.echo(f"Memory: {gib(m.get('mem_used'))} / {gib(m.get('mem_total'))}")
+        click.echo(f"Disk:   {gib(m.get('disk_used'))} / {gib(m.get('disk_total'))}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("name")
+@click.argument("code")
+@click.option("--context", "context_id", default="",
+              help="Stateful context id; variables persist across runs within it")
+@click.pass_context
+def run(ctx, name, code, context_id):
+    """Run code in a STATEFUL kernel (state persists across runs in the same --context)."""
+    client = ctx.obj["client"]
+    try:
+        res = client.run_code(name, code, context_id)
+        if res.get("stdout"):
+            click.echo(res["stdout"], nl=False)
+        if res.get("stderr"):
+            click.echo(res["stderr"], nl=False, err=True)
+        if res.get("error"):
+            click.echo(res["error"], err=True)
+            sys.exit(1)
+        elif res.get("text"):
+            click.echo(res["text"])
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@click.group(name="context")
+@click.pass_context
+def code_context_group(ctx):
+    """Manage stateful code-interpreter contexts (isolated namespaces for `run`)."""
+    pass
+
+
+@code_context_group.command(name="create")
+@click.argument("name")
+@click.option("--language", default="python")
+@click.option("--cwd", default="")
+@click.pass_context
+def context_create(ctx, name, language, cwd):
+    """Create a new stateful context; prints its id."""
+    client = ctx.parent.parent.obj["client"]
+    try:
+        click.echo(client.create_code_context(name, language, cwd).get("id", ""))
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@code_context_group.command(name="list")
+@click.argument("name")
+@click.pass_context
+def context_list(ctx, name):
+    """List stateful contexts."""
+    client = ctx.parent.parent.obj["client"]
+    try:
+        ctxs = client.list_code_contexts(name)
+        if not ctxs:
+            click.echo("(none)")
+            return
+        for c in ctxs:
+            click.echo(f"{c.get('id', ''):16}  {c.get('language', '')}  {c.get('cwd', '')}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@code_context_group.command(name="restart")
+@click.argument("name")
+@click.argument("context_id")
+@click.pass_context
+def context_restart(ctx, name, context_id):
+    """Restart a context's kernel (clears its variables, keeps the id)."""
+    client = ctx.parent.parent.obj["client"]
+    try:
+        client.restart_code_context(name, context_id)
+        click.echo("restarted")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@code_context_group.command(name="rm")
+@click.argument("name")
+@click.argument("context_id")
+@click.pass_context
+def context_rm(ctx, name, context_id):
+    """Remove a context and its kernel."""
+    client = ctx.parent.parent.obj["client"]
+    try:
+        client.remove_code_context(name, context_id)
+        click.echo("removed")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+cli.add_command(code_context_group)
+
+
 # ========== File Commands ==========
 
 @click.group(name="fs")
@@ -742,6 +862,38 @@ def fs_download(ctx, name, remote_path, local_path):
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+
+@fs_group.command(name="watch")
+@click.argument("name")
+@click.argument("path")
+@click.option("--recursive", is_flag=True, help="Watch subdirectories too")
+@click.option("--interval", default=1.0, help="Poll interval in seconds")
+@click.pass_context
+def fs_watch(ctx, name, path, recursive, interval):
+    """Watch a directory and print filesystem events until Ctrl-C."""
+    import time
+
+    client = ctx.parent.parent.obj["client"]
+    watcher_id = ""
+    try:
+        watcher_id = client.watch_create(name, path, recursive)
+        click.echo(f"Watching {path} (Ctrl-C to stop)...")
+        while True:
+            for ev in client.watch_events(name, watcher_id):
+                click.echo(f"{ev.get('type', '?'):8} {ev.get('name', '')}")
+            time.sleep(interval)
+    except KeyboardInterrupt:
+        click.echo("\nStopped.")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    finally:
+        if watcher_id:
+            try:
+                client.watch_remove(name, watcher_id)
+            except Exception:
+                pass
 
 
 # Register file group

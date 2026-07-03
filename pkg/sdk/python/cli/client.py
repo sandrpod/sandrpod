@@ -369,6 +369,63 @@ class CLIClient:
         resp = self._request("GET", f"/api/v1/sandboxes/{name}/toolbox/files/info", params={"path": path})
         return resp.json()
 
+    # ---- per-sandbox resource stats (toolbox /metrics) ----
+    def get_sandbox_stats(self, name: str) -> Dict[str, Any]:
+        """单个沙箱的 CPU/内存/磁盘用量（区别于服务端 Prometheus metrics）。"""
+        resp = self._request("GET", f"/api/v1/sandboxes/{name}/toolbox/metrics")
+        return resp.json()
+
+    # ---- stateful code interpreter (toolbox /code-interpreter/*) ----
+    def run_code(self, name: str, code: str, context_id: str = "") -> Dict[str, Any]:
+        """在有状态内核里执行代码；同一 context 内变量跨调用保留。返回 {stdout,stderr,text,error}。"""
+        body: Dict[str, Any] = {"code": code}
+        if context_id:
+            body["context_id"] = context_id
+        resp = self._request(
+            "POST", f"/api/v1/sandboxes/{name}/toolbox/code-interpreter/execute", json=body)
+        return resp.json()
+
+    def create_code_context(self, name: str, language: str = "python", cwd: str = "") -> Dict[str, Any]:
+        """创建一个新的有状态执行上下文（独立命名空间）。返回 {id,language,cwd}。"""
+        resp = self._request(
+            "POST", f"/api/v1/sandboxes/{name}/toolbox/code-interpreter/contexts",
+            json={"language": language, "cwd": cwd})
+        return resp.json()
+
+    def list_code_contexts(self, name: str) -> list:
+        """列出所有有状态执行上下文。"""
+        resp = self._request("GET", f"/api/v1/sandboxes/{name}/toolbox/code-interpreter/contexts")
+        return resp.json() or []
+
+    def restart_code_context(self, name: str, context_id: str) -> None:
+        """重启上下文的内核（清空其命名空间，保留 id）。"""
+        self._request(
+            "POST", f"/api/v1/sandboxes/{name}/toolbox/code-interpreter/contexts/{context_id}/restart")
+
+    def remove_code_context(self, name: str, context_id: str) -> None:
+        """销毁一个上下文及其内核。"""
+        self._request(
+            "DELETE", f"/api/v1/sandboxes/{name}/toolbox/code-interpreter/contexts/{context_id}")
+
+    # ---- directory watch (toolbox /watch/*) ----
+    def watch_create(self, name: str, path: str, recursive: bool = False) -> str:
+        """开始监视目录，返回 watcher_id。"""
+        resp = self._request(
+            "POST", f"/api/v1/sandboxes/{name}/toolbox/watch/create",
+            json={"path": path, "recursive": recursive})
+        return resp.json().get("watcher_id", "")
+
+    def watch_events(self, name: str, watcher_id: str) -> list:
+        """拉取自上次调用以来累积的文件系统事件 [{name,type}]。"""
+        resp = self._request(
+            "GET", f"/api/v1/sandboxes/{name}/toolbox/watch/events", params={"id": watcher_id})
+        return resp.json().get("events", []) or []
+
+    def watch_remove(self, name: str, watcher_id: str) -> None:
+        """停止一个 watcher。"""
+        self._request(
+            "POST", f"/api/v1/sandboxes/{name}/toolbox/watch/remove", json={"watcher_id": watcher_id})
+
     def delete_file(self, name: str, path: str) -> Dict[str, Any]:
         """删除文件/目录"""
         resp = self._request("DELETE", f"/api/v1/sandboxes/{name}/toolbox/files/delete", params={"path": path})

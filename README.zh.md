@@ -223,6 +223,16 @@ with client.sandbox("temp-sb") as sb:
     result = agent.invoke({"messages": [...]})
 ```
 
+backend 还直接暴露了更丰富的每沙箱能力：
+
+```python
+sb.run_code("x = 40", context="ctx1")          # 有状态 Jupyter 式内核
+sb.run_code("x + 2", context="ctx1")["text"]   # → "42"（x 已保留）
+sb.metrics()                                    # {cpu_count, cpu_used_pct, mem_*, disk_*}
+with sb.watch_dir("/workspace") as w:           # 文件系统监视
+    events = w.get_new_events()
+```
+
 更多示例见 [`pkg/sdk/python/langchain_sandrpod/examples/`](pkg/sdk/python/langchain_sandrpod/examples/)。
 
 ---
@@ -237,8 +247,12 @@ sandrpod-cli set-api-url http://localhost:8080
 sandrpod-cli list
 sandrpod-cli create my-sandbox --provider local --image sandrpod/toolbox:latest
 sandrpod-cli create gpu-box --provider gcp --region asia-east1-a --instance-type e2-medium
-sandrpod-cli execute my-sandbox "ls /workspace"
-sandrpod-cli shell my-sandbox          # 交互式 PTY
+sandrpod-cli execute my-sandbox "ls /workspace"     # 一次性（无状态）
+sandrpod-cli stream my-sandbox "make build"         # 实时流式输出
+sandrpod-cli run my-sandbox "z = 10" --context c1   # 有状态内核 —— z 在 context c1 内保留
+sandrpod-cli stats my-sandbox                       # 实时 CPU / 内存 / 磁盘
+sandrpod-cli fs watch my-sandbox /workspace         # 打印文件系统事件
+sandrpod-cli shell my-sandbox                       # 交互式 PTY
 sandrpod-cli delete my-sandbox
 
 # Poder 管理

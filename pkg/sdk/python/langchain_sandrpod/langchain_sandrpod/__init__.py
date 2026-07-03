@@ -16,7 +16,7 @@
 """
 
 from langchain_sandrpod.client import SandrPodClient
-from langchain_sandrpod.sandbox import SandrPodSandbox
+from langchain_sandrpod.sandbox import SandrPodSandbox, WatchHandle
 
-__all__ = ["SandrPodClient", "SandrPodSandbox"]
+__all__ = ["SandrPodClient", "SandrPodSandbox", "WatchHandle"]
 __version__ = "0.1.0"
