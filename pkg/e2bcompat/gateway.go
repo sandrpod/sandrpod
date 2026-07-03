@@ -14,6 +14,7 @@ import (
 	"context"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -38,6 +39,10 @@ type Config struct {
 	Auth      Authenticator
 	Sandboxes SandboxBackend
 	Envd      EnvdBackend
+	// Code, when set, backs the code-interpreter run_code surface reached at
+	// <CodePort>-<sandboxID>.<domain>/execute. CodePort defaults to 49999.
+	Code     CodeInterpreter
+	CodePort int
 }
 
 // Handler builds the E2B-compatible gateway.
@@ -49,6 +54,15 @@ func Handler(cfg Config) http.Handler {
 	cp.routes(cpMux)
 	edMux := http.NewServeMux()
 	ed.routes(edMux)
+
+	codePort := cfg.CodePort
+	if codePort == 0 {
+		codePort = DefaultCodeInterpreterPort
+	}
+	ciMux := http.NewServeMux()
+	if cfg.Code != nil {
+		(&codeInterp{backend: cfg.Code}).routes(ciMux)
+	}
 
 	envdHost := envdHostRe(cfg.Domain)
 
@@ -62,17 +76,25 @@ func Handler(cfg Config) http.Handler {
 		}
 		r = r.WithContext(context.WithValue(r.Context(), ctxIdent, ident))
 
-		// Route by host: envd sub-host vs control plane.
+		// Route by host: envd / code-interpreter sub-host vs control plane.
 		if envdHost != nil {
 			if m := envdHost.FindStringSubmatch(hostOnly(r.Host)); m != nil {
 				r = r.WithContext(context.WithValue(r.Context(), ctxSandbox, m[2]))
+				if m[1] == strconv.Itoa(codePort) {
+					ciMux.ServeHTTP(w, r)
+					return
+				}
 				edMux.ServeHTTP(w, r)
 				return
 			}
 		} else if sid := r.Header.Get("X-Sandbox-ID"); sid != "" {
-			// Host routing disabled (tests / path mode): allow an explicit
-			// sandbox id header so the envd mux still resolves a target.
+			// Host routing disabled (tests / path mode): an explicit sandbox
+			// id header lets the envd / code-interpreter muxes resolve a target.
 			r = r.WithContext(context.WithValue(r.Context(), ctxSandbox, sid))
+			if r.URL.Path == "/execute" {
+				ciMux.ServeHTTP(w, r)
+				return
+			}
 			if isEnvdPath(r.URL.Path) {
 				edMux.ServeHTTP(w, r)
 				return

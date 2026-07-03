@@ -112,11 +112,33 @@ func (f *fakeEnvd) StartProcess(_ string, cfg ProcessConfig) (ProcResult, error)
 	return ProcResult{PID: 42, Stdout: []byte("hello from " + cfg.Cmd), ExitCode: 0}, nil
 }
 
+type fakeCode struct{ state map[string]int }
+
+func (f *fakeCode) RunCode(_, ctx, code string) (CodeExecution, error) {
+	// Minimal stateful stand-in: "inc" bumps a per-context counter, "get"
+	// returns it, "boom" errors, anything else echoes to stdout.
+	if f.state == nil {
+		f.state = map[string]int{}
+	}
+	switch code {
+	case "inc":
+		f.state[ctx]++
+		return CodeExecution{}, nil
+	case "get":
+		return CodeExecution{Text: fmt.Sprint(f.state[ctx])}, nil
+	case "boom":
+		return CodeExecution{Error: "Traceback...\nZeroDivisionError: division by zero"}, nil
+	default:
+		return CodeExecution{Stdout: code + "\n"}, nil
+	}
+}
+
 func testGateway() http.Handler {
 	return Handler(Config{
 		Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
 		Sandboxes: newFakeSandboxes(),
 		Envd:      newFakeEnvd(),
+		Code:      &fakeCode{},
 	})
 }
 
@@ -289,6 +311,63 @@ func TestEnvd_ProcessStartStream(t *testing.T) {
 	if end == nil || end["exitCode"].(float64) != 0 {
 		t.Errorf("missing/invalid end event: %v", last)
 	}
+}
+
+// ---- code interpreter (run_code) ----
+
+func TestCodeInterpreter_RunCode(t *testing.T) {
+	h := testGateway()
+	sid := map[string]string{"X-Sandbox-ID": "sbx-1"}
+
+	// Stateful: inc twice, then get → "2" as a result message.
+	do(t, h, "POST", "/execute", map[string]string{"code": "inc", "context_id": "c"}, sid)
+	do(t, h, "POST", "/execute", map[string]string{"code": "inc", "context_id": "c"}, sid)
+	rec := do(t, h, "POST", "/execute", map[string]string{"code": "get", "context_id": "c"}, sid)
+	if rec.Code != 200 {
+		t.Fatalf("run_code: %d %s", rec.Code, rec.Body)
+	}
+	msgs := parseNDJSON(t, rec.Body.Bytes())
+	var gotResult bool
+	for _, m := range msgs {
+		if m["type"] == "result" && m["text"] == "2" && m["is_main_result"] == true {
+			gotResult = true
+		}
+	}
+	if !gotResult {
+		t.Errorf("expected result text=2, got %v", msgs)
+	}
+	if msgs[len(msgs)-1]["type"] != "end_of_execution" {
+		t.Errorf("stream must end with end_of_execution: %v", msgs[len(msgs)-1])
+	}
+
+	// Error path → an error message, no result.
+	rec = do(t, h, "POST", "/execute", map[string]string{"code": "boom"}, sid)
+	msgs = parseNDJSON(t, rec.Body.Bytes())
+	var gotErr bool
+	for _, m := range msgs {
+		if m["type"] == "error" && m["value"] == "ZeroDivisionError: division by zero" {
+			gotErr = true
+		}
+	}
+	if !gotErr {
+		t.Errorf("expected error message with the exception summary, got %v", msgs)
+	}
+}
+
+func parseNDJSON(t *testing.T, b []byte) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if line == "" {
+			continue
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatalf("bad ndjson line %q: %v", line, err)
+		}
+		out = append(out, m)
+	}
+	return out
 }
 
 // parseConnectFrames decodes the 5-byte-prefixed connect stream, skipping the

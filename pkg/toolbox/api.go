@@ -91,6 +91,45 @@ type Server struct {
 	// agent does. Nil = no MCP surface (the route stays unregistered → 404).
 	// Set once before Start() via SetMCPHandler.
 	mcpHandler http.Handler
+
+	// kernels backs the E2B-compatible stateful code interpreter
+	// (/code-interpreter/execute). Lazily created on first use.
+	kernels     *KernelManager
+	kernelsOnce sync.Once
+}
+
+// codeInterpreter returns the lazily-initialized kernel manager.
+func (s *Server) codeInterpreter() *KernelManager {
+	s.kernelsOnce.Do(func() { s.kernels = NewKernelManager("python3") })
+	return s.kernels
+}
+
+// codeInterpreterHandler implements POST /code-interpreter/execute:
+// {"code": "...", "context_id": "..."} → stateful CodeResult. Backs the E2B
+// code-interpreter run_code contract (the gateway adapts it).
+func (s *Server) codeInterpreterHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Code      string `json:"code"`
+		ContextID string `json:"context_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if req.ContextID == "" {
+		req.ContextID = "default"
+	}
+	res, err := s.codeInterpreter().Execute(req.ContextID, req.Code)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(res)
 }
 
 // SetMCPHandler installs the optional MCP bridge handler mounted at /mcp.
@@ -177,6 +216,9 @@ func (s *Server) Handler() http.Handler {
 
 	// Port preview proxy (web services started inside the sandbox)
 	mux.HandleFunc("/proxy/", a(s.proxyPortHandler))
+
+	// E2B-compatible stateful code interpreter (run_code)
+	mux.HandleFunc("/code-interpreter/execute", a(s.codeInterpreterHandler))
 
 	// PTY routes
 	mux.HandleFunc("/pty/create", a(s.ptyCreateHandler))

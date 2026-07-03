@@ -63,7 +63,26 @@ func newE2BGateway(domain string, d e2bDeps) http.Handler {
 		Auth:      d.authenticator(),
 		Sandboxes: &e2bSandboxBackend{d},
 		Envd:      &e2bEnvdBackend{d},
+		Code:      &e2bCodeBackend{d},
 	})
+}
+
+// e2bCodeBackend implements the stateful run_code surface by proxying to the
+// sandbox's toolbox /code-interpreter/execute endpoint.
+type e2bCodeBackend struct{ d e2bDeps }
+
+func (b *e2bCodeBackend) RunCode(name, contextID, code string) (e2bcompat.CodeExecution, error) {
+	reqBody := map[string]string{"code": code, "context_id": contextID}
+	var res struct {
+		Stdout string `json:"stdout"`
+		Stderr string `json:"stderr"`
+		Text   string `json:"text"`
+		Error  string `json:"error"`
+	}
+	if err := b.d.toolboxJSON(name, http.MethodPost, "code-interpreter/execute", nil, reqBody, &res); err != nil {
+		return e2bcompat.CodeExecution{}, err
+	}
+	return e2bcompat.CodeExecution{Stdout: res.Stdout, Stderr: res.Stderr, Text: res.Text, Error: res.Error}, nil
 }
 
 // authenticator maps a presented E2B key to a SandrPod identity. When auth is
