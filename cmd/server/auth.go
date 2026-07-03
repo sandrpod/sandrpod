@@ -204,6 +204,17 @@ func identityFrom(r *http.Request) identity {
 // (constant-time per candidate). The legacy single token authenticates as an
 // admin named "admin". Named tokens come from the static cfg.Tokens plus the
 // hot-reloadable registry, when configured.
+// authDisabled reports whether no credential of any kind is configured, in
+// which case every request runs as an anonymous admin (legacy dev behaviour).
+// Issued DB tokens count — minting a key turns auth on — so an operator can't
+// accidentally leave the server open while believing their keys secure it.
+func (cfg serverConfig) authDisabled() bool {
+	return cfg.Token == "" &&
+		len(cfg.Tokens) == 0 &&
+		(cfg.Registry == nil || len(cfg.Registry.get()) == 0) &&
+		(cfg.Keys == nil || cfg.Keys.len() == 0)
+}
+
 func resolveToken(cfg serverConfig, presented string) (identity, bool) {
 	if cfg.Token != "" &&
 		subtle.ConstantTimeCompare([]byte(presented), []byte(cfg.Token)) == 1 {

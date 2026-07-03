@@ -140,9 +140,7 @@ func (b *e2bCodeBackend) RestartContext(name, contextID string) error {
 // disabled it accepts any e2b_<hex>-shaped key anonymously.
 func (d e2bDeps) authenticator() e2bcompat.Authenticator {
 	return func(key string) (string, bool) {
-		authOff := d.cfg.Token == "" && len(d.cfg.Tokens) == 0 &&
-			(d.cfg.Registry == nil || len(d.cfg.Registry.get()) == 0)
-		if authOff {
+		if d.cfg.authDisabled() {
 			return "", true // auth disabled: accept anything (incl. empty)
 		}
 		if key == "" {

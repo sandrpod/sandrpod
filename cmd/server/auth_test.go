@@ -119,3 +119,27 @@ func TestCanAccessSandbox(t *testing.T) {
 		t.Error("ownerless legacy records stay visible to all")
 	}
 }
+
+// TestAuthDisabled asserts that any configured credential — including a single
+// DB-issued key — turns auth on, so an operator can't leave the server open
+// while believing issued keys secure it.
+func TestAuthDisabled(t *testing.T) {
+	if !(serverConfig{}).authDisabled() {
+		t.Error("no credentials: want auth disabled")
+	}
+	if (serverConfig{Token: "t"}).authDisabled() {
+		t.Error("-token set: want auth enabled")
+	}
+	if (serverConfig{Tokens: []NamedToken{{Name: "a", Token: "x"}}}).authDisabled() {
+		t.Error("tokens-file set: want auth enabled")
+	}
+	empty := serverConfig{Keys: newAPIKeyIndex()}
+	if !empty.authDisabled() {
+		t.Error("empty key index: want auth disabled")
+	}
+	withKey := newAPIKeyIndex()
+	withKey.put("h", identity{Name: "c", Role: roleUser})
+	if (serverConfig{Keys: withKey}).authDisabled() {
+		t.Error("DB key issued: want auth enabled")
+	}
+}

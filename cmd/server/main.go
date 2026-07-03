@@ -146,7 +146,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
 			// Auth disabled: everything runs as an anonymous admin (legacy).
-			if cfg.Token == "" && len(cfg.Tokens) == 0 && (cfg.Registry == nil || len(cfg.Registry.get()) == 0) {
+			if cfg.authDisabled() {
 				next(w, withIdentity(r, identity{Name: "", Role: roleAdmin}))
 				return
 			}
