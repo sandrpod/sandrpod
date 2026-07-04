@@ -76,7 +76,12 @@ func openPostgres(dsn string) (*DB, error) {
 		sdb.Close()
 		return nil, fmt.Errorf("store/sqldb: ping postgres: %w", err)
 	}
-	return finish(sdb, pgDialect{})
+	db, err := finish(sdb, pgDialect{})
+	if err != nil {
+		return nil, err
+	}
+	db.dsn = dsn // retained for the dedicated LISTEN connection (notify.go)
+	return db, nil
 }
 
 // finish runs migrations + startup recovery and wraps the pool with its dialect.

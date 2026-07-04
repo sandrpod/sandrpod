@@ -94,6 +94,9 @@ func (pgDialect) ClaimLock() string { return " FOR UPDATE SKIP LOCKED" }
 type DB struct {
 	sdb *sql.DB
 	d   Dialect
+	// dsn is retained for PostgreSQL so a dedicated LISTEN connection can be
+	// opened for token-change notifications (see notify.go). Empty for SQLite.
+	dsn string
 }
 
 func (db *DB) Exec(q string, args ...any) (sql.Result, error) {

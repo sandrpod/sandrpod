@@ -115,6 +115,10 @@ type serverConfig struct {
 	// MaxSandboxesPerOwner caps how many sandboxes a user-role token may hold
 	// at once (0 = unlimited; admins are exempt).
 	MaxSandboxesPerOwner int
+	// NotifyTokenChange, when set, announces an issue/revoke to peer instances so
+	// their auth index converges immediately (Postgres LISTEN/NOTIFY). nil or a
+	// no-op on single-instance / SQLite deployments.
+	NotifyTokenChange func()
 }
 
 // buildMux constructs and returns the HTTP mux for the API server.
@@ -1379,6 +1383,7 @@ func main() {
 
 	// ── Store construction ────────────────────────────────────────────────────
 	var stores podpkg.Stores
+	var tokenDB *sqldbstore.DB // non-nil for SQL backends; drives token LISTEN/NOTIFY
 	switch {
 	case *dbDSN == "":
 		stores = store.NewMemoryStores()
@@ -1391,6 +1396,7 @@ func main() {
 			log.Fatalf("Failed to open DB: %v", err)
 		}
 		defer db.Close()
+		tokenDB = db
 		stores = podpkg.Stores{
 			Sandboxes:    sqldbstore.NewSandboxRepo(db),
 			Poders:       sqldbstore.NewPoderRepo(db),
@@ -1416,6 +1422,9 @@ func main() {
 	cfg := serverConfig{Token: *token, APIURL: apiURL, MaxSandboxesPerOwner: *maxPerOwner, NodeURL: *nodeURL}
 	if *nodeURL != "" {
 		log.Printf("Multi-instance mode: this node = %s (inter-node forwarding enabled)", *nodeURL)
+	}
+	if tokenDB != nil {
+		cfg.NotifyTokenChange = func() { _ = tokenDB.NotifyTokensChanged() }
 	}
 	if *tokensFile != "" {
 		toks, err := loadTokensFile(*tokensFile)
@@ -1543,9 +1552,23 @@ func main() {
 		go watchTokensFile(rootCtx, *tokensFile, cfg.Registry)
 	}
 
+	// Multi-instance: LISTEN for token issue/revoke announced by a peer and reload
+	// the index the moment it happens — this makes cross-instance revocation
+	// near-instant (bounded by NOTIFY latency) instead of ≤30s. The periodic
+	// reload below is the backstop while the listener reconnects. No-op on SQLite.
+	if *nodeURL != "" && tokenDB != nil && cfg.Keys != nil && stores.Tokens != nil {
+		go func() {
+			_ = tokenDB.ListenTokensChanged(rootCtx, func() {
+				if toks, err := stores.Tokens.List(); err == nil {
+					cfg.Keys.replace(toks)
+				}
+			})
+		}()
+	}
+
 	// Multi-instance: periodically re-sync the token index from the shared store
-	// so tokens issued OR revoked on peer instances converge here (issuance is
-	// also picked up instantly via the FindByHash fallback in resolveToken).
+	// as a backstop (a missed NOTIFY, or the window while the listener reconnects)
+	// so tokens issued OR revoked on peer instances always converge here.
 	if *nodeURL != "" && cfg.Keys != nil && stores.Tokens != nil {
 		go func() {
 			ticker := time.NewTicker(30 * time.Second)

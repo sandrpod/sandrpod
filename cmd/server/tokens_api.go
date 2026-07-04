@@ -81,6 +81,9 @@ func handleTokens(cfg serverConfig, tokens podpkg.APITokenRepository) http.Handl
 			if cfg.Keys != nil {
 				cfg.Keys.put(tok.Hash, identity{Name: tok.Name, Role: tok.Role})
 			}
+			if cfg.NotifyTokenChange != nil {
+				cfg.NotifyTokenChange() // wake peer instances to reload (multi-instance)
+			}
 			// The raw key is returned exactly once; only its hash is stored.
 			writeTokenJSON(w, http.StatusCreated, map[string]any{
 				"name":       tok.Name,
@@ -126,6 +129,9 @@ func handleTokenDelete(cfg serverConfig, tokens podpkg.APITokenRepository) http.
 			for _, h := range removed {
 				cfg.Keys.remove(h)
 			}
+		}
+		if cfg.NotifyTokenChange != nil {
+			cfg.NotifyTokenChange() // wake peer instances to drop the revoked key now
 		}
 		w.WriteHeader(http.StatusNoContent)
 	}
