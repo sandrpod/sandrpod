@@ -31,7 +31,9 @@ five figures of concurrent Poders.
 ## Growing past one instance (load mode)
 
 Multiple active API instances behind a load balancer, all serving traffic and
-sharing one PostgreSQL. Implemented:
+sharing one PostgreSQL. For a step-by-step production install (PostgreSQL, per-node
+systemd units, the load-balancer config, TLS, and a cross-node smoke test) see
+[MULTI_INSTANCE_DEPLOYMENT.md](MULTI_INSTANCE_DEPLOYMENT.md). Implemented:
 
 1. **Shared store** — `-db postgres://…`; the same `pkg/store/sqldb`
    repositories run on Postgres (connection pool; job claim via
