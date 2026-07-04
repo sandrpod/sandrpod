@@ -1686,7 +1686,12 @@ func forwardToNode(nodeURL string, w http.ResponseWriter, r *http.Request) {
 	proxy.Director = func(req *http.Request) {
 		base(req)
 		req.Header.Set(forwardedHeader, "1")
-		req.Host = target.Host
+		// Preserve the client's Host header — do NOT rewrite it to target.Host.
+		// The peer's E2B gateway routes envd/code by the original Host
+		// (<port>-<id>.<domain>); overwriting it would misroute to the normal
+		// mux. The dial target is req.URL.Host (set by base(req)), independent of
+		// the Host header, and native API routes ignore Host, so this is safe for
+		// both surfaces.
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, e error) {
 		log.Printf("inter-node forward to %s failed: %v", nodeURL, e)

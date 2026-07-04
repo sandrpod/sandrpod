@@ -150,9 +150,10 @@ func TestForwardToNode_WebSocket(t *testing.T) {
 // the peer node owning the sandbox's tunnel (multi-instance), carrying the
 // loop-guard header — the E2B surface must route like the native sandboxTunnel.
 func TestForwardE2B_ForwardsToOwnerNode(t *testing.T) {
-	var gotGuard string
+	var gotGuard, gotHost string
 	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotGuard = r.Header.Get(forwardedHeader)
+		gotHost = r.Host
 		w.WriteHeader(288)
 	}))
 	defer peer.Close()
@@ -165,7 +166,10 @@ func TestForwardE2B_ForwardsToOwnerNode(t *testing.T) {
 		owners:      stubOwners{node: peer.URL, ok: true},
 	}
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest("POST", "/filesystem.List", nil)
+	req := httptest.NewRequest("POST", "/execute", nil)
+	// The E2B gateway on the owner node routes by Host; the forward must carry
+	// the original vanity host through unchanged, not the peer's own host.
+	req.Host = "49999-sb.e2e.local"
 
 	if handled := d.forwardE2B(rec, req, "sb"); !handled {
 		t.Fatal("expected forwardE2B to handle (forward), got false")
@@ -175,6 +179,9 @@ func TestForwardE2B_ForwardsToOwnerNode(t *testing.T) {
 	}
 	if gotGuard != "1" {
 		t.Errorf("peer missing loop-guard header, got %q", gotGuard)
+	}
+	if gotHost != "49999-sb.e2e.local" {
+		t.Errorf("peer received rewritten Host %q, want the E2B vanity host preserved", gotHost)
 	}
 }
 
