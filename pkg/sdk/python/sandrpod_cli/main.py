@@ -289,16 +289,20 @@ def env(ctx, name):
 
 
 @cli.command()
-@click.argument("name")
+@click.argument("names", nargs=-1, required=True)
 @click.pass_context
-def delete(ctx, name):
-    """Delete a sandbox"""
+def delete(ctx, names):
+    """Delete one or more sandboxes (space-separated names)"""
     client = ctx.obj["client"]
-    try:
-        client.delete_sandbox(name)
-        click.echo(f"Sandbox '{name}' deleted")
-    except Exception as e:
-        click.echo(f"Error: {e}", err=True)
+    failed = []
+    for name in names:
+        try:
+            client.delete_sandbox(name)
+            click.echo(f"Sandbox '{name}' deleted")
+        except Exception as e:
+            click.echo(f"Error deleting '{name}': {e}", err=True)
+            failed.append(name)
+    if failed:
         sys.exit(1)
 
 
