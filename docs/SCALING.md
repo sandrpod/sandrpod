@@ -102,6 +102,10 @@ bytes, duration, client IP); 4xx logs at warn, 5xx at error, health/metrics
 probes at debug. Legacy `log.Printf` lines are routed through the same handler,
 so the whole process shares one format and level.
 
+See **[LOGGING.md](LOGGING.md)** for the full record schema, level semantics,
+the client-IP/`X-Forwarded-For` behavior behind a load balancer, and `jq`
+recipes for querying JSON logs.
+
 ## Known remaining work
 
 - Distributed tracing / span propagation (structured request logging is shipped;
