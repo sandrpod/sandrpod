@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/sandrpod/sandrpod/pkg/logging"
 	"github.com/sandrpod/sandrpod/pkg/provider"
 	"github.com/sandrpod/sandrpod/pkg/provider/aliyun"
 	"github.com/sandrpod/sandrpod/pkg/provider/aws"
@@ -1334,6 +1335,11 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Structured logging (JSON for aggregators, text for humans) driven by
+	// SANDRPOD_LOG_FORMAT / SANDRPOD_LOG_LEVEL. Also routes legacy log.Printf
+	// through slog so the whole process shares one format and level.
+	logging.Setup()
+
 	log.Printf("Starting SandrPod API Server v0.3.0 (Control Plane)")
 
 	// Register cloud providers
@@ -1508,7 +1514,7 @@ func main() {
 	addr := fmt.Sprintf(":%d", *port)
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           handler,
+		Handler:           accessLog(handler), // structured per-request log (outermost)
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       60 * time.Second,
 		// No global write deadline: this server holds long-lived responses —

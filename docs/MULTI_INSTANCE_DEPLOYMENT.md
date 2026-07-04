@@ -348,6 +348,12 @@ one instance is ~300–400k goroutines + several GB. The LB spreads the fleet:
 | Idle sandbox reaping | `SANDRPOD_SANDBOX_IDLE_TIMEOUT` (one node) | off |
 | Empty cloud poder reaping | `SANDRPOD_PODER_IDLE_TIMEOUT` (one node) | off |
 | Per-tenant blast radius | `SANDRPOD_MAX_SANDBOXES_PER_OWNER` | unlimited |
+| Log format / level | `SANDRPOD_LOG_FORMAT=json` · `SANDRPOD_LOG_LEVEL` | text · info |
+
+Set `SANDRPOD_LOG_FORMAT=json` on every node in production so a log aggregator
+can parse the per-request access records and lifecycle events. Cross-instance
+token revocation is immediate (Postgres `LISTEN/NOTIFY`), with a 30 s reload as
+backstop.
 
 ### Known limits (inherited from SCALING.md)
 

@@ -90,11 +90,24 @@ slow VM boots).
 - `SANDRPOD_PODER_IDLE_TIMEOUT` reclaims empty cloud Poders (terminates the VM).
 - `-max-sandboxes-per-owner` and `-rate-limit` bound per-tenant blast radius.
 
+## Observability & logs
+
+The server emits structured logs via `slog`, configured by environment:
+
+- `SANDRPOD_LOG_FORMAT=json` (aggregators) or `text` (default, humans)
+- `SANDRPOD_LOG_LEVEL=debug|info|warn|error` (default `info`)
+
+Every request produces one access record (`msg=http` with method, path, status,
+bytes, duration, client IP); 4xx logs at warn, 5xx at error, health/metrics
+probes at debug. Legacy `log.Printf` lines are routed through the same handler,
+so the whole process shares one format and level.
+
 ## Known remaining work
 
-- Instant cross-instance token revocation (currently ≤30 s eventual; a Postgres
-  `LISTEN/NOTIFY` channel would make it immediate).
+- Distributed tracing / span propagation (structured request logging is shipped;
+  tracing is the remaining piece).
 - Heartbeat write volume: each poder's ~10 s heartbeat is a DB write, so a very
   large fleet benefits from batching those.
 - Persisted per-Poder version reporting for rolling-upgrade visibility.
-- Structured request logging and tracing.
+- Structured logging in the poder/agent/toolbox binaries (the server control
+  plane has it; the workers still use plain `log`).
