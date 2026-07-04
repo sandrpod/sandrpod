@@ -40,6 +40,36 @@ type e2bDeps struct {
 	jobs        podpkg.JobRepository
 	tunnelStore *tunnel.TunnelStore
 	directStore *tunnel.TunnelStore
+	owners      podpkg.TunnelOwnerRepository
+}
+
+// forwardE2B backs e2bcompat's Forwarder hook. In multi-instance load mode a
+// sandbox's tunnel terminates on one node; if this envd/code request landed on a
+// different node, reverse-proxy it to the owner and report handled. It mirrors
+// sandboxTunnel's ownership resolution so both surfaces route identically.
+// Returns false (serve locally) for the single-instance case, an already-
+// forwarded request, a local tunnel, or no known peer owner.
+func (d e2bDeps) forwardE2B(w http.ResponseWriter, r *http.Request, sandbox string) bool {
+	if d.cfg.NodeURL == "" || d.owners == nil || r == nil || r.Header.Get(forwardedHeader) != "" {
+		return false
+	}
+	sb, ok := d.sandboxes.Get(sandbox)
+	if !ok {
+		return false // unknown sandbox: let the normal path emit its 404
+	}
+	key, local := sb.PoderID, d.tunnelStore
+	if strings.HasPrefix(sb.ProxyURL, "direct://") {
+		key, local = sandbox, d.directStore
+	}
+	if _, ok := local.Get(key); ok {
+		return false // tunnel is on this instance — serve locally
+	}
+	owner, found := d.owners.NodeFor(key)
+	if !found || owner == d.cfg.NodeURL {
+		return false // no live peer owner — serve locally (yields the normal offline error)
+	}
+	forwardToNode(owner, w, r)
+	return true
 }
 
 // e2bHostRouter routes E2B-hostname requests to the gateway and everything else
@@ -68,6 +98,7 @@ func newE2BGateway(domain string, d e2bDeps) http.Handler {
 		Envd:            &e2bEnvdBackend{d},
 		Code:            &e2bCodeBackend{d},
 		SandboxResolver: d.resolveSingleSandbox,
+		Forwarder:       d.forwardE2B,
 	})
 }
 

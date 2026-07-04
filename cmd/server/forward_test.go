@@ -146,6 +146,84 @@ func TestForwardToNode_WebSocket(t *testing.T) {
 	}
 }
 
+// TestForwardE2B_ForwardsToOwnerNode: the E2B envd/code hook reverse-proxies to
+// the peer node owning the sandbox's tunnel (multi-instance), carrying the
+// loop-guard header — the E2B surface must route like the native sandboxTunnel.
+func TestForwardE2B_ForwardsToOwnerNode(t *testing.T) {
+	var gotGuard string
+	peer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotGuard = r.Header.Get(forwardedHeader)
+		w.WriteHeader(288)
+	}))
+	defer peer.Close()
+
+	d := e2bDeps{
+		cfg:         serverConfig{NodeURL: "http://self:8080"},
+		sandboxes:   newSandbox("sb"),
+		tunnelStore: tunnel.NewTunnelStore(),
+		directStore: tunnel.NewDirectTunnelStore(),
+		owners:      stubOwners{node: peer.URL, ok: true},
+	}
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest("POST", "/filesystem.List", nil)
+
+	if handled := d.forwardE2B(rec, req, "sb"); !handled {
+		t.Fatal("expected forwardE2B to handle (forward), got false")
+	}
+	if rec.Code != 288 {
+		t.Fatalf("not forwarded to peer: code=%d", rec.Code)
+	}
+	if gotGuard != "1" {
+		t.Errorf("peer missing loop-guard header, got %q", gotGuard)
+	}
+}
+
+// TestForwardE2B_ServesLocally covers the paths that must NOT forward: single
+// instance, an already-forwarded request (loop guard), an unknown owner, and a
+// self-owned sandbox. Each must fall through to local serving (false).
+func TestForwardE2B_ServesLocally(t *testing.T) {
+	base := func() e2bDeps {
+		return e2bDeps{
+			cfg:         serverConfig{NodeURL: "http://self:8080"},
+			sandboxes:   newSandbox("sb"),
+			tunnelStore: tunnel.NewTunnelStore(),
+			directStore: tunnel.NewDirectTunnelStore(),
+			owners:      stubOwners{node: "http://peer", ok: true},
+		}
+	}
+	req := func() *http.Request { return httptest.NewRequest("GET", "/files", nil) }
+
+	t.Run("single instance", func(t *testing.T) {
+		d := base()
+		d.cfg.NodeURL = ""
+		if d.forwardE2B(httptest.NewRecorder(), req(), "sb") {
+			t.Error("single instance must not forward")
+		}
+	})
+	t.Run("already forwarded", func(t *testing.T) {
+		d := base()
+		r := req()
+		r.Header.Set(forwardedHeader, "1")
+		if d.forwardE2B(httptest.NewRecorder(), r, "sb") {
+			t.Error("already-forwarded request must not forward again")
+		}
+	})
+	t.Run("no peer owner", func(t *testing.T) {
+		d := base()
+		d.owners = stubOwners{ok: false}
+		if d.forwardE2B(httptest.NewRecorder(), req(), "sb") {
+			t.Error("unknown owner must serve locally")
+		}
+	})
+	t.Run("owner is self", func(t *testing.T) {
+		d := base()
+		d.owners = stubOwners{node: "http://self:8080", ok: true}
+		if d.forwardE2B(httptest.NewRecorder(), req(), "sb") {
+			t.Error("self-owned must not forward to self")
+		}
+	})
+}
+
 // TestShouldPersistActivity_Throttles locks in that the hot-path activity write
 // fires at most once per interval per sandbox.
 func TestShouldPersistActivity_Throttles(t *testing.T) {

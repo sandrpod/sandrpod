@@ -48,6 +48,13 @@ type Config struct {
 	// pointed at a fixed E2B_SANDBOX_URL). Given the caller's identity it
 	// returns their sandbox ID. Optional; used only as a fallback.
 	SandboxResolver func(identity string) string
+	// Forwarder, when set, is given each envd/code request once its target
+	// sandbox is known. In multi-instance load mode the sandbox's tunnel may
+	// terminate on a peer node; the forwarder reverse-proxies the request there
+	// and returns true (request handled). Returning false means "serve locally"
+	// (the tunnel is here, or there is no peer owner). Control-plane requests
+	// never reach it — they read the shared store and are served on any node.
+	Forwarder func(w http.ResponseWriter, r *http.Request, sandbox string) bool
 }
 
 // Handler builds the E2B-compatible gateway.
@@ -126,6 +133,12 @@ func Handler(cfg Config) http.Handler {
 		if isEnvd || isCodePath {
 			if sandbox == "" && cfg.SandboxResolver != nil {
 				sandbox = cfg.SandboxResolver(ident)
+			}
+			// Multi-instance: if this sandbox's tunnel lives on a peer node, the
+			// forwarder reverse-proxies the request there (envd/code need the
+			// tunnel; the control plane above does not).
+			if cfg.Forwarder != nil && sandbox != "" && cfg.Forwarder(w, r, sandbox) {
+				return
 			}
 			r = r.WithContext(context.WithValue(r.Context(), ctxSandbox, sandbox))
 			if isCode || isCodePath {

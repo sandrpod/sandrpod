@@ -1462,6 +1462,7 @@ func main() {
 		jobs:        stores.Jobs,
 		tunnelStore: tunnelStore,
 		directStore: directStore,
+		owners:      stores.TunnelOwners,
 	}
 	if dom := os.Getenv("SANDRPOD_E2B_DOMAIN"); dom != "" {
 		handler = e2bHostRouter(dom, newE2BGateway(dom, e2bDepsVal), handler)
