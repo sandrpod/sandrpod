@@ -6,7 +6,6 @@ package main
 
 import (
 	"context"
-	"crypto/subtle"
 	"flag"
 	"fmt"
 	"log"
@@ -29,10 +28,11 @@ var (
 	// /mcp endpoint. Enabled by default so an in-sandbox agent can register
 	// new MCP servers at runtime by editing mcp.json (hot-reload picks them
 	// up). The bridge starts cleanly even when mcp.json is absent.
-	mcpEnabled   = flag.Bool("mcp-enabled", envBool("SANDRPOD_MCP_ENABLED", true), "Enable the MCP bridge at /mcp")
-	mcpConfig    = flag.String("mcp-config", os.Getenv("SANDRPOD_MCP_CONFIG"), "Path to mcp.json (default: OS config dir / mcp.json)")
-	mcpHotReload = flag.Bool("mcp-hot-reload", envBool("SANDRPOD_MCP_HOT_RELOAD", true), "Watch mcp.json and diff-reload on change")
-	mcpToken     = flag.String("mcp-token", os.Getenv("SANDRPOD_MCP_TOKEN"), "Shared secret required on /mcp requests (empty = no MCP auth)")
+	mcpEnabled       = flag.Bool("mcp-enabled", envBool("SANDRPOD_MCP_ENABLED", true), "Enable the MCP bridge at /mcp")
+	mcpConfig        = flag.String("mcp-config", os.Getenv("SANDRPOD_MCP_CONFIG"), "Path to mcp.json (default: OS config dir / mcp.json)")
+	mcpHotReload     = flag.Bool("mcp-hot-reload", envBool("SANDRPOD_MCP_HOT_RELOAD", true), "Watch mcp.json and diff-reload on change")
+	mcpToken         = flag.String("mcp-token", os.Getenv("SANDRPOD_MCP_TOKEN"), "Shared secret required on /mcp requests (empty = no MCP auth)")
+	mcpGuardManifest = flag.Bool("mcp-guard-manifest", envBool("SANDRPOD_MCP_GUARD_MANIFEST", false), "Also require -mcp-token on /mcp/manifest (default false: manifest is read-only metadata, reachable with platform auth alone)")
 )
 
 func envBool(key string, def bool) bool {
@@ -132,24 +132,11 @@ func installMCPBridge(ctx context.Context, server *toolbox.Server) *mcpbridge.Ch
 
 	var handler http.Handler = mcpbridge.NewHTTPHandler(mgr)
 	if *mcpToken != "" {
-		handler = mcpTokenMiddleware(*mcpToken, handler)
-		log.Printf("MCP bridge: shared-secret auth enabled (token length=%d)", len(*mcpToken))
+		handler = mcpbridge.TokenMiddleware(*mcpToken, *mcpGuardManifest, handler)
+		log.Printf("MCP bridge: shared-secret auth enabled (token length=%d, guard_manifest=%v)", len(*mcpToken), *mcpGuardManifest)
 	} else {
 		log.Printf("MCP bridge: WARNING — no -mcp-token set; any caller that reaches /mcp can invoke tools")
 	}
 	server.SetMCPHandler(handler)
 	return mgr
-}
-
-// mcpTokenMiddleware enforces a constant-time Bearer check on /mcp requests.
-func mcpTokenMiddleware(secret string, next http.Handler) http.Handler {
-	want := "Bearer " + secret
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got := r.Header.Get("Authorization")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(want)) != 1 {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }

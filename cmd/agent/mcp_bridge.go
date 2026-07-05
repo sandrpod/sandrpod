@@ -92,8 +92,8 @@ func installMCPBridge(ctx context.Context) http.Handler {
 	// on the unix socket and use file-permission auth instead.
 	publicHandler := mcpbridge.NewHTTPHandler(mgr)
 	if *mcpToken != "" {
-		publicHandler = mcpTokenMiddleware(*mcpToken, publicHandler)
-		log.Printf("MCP bridge: shared-secret auth enabled (token length=%d)", len(*mcpToken))
+		publicHandler = mcpbridge.TokenMiddleware(*mcpToken, *mcpGuardManifest, publicHandler)
+		log.Printf("MCP bridge: shared-secret auth enabled (token length=%d, guard_manifest=%v)", len(*mcpToken), *mcpGuardManifest)
 	} else {
 		log.Printf("MCP bridge: WARNING — no --mcp-token set; any caller that reaches /mcp can invoke tools")
 	}

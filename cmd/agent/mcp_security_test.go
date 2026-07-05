@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,69 +10,6 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/mcpbridge"
 	"github.com/sandrpod/sandrpod/pkg/permission"
 )
-
-// --- Issue 1: shared-secret auth -------------------------------------------
-
-func TestMCPTokenMiddleware_NoToken_PassThrough(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
-	srv := httptest.NewServer(mcpTokenMiddleware("", inner))
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/mcp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("expected pass-through 200, got %d", resp.StatusCode)
-	}
-}
-
-func TestMCPTokenMiddleware_TokenSet_BlocksMissingAndWrong(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	srv := httptest.NewServer(mcpTokenMiddleware("s3cret", inner))
-	defer srv.Close()
-
-	tests := []struct {
-		name       string
-		header     string
-		wantStatus int
-	}{
-		{"missing", "", http.StatusUnauthorized},
-		{"wrong scheme", "Basic s3cret", http.StatusUnauthorized},
-		{"wrong token", "Bearer wrong", http.StatusUnauthorized},
-		{"empty bearer", "Bearer ", http.StatusUnauthorized},
-		{"correct", "Bearer s3cret", http.StatusOK},
-		{"correct with spaces", "Bearer  s3cret ", http.StatusOK},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			req, _ := http.NewRequest(http.MethodPost, srv.URL+"/mcp", nil)
-			if tc.header != "" {
-				req.Header.Set("Authorization", tc.header)
-			}
-			resp, err := http.DefaultClient.Do(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer resp.Body.Close()
-			if resp.StatusCode != tc.wantStatus {
-				body, _ := io.ReadAll(resp.Body)
-				t.Errorf("status = %d, want %d (body: %s)", resp.StatusCode, tc.wantStatus, body)
-			}
-			if tc.wantStatus == http.StatusUnauthorized {
-				if got := resp.Header.Get("WWW-Authenticate"); !strings.Contains(got, "Bearer") {
-					t.Errorf("expected WWW-Authenticate Bearer challenge, got %q", got)
-				}
-			}
-		})
-	}
-}
 
 // --- Issue 2: sensitive-tool re-prompt --------------------------------------
 
