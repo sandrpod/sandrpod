@@ -259,14 +259,28 @@ class SandrPodSandbox(BaseSandbox):
         return self.mcp_manifest().get("servers", [])
 
     def _mcp_config_path(self, override: str | None = None) -> str:
-        """mcp.json 路径：override > manifest.config_path > 默认（跨 poder/agent 自适应）。"""
+        """mcp.json 路径：override > manifest.config_path > 按 substrate 猜默认。
+
+        优先用 bridge 自报的绝对路径(精确)。旧 bridge 不报时按 substrate 回退：
+        poder(容器)沙箱用 /workspace/.sandrpod/mcp.json,direct agent(本机)
+        用 ~/.sandrpod/mcp.json(agent 的 DefaultConfigPath)。
+        """
         if override:
             return override
         try:
             path = self.mcp_manifest().get("config_path")
             if path:
                 return path
-        except Exception:  # noqa: BLE001 — best-effort discovery, fall back to default
+        except Exception:  # noqa: BLE001 — best-effort discovery, fall back below
+            pass
+        try:
+            resp = self._http.get(
+                f"/api/v1/sandboxes/{self._sandbox_name}",
+                timeout=self._FILE_HTTP_TIMEOUT,
+            )
+            if resp.is_success and str(resp.json().get("proxy_url", "")).startswith("direct://"):
+                return os.path.expanduser("~/.sandrpod/mcp.json")
+        except Exception:  # noqa: BLE001 — best-effort; fall back to the poder default
             pass
         return self._DEFAULT_MCP_CONFIG
 

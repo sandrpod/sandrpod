@@ -10,7 +10,7 @@ long_description = _readme.read_text(encoding="utf-8") if _readme.exists() else 
 
 setup(
     name="sandrpod-cli",
-    version="0.2.2",
+    version="0.2.3",
     description=(
         "Command-line client for SandrPod — self-hosted, multi-cloud sandbox "
         "infrastructure for AI agents"

@@ -945,13 +945,25 @@ def _kv(pairs):
 
 
 def _mcp_config_path(client, name, override):
-    """mcp.json 路径: --config-path > manifest.config_path > 默认 (跨 poder/agent 自适应)"""
+    """mcp.json 路径: --config-path > manifest.config_path > 按 substrate 猜默认。
+
+    优先用 bridge 在 /mcp/manifest 里自报的绝对路径(精确;需较新的
+    agent/toolbox)。旧 bridge 不报 config_path 时按 substrate 回退:
+    poder(容器)沙箱用 /workspace/.sandrpod/mcp.json,direct agent(本机)
+    用 ~/.sandrpod/mcp.json(agent 的 DefaultConfigPath)。
+    """
     if override:
         return override
     try:
         manifest = client.mcp_manifest(name)
         if manifest.get("config_path"):
             return manifest["config_path"]
+    except Exception:
+        pass
+    try:
+        sb = client.get_sandbox(name)
+        if str(sb.get("proxy_url", "")).startswith("direct://"):
+            return os.path.expanduser("~/.sandrpod/mcp.json")
     except Exception:
         pass
     return DEFAULT_MCP_CONFIG
