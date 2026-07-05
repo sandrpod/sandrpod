@@ -11,8 +11,10 @@ RUN apk add --no-cache git
 # 复制源码
 COPY . .
 
-# 构建
+# 构建 toolbox + mcp-gateway（E2B `mcp-gateway` 二进制的 drop-in，供
+# Sandbox.create({mcp}) 在沙箱内 `mcp-gateway --config …` 时调用）
 RUN CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=auto go build -o /toolbox ./cmd/toolbox
+RUN CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=auto go build -o /mcp-gateway ./cmd/mcp-gateway
 
 # 最终镜像
 FROM alpine:3.19
@@ -46,6 +48,10 @@ RUN mkdir -p /workspace/.sandrpod
 
 # 复制二进制
 COPY --from=builder /toolbox /app/toolbox
+# mcp-gateway on PATH so the unmodified E2B SDK's Sandbox.create({mcp}) can run
+# `mcp-gateway --config …` inside the sandbox. It serves E2B-compatible MCP
+# Streamable-HTTP on :50005, reached from outside at 50005-<id>.<domain>/mcp.
+COPY --from=builder /mcp-gateway /usr/local/bin/mcp-gateway
 
 EXPOSE 8080
 

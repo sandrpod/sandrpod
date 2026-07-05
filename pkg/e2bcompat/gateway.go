@@ -2,7 +2,8 @@
 // Gateway: one http.Handler that fronts both E2B planes and dispatches by Host.
 //
 //	api.<domain>                    → control plane
-//	<port>-<sandboxID>.<domain>     → envd for that sandbox
+//	<port>-<sandboxID>.<domain>     → envd for that sandbox (envd/code ports)
+//	<port>-<sandboxID>.<domain>     → generic in-sandbox service (PortProxy)
 //
 // Auth: X-API-KEY (control plane) / Authorization: Bearer (envd access token).
 // The authenticated key becomes the request "identity" (ctx) and, for envd
@@ -55,6 +56,15 @@ type Config struct {
 	// (the tunnel is here, or there is no peer owner). Control-plane requests
 	// never reach it — they read the shared store and are served on any node.
 	Forwarder func(w http.ResponseWriter, r *http.Request, sandbox string) bool
+	// PortProxy, when set, handles a generic host-port request —
+	// <port>-<sandboxID>.<domain>/<path> where the port is neither envd nor the
+	// code-interpreter port and the path is not an envd/code path. This is how
+	// E2B's in-sandbox services are reached (e.g. the MCP gateway on :50005, a
+	// user's dev server, etc.): the request is proxied through the sandbox's
+	// tunnel to the toolbox's /proxy/<port>/ mount, which reverse-proxies to
+	// 127.0.0.1:<port> inside the sandbox. Returns true when handled. Returning
+	// false (or leaving it nil) falls through to the control plane.
+	PortProxy func(w http.ResponseWriter, r *http.Request, sandbox string, port int) bool
 }
 
 // Handler builds the E2B-compatible gateway.
@@ -108,9 +118,11 @@ func Handler(cfg Config) http.Handler {
 		// also accept the Host (<port>-<id>.<domain>) and fall back to the
 		// single-sandbox resolver (fixed sandbox URL in HTTP debug mode).
 		sandbox, isCode := "", false
+		hostPort := 0 // >0 when the Host matched <port>-<sandboxID>.<domain>
 		if envdHost != nil {
 			if m := envdHost.FindStringSubmatch(hostOnly(r.Host)); m != nil {
 				sandbox, isCode = m[2], m[1] == strconv.Itoa(codePort)
+				hostPort, _ = strconv.Atoi(m[1])
 			}
 		}
 		if sandbox == "" {
@@ -147,6 +159,26 @@ func Handler(cfg Config) http.Handler {
 			}
 			edMux.ServeHTTP(w, r)
 			return
+		}
+		// Generic in-sandbox service reached at <port>-<sandboxID>.<domain>: the
+		// Host named a port that is neither envd nor the code interpreter, and the
+		// path is not an envd/code path. This is how E2B exposes in-sandbox HTTP
+		// services — the MCP gateway on :50005, a user dev server, etc. Proxy it
+		// through the tunnel to the toolbox's /proxy/<port>/ mount, which reverse-
+		// proxies to 127.0.0.1:<port> inside the sandbox.
+		if hostPort > 0 && !isCode && cfg.PortProxy != nil {
+			if sandbox == "" && cfg.SandboxResolver != nil {
+				sandbox = cfg.SandboxResolver(ident)
+			}
+			if sandbox != "" {
+				// Cross-node: forward to the owner node first if the tunnel is remote.
+				if cfg.Forwarder != nil && cfg.Forwarder(w, r, sandbox) {
+					return
+				}
+				if cfg.PortProxy(w, r, sandbox, hostPort) {
+					return
+				}
+			}
 		}
 		cpMux.ServeHTTP(w, r)
 	})

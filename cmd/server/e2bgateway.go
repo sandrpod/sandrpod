@@ -72,6 +72,28 @@ func (d e2bDeps) forwardE2B(w http.ResponseWriter, r *http.Request, sandbox stri
 	return true
 }
 
+// portProxy backs e2bcompat's PortProxy hook. A request to a generic host-port
+// (<port>-<sandboxID>.<domain>/<path>, where the port is neither envd nor the
+// code interpreter) is proxied through the sandbox's tunnel to the toolbox's
+// /proxy/<port>/ mount, which reverse-proxies to 127.0.0.1:<port> inside the
+// sandbox. This is how E2B exposes in-sandbox HTTP services — most importantly
+// the MCP gateway on :50005 (Sandbox.getMcpUrl()). The streaming client is used
+// so MCP Streamable HTTP (a POST that upgrades into a long-lived SSE response)
+// flushes in real time. Cross-node forwarding is handled by the gateway calling
+// forwardE2B first, so by here the tunnel is local. Returns true when handled.
+func (d e2bDeps) portProxy(w http.ResponseWriter, r *http.Request, sandbox string, port int) bool {
+	subpath := "proxy/" + strconv.Itoa(port) + r.URL.Path
+	t, target, err := d.toolboxTarget(sandbox, subpath)
+	if err != nil {
+		return false // unknown/offline sandbox — let the control plane emit the 404
+	}
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	proxyHTTPStreaming(t, r, target, w)
+	return true
+}
+
 // e2bHostRouter routes E2B-hostname requests to the gateway and everything else
 // to next (the normal mux).
 func e2bHostRouter(domain string, gateway, next http.Handler) http.Handler {
@@ -99,6 +121,7 @@ func newE2BGateway(domain string, d e2bDeps) http.Handler {
 		Code:            &e2bCodeBackend{d},
 		SandboxResolver: d.resolveSingleSandbox,
 		Forwarder:       d.forwardE2B,
+		PortProxy:       d.portProxy,
 	})
 }
 

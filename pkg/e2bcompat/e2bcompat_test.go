@@ -451,3 +451,56 @@ func TestCodePathAuthRelaxation(t *testing.T) {
 		t.Errorf("/execute no-key (domain): want 401, got %d", code)
 	}
 }
+
+// TestPortProxy_GenericPortRouting locks in the generic in-sandbox-service route:
+// <port>-<id>.<domain>/<path> for a non-envd, non-code port (e.g. the MCP gateway
+// on :50005) must invoke the PortProxy hook with the parsed sandbox + port, while
+// the code port and envd paths keep their existing handlers.
+func TestPortProxy_GenericPortRouting(t *testing.T) {
+	var gotSandbox, gotPath string
+	var gotPort int
+	gw := Handler(Config{
+		Domain:    "app.example.com",
+		Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+		Sandboxes: newFakeSandboxes(),
+		Envd:      newFakeEnvd(),
+		Code:      &fakeCode{},
+		PortProxy: func(w http.ResponseWriter, r *http.Request, sandbox string, port int) bool {
+			gotSandbox, gotPort, gotPath = sandbox, port, r.URL.Path
+			w.WriteHeader(http.StatusTeapot) // sentinel: PortProxy handled it
+			return true
+		},
+	})
+	key := "e2b_" + strings.Repeat("a", 40)
+	call := func(host, path string) int {
+		req := httptest.NewRequest("POST", "http://"+host+path, nil)
+		req.Host = host
+		req.Header.Set("Authorization", "Bearer "+key)
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Generic port 50005 + /mcp → PortProxy handles it.
+	if code := call("50005-sbx1.app.example.com", "/mcp"); code != http.StatusTeapot {
+		t.Fatalf("50005 /mcp: want PortProxy sentinel 418, got %d", code)
+	}
+	if gotSandbox != "sbx1" || gotPort != 50005 || gotPath != "/mcp" {
+		t.Fatalf("PortProxy args wrong: sandbox=%q port=%d path=%q", gotSandbox, gotPort, gotPath)
+	}
+
+	// Code port (49999) with a non-code path must NOT be treated as a port proxy.
+	gotSandbox, gotPort, gotPath = "", 0, ""
+	if code := call("49999-sbx1.app.example.com", "/mcp"); code == http.StatusTeapot {
+		t.Errorf("code port /mcp should not hit PortProxy")
+	}
+	if gotPort != 0 {
+		t.Errorf("code port must not invoke PortProxy, got port=%d", gotPort)
+	}
+
+	// An envd path on a generic port goes to envd, not the port proxy.
+	gotSandbox, gotPort, gotPath = "", 0, ""
+	if code := call("50005-sbx1.app.example.com", "/files"); code == http.StatusTeapot {
+		t.Errorf("envd path should not hit PortProxy")
+	}
+}
