@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import base64
 import fnmatch
+import json
 import logging
 import ntpath
 import os
@@ -211,10 +212,12 @@ class SandrPodSandbox(BaseSandbox):
     def mcp_url(self) -> str:
         """Return the URL of the sandbox's MCP transport bridge endpoint.
 
-        The bridge runs inside ``sandrpod-agent`` and aggregates the user's
-        local stdio MCP servers (defined in ``~/.sandrpod/mcp.json``) into a
-        single Streamable-HTTP MCP endpoint. Hand this URL to any
-        MCP-compatible client (e.g. ``langchain-mcp-adapters``).
+        The bridge runs inside every sandbox's toolbox (poder container or a
+        bare ``sandrpod-agent``) and aggregates the stdio/remote MCP servers
+        defined in the sandbox's ``mcp.json`` into a single Streamable-HTTP MCP
+        endpoint. Manage that server set with :meth:`mcp_add` / :meth:`mcp_rm` /
+        :meth:`mcp_ls` / :meth:`mcp_tools`. Hand this URL to any MCP-compatible
+        client (e.g. ``langchain-mcp-adapters``).
 
         Example::
 
@@ -236,6 +239,121 @@ class SandrPodSandbox(BaseSandbox):
         an MCP session, or for surfacing "what tools are available" in a UI.
         """
         return f"{self._base_url}/api/v1/sandboxes/{self._sandbox_name}/mcp/manifest"
+
+    _DEFAULT_MCP_CONFIG = "/workspace/.sandrpod/mcp.json"
+
+    def mcp_manifest(self) -> dict:
+        """实时 MCP 清单：聚合的 server、每个的 state/tool_count、以及 config_path。
+
+        ``GET`` 走流式 ``/mcp/manifest``（poder 与 agent 沙箱都适用）。
+        """
+        resp = self._http.get(
+            f"/api/v1/sandboxes/{self._sandbox_name}/mcp/manifest",
+            timeout=self._FILE_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    def mcp_tools(self) -> list[dict]:
+        """列出实时聚合的 MCP server（含 state、tool_count、last_error）。"""
+        return self.mcp_manifest().get("servers", [])
+
+    def _mcp_config_path(self, override: str | None = None) -> str:
+        """mcp.json 路径：override > manifest.config_path > 默认（跨 poder/agent 自适应）。"""
+        if override:
+            return override
+        try:
+            path = self.mcp_manifest().get("config_path")
+            if path:
+                return path
+        except Exception:  # noqa: BLE001 — best-effort discovery, fall back to default
+            pass
+        return self._DEFAULT_MCP_CONFIG
+
+    def _read_mcp_config(self, config_path: str) -> dict:
+        resp = self._http.get(
+            self._toolbox_url("files/download"),
+            params={"path": config_path},
+            timeout=self._FILE_HTTP_TIMEOUT,
+        )
+        if not resp.is_success:
+            return {"mcpServers": {}}
+        text = resp.text.strip()
+        if not text:
+            return {"mcpServers": {}}
+        cfg = json.loads(text)
+        if not isinstance(cfg.get("mcpServers"), dict):
+            cfg = {**cfg, "mcpServers": {}}
+        return cfg
+
+    def _write_mcp_config(self, config_path: str, cfg: dict) -> None:
+        dir_path, filename = _split_dir_basename(config_path)
+        resp = self._http.post(
+            self._toolbox_url("files/upload"),
+            params={"path": dir_path},
+            files={"file": (filename, json.dumps(cfg, indent=2).encode(), "application/octet-stream")},
+            timeout=self._FILE_HTTP_TIMEOUT,
+        )
+        resp.raise_for_status()
+
+    def mcp_ls(self, *, config_path: str | None = None) -> dict:
+        """已配置的 MCP server（读 mcp.json）。返回 ``{name: server_config}``。"""
+        path = self._mcp_config_path(config_path)
+        return self._read_mcp_config(path).get("mcpServers", {})
+
+    def mcp_add(
+        self,
+        name: str,
+        *,
+        command: str | None = None,
+        args: list[str] | None = None,
+        url: str | None = None,
+        env: dict[str, str] | None = None,
+        headers: dict[str, str] | None = None,
+        transport: str | None = None,
+        config_path: str | None = None,
+    ) -> None:
+        """加一个 MCP server 到沙箱原生 bridge（改 mcp.json，bridge 热重载）。
+
+        stdio ::
+
+            sb.mcp_add("exa", command="npx", args=["-y", "exa-mcp-server"],
+                       env={"EXA_API_KEY": "…"})
+
+        remote ::
+
+            sb.mcp_add("gh", url="https://api.githubcopilot.com/mcp/",
+                       headers={"Authorization": "Bearer …"})
+        """
+        entry: dict = {}
+        if url:
+            entry["url"] = url
+            if transport:
+                entry["type"] = transport
+            if headers:
+                entry["headers"] = dict(headers)
+        elif command:
+            entry["command"] = command
+            if args:
+                entry["args"] = list(args)
+        else:
+            raise ValueError("mcp_add: 需要 command (stdio) 或 url (remote)")
+        if env:
+            entry["env"] = dict(env)
+        path = self._mcp_config_path(config_path)
+        cfg = self._read_mcp_config(path)
+        servers = {**cfg.get("mcpServers", {}), name: entry}
+        self._write_mcp_config(path, {**cfg, "mcpServers": servers})
+
+    def mcp_rm(self, name: str, *, config_path: str | None = None) -> bool:
+        """移除一个 MCP server。返回是否存在并被移除。"""
+        path = self._mcp_config_path(config_path)
+        cfg = self._read_mcp_config(path)
+        if name not in cfg.get("mcpServers", {}):
+            return False
+        servers = {k: v for k, v in cfg["mcpServers"].items() if k != name}
+        self._write_mcp_config(path, {**cfg, "mcpServers": servers})
+        return True
 
     def _toolbox_url(self, sub_path: str) -> str:
         """构造通过 API Server 代理到 Toolbox 的 URL。
