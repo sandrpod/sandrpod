@@ -15,13 +15,21 @@ class CLIClient:
         api_url: str = "http://localhost:8080",
         timeout: int = 30,
         token: Optional[str] = None,
+        mcp_token: Optional[str] = None,
     ):
         self.api_url = api_url.rstrip("/")
         self.timeout = timeout
+        self.mcp_token = mcp_token
         self.session = requests.Session()
-        # Only set Authorization in session headers; Content-Type is set per-request
-        # so that multipart/form-data uploads can override it automatically.
+        # Two-tier auth (see docs MCP_AUTH_HEADER_CONFLICT_FIX): the platform token
+        # goes in X-Sandrpod-Token, the server's preferred header. Authorization:
+        # Bearer is kept as a legacy fallback for older servers — but crucially it
+        # stays free to carry the *personal* mcp_token through to the sandbox's
+        # agent bridge on /mcp calls (the server passes Authorization through the
+        # tunnel untouched). Content-Type is set per-request so multipart uploads
+        # can override it.
         if token:
+            self.session.headers["X-Sandrpod-Token"] = token
             self.session.headers["Authorization"] = f"Bearer {token}"
 
     def _request(self, method: str, path: str, timeout: int = None, **kwargs) -> requests.Response:
@@ -321,7 +329,13 @@ class CLIClient:
         """沙箱原生 MCP bridge 的实时清单 (聚合 server、工具数、配置文件路径)"""
         # /mcp (not /toolbox/mcp): the streaming bridge proxy, which flushes SSE —
         # the path a real MCP client uses. Works for poder + agent sandboxes.
-        resp = self._request("GET", f"/api/v1/sandboxes/{name}/mcp/manifest")
+        # When the agent guards its bridge with a personal mcp_token, carry it in
+        # Authorization: Bearer — the server auths via X-Sandrpod-Token and passes
+        # this through to the agent's mcpTokenMiddleware untouched.
+        headers = {}
+        if self.mcp_token:
+            headers["Authorization"] = f"Bearer {self.mcp_token}"
+        resp = self._request("GET", f"/api/v1/sandboxes/{name}/mcp/manifest", headers=headers)
         return resp.json()
 
     def mcp_url(self, name: str) -> str:

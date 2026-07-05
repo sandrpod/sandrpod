@@ -61,6 +61,20 @@ def get_configured_token():
     return config.get("api_token")
 
 
+def get_configured_mcp_token():
+    """获取个人 MCP token（agent bridge 的共享密钥），优先级：环境变量 > 配置文件。
+
+    仅用于 /mcp 相关调用（mcp tools/url），当员工机 agent 以 --mcp-token 启动、
+    对 /mcp 面加了共享密钥时需要。它作为 Authorization: Bearer 透传给 agent 校验，
+    与平台 token（X-Sandrpod-Token）互不冲突。
+    """
+    env_token = os.environ.get("SANDRPOD_MCP_TOKEN")
+    if env_token:
+        return env_token
+    config = load_config()
+    return config.get("mcp_token")
+
+
 def save_config_api_url(url):
     """保存 API URL 到配置文件"""
     config = load_config()
@@ -78,15 +92,18 @@ def save_config_token(token):
 @click.group()
 @click.option("--api-url", default=None, help="API URL (overrides config)")
 @click.option("--timeout", default=30, help="Request timeout")
+@click.option("--mcp-token", default=None, help="个人 MCP token（agent bridge 共享密钥；也可用 SANDRPOD_MCP_TOKEN）")
 @click.pass_context
-def cli(ctx, api_url, timeout):
+def cli(ctx, api_url, timeout, mcp_token):
     """SandrPod CLI - Sandbox Management"""
     ctx.ensure_object(dict)
     # 如果没有传入 --api-url，使用配置的 URL
     if api_url is None:
         api_url = get_configured_api_url()
     token = get_configured_token()
-    ctx.obj["client"] = CLIClient(api_url=api_url, timeout=timeout, token=token)
+    if mcp_token is None:
+        mcp_token = get_configured_mcp_token()
+    ctx.obj["client"] = CLIClient(api_url=api_url, timeout=timeout, token=token, mcp_token=mcp_token)
 
 
 # ========== Config Commands ==========
@@ -1094,12 +1111,14 @@ def mcp_rm(ctx, name, server, config_path):
 @click.argument("name")
 @click.pass_context
 def mcp_url(ctx, name):
-    """打印沙箱原生 MCP 端点 URL (给 Claude/Cursor 等 MCP 客户端连接)"""
+    """打印沙箱原生 MCP 端点 URL + 连接所需的两层鉴权头"""
     client = ctx.parent.parent.obj["client"]
     click.echo(client.mcp_url(name))
-    auth = client.auth_header()
-    if auth:
-        click.echo(f"# 连接时带鉴权头: Authorization: {auth}", err=True)
+    # 两层鉴权(见 MCP_AUTH_HEADER_CONFLICT_FIX):平台 token 走 X-Sandrpod-Token,
+    # 个人 MCP token 走 Authorization: Bearer(server 原样透传给 agent 校验)。
+    click.echo("# 连接头(两层鉴权):", err=True)
+    click.echo("#   X-Sandrpod-Token: <平台 token>", err=True)
+    click.echo("#   Authorization: Bearer <个人 mcp_token>   (仅当 agent 以 -mcp-token 启动时需要)", err=True)
 
 
 @mcp_group.command(name="tools")

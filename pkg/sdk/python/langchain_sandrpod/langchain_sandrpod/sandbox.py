@@ -167,6 +167,7 @@ class SandrPodSandbox(BaseSandbox):
         sandbox_name: str,
         api_url: str | None = None,
         api_token: str | None = None,
+        mcp_token: str | None = None,
         default_timeout: int = 30 * 60,
         _http: httpx.Client | None = None,
     ) -> None:
@@ -175,8 +176,11 @@ class SandrPodSandbox(BaseSandbox):
             sandbox_name:    Sandbox 名称（在 API Server 中唯一）。
             api_url:         API Server 地址，默认读取 ``SANDRPOD_API_URL``
                              环境变量，再回退到 ``http://localhost:8080``。
-            api_token:       Bearer 认证 token，默认读取
+            api_token:       平台 token（X-Sandrpod-Token），默认读取
                              ``SANDRPOD_API_TOKEN`` 环境变量。
+            mcp_token:       个人 MCP token（agent bridge 共享密钥），仅在 /mcp
+                             调用时作 ``Authorization: Bearer`` 透传给 agent 校验，
+                             默认读取 ``SANDRPOD_MCP_TOKEN`` 环境变量。
             default_timeout: execute() 未指定 timeout 时的默认超时（秒）。
             _http:           供测试注入的 httpx.Client 实例。
         """
@@ -185,6 +189,7 @@ class SandrPodSandbox(BaseSandbox):
             api_url or os.environ.get("SANDRPOD_API_URL") or "http://localhost:8080"
         ).rstrip("/")
         self._api_token = api_token or os.environ.get("SANDRPOD_API_TOKEN")
+        self._mcp_token = mcp_token or os.environ.get("SANDRPOD_MCP_TOKEN")
         self._default_timeout = default_timeout
         self._http = _http or self._build_http_client()
 
@@ -245,10 +250,16 @@ class SandrPodSandbox(BaseSandbox):
     def mcp_manifest(self) -> dict:
         """实时 MCP 清单：聚合的 server、每个的 state/tool_count、以及 config_path。
 
-        ``GET`` 走流式 ``/mcp/manifest``（poder 与 agent 沙箱都适用）。
+        ``GET`` 走流式 ``/mcp/manifest``（poder 与 agent 沙箱都适用）。当 agent 以
+        ``--mcp-token`` 守卫 /mcp 面时，把该 token 作 ``Authorization: Bearer``
+        透传（server 用 X-Sandrpod-Token 鉴权，此头原样转给 agent 校验）。
         """
+        headers = {}
+        if self._mcp_token:
+            headers["Authorization"] = f"Bearer {self._mcp_token}"
         resp = self._http.get(
             f"/api/v1/sandboxes/{self._sandbox_name}/mcp/manifest",
+            headers=headers,
             timeout=self._FILE_HTTP_TIMEOUT,
         )
         resp.raise_for_status()
