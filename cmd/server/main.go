@@ -889,18 +889,22 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		}
 
 		// MCP transport bridge proxy: any method, any sub-path under /mcp.
-		// The bridge runs inside sandrpod-agent and exposes MCP Streamable
-		// HTTP, which negotiates SSE on the same endpoint, so we route
-		// through the streaming proxy to preserve real-time flushes.
+		// The bridge (pkg/mcpbridge) runs inside every sandbox's toolbox and
+		// exposes MCP Streamable HTTP, which negotiates SSE on the same endpoint,
+		// so we route through the streaming proxy to preserve real-time flushes.
 		// See docs/MCP_TRANSPORT_BRIDGE_DESIGN.md §七.
 		if action == "mcp" || strings.HasPrefix(action, "mcp/") {
-			_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
+			sb, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 			if !ok {
 				return
 			}
-			// Reconstruct the agent-side path: /mcp, /mcp/manifest, /mcp/sse, ...
+			// subPath is "mcp", "mcp/manifest", "mcp/sse", … A direct-agent embeds
+			// the bridge at /mcp; a poder serves it behind /toolbox/<name>/mcp.
 			subPath := strings.TrimPrefix(path, name+"/")
-			targetURL := "http://agent/" + subPath
+			targetURL := "http://poder/toolbox/" + name + "/" + subPath
+			if strings.HasPrefix(sb.ProxyURL, "direct://") {
+				targetURL = "http://agent/" + subPath
+			}
 			if r.URL.RawQuery != "" {
 				targetURL += "?" + r.URL.RawQuery
 			}

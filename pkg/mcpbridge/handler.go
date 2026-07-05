@@ -102,6 +102,9 @@ type Manifest struct {
 	LoadedAt      time.Time       `json:"loaded_at"`
 	Servers       []ChildSnapshot `json:"servers"`
 	TotalTools    int             `json:"total_tools"`
+	// ConfigPath is the mcp.json this bridge reads, so a caller (e.g. the CLI)
+	// knows which file to read/modify to add/remove servers.
+	ConfigPath string `json:"config_path,omitempty"`
 }
 
 func manifestHandler(mgr *ChildManager) http.HandlerFunc {
@@ -122,6 +125,7 @@ func manifestHandler(mgr *ChildManager) http.HandlerFunc {
 			LoadedAt:      time.Now().UTC(),
 			Servers:       snap,
 			TotalTools:    total,
+			ConfigPath:    mgr.ConfigPath(),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(m)

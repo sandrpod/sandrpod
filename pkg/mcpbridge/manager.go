@@ -459,6 +459,12 @@ func (m *ChildManager) Snapshot() []ChildSnapshot {
 	return out
 }
 
+// ConfigPath returns the mcp.json path this manager reads (and hot-reloads).
+// Surfaced in the manifest so out-of-sandbox callers (e.g. sandrpod-cli mcp)
+// know which file to read/modify — it differs by substrate (toolbox image uses
+// /workspace/.sandrpod/mcp.json; a bare agent uses the XDG/home default).
+func (m *ChildManager) ConfigPath() string { return m.opts.ConfigPath }
+
 // ChildSnapshot is a read-only view of a Child for /mcp/manifest.
 type ChildSnapshot struct {
 	Name      string    `json:"name"`

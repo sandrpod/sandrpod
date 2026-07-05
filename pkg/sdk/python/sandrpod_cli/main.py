@@ -4,6 +4,8 @@
 import click
 import sys
 import os
+import json
+import shlex
 import yaml
 from pathlib import Path
 from .client import CLIClient
@@ -923,6 +925,191 @@ def fs_watch(ctx, name, path, recursive, interval):
 
 # Register file group
 cli.add_command(fs_group)
+
+
+# ─────────────────────────────── MCP bridge ───────────────────────────────
+# Manage a sandbox's native MCP bridge (the always-on /mcp that aggregates MCP
+# servers from mcp.json and hot-reloads on change). Distinct from the E2B
+# gateway (:50005) — this is sandrpod's own way to equip a sandbox with tools.
+DEFAULT_MCP_CONFIG = "/workspace/.sandrpod/mcp.json"
+
+
+def _kv(pairs):
+    """['K=V', …] → {K: V}"""
+    out = {}
+    for p in pairs:
+        if "=" in p:
+            k, v = p.split("=", 1)
+            out[k] = v
+    return out
+
+
+def _mcp_config_path(client, name, override):
+    """mcp.json 路径: --config-path > manifest.config_path > 默认 (跨 poder/agent 自适应)"""
+    if override:
+        return override
+    try:
+        manifest = client.mcp_manifest(name)
+        if manifest.get("config_path"):
+            return manifest["config_path"]
+    except Exception:
+        pass
+    return DEFAULT_MCP_CONFIG
+
+
+def _load_mcp_config(client, name, config_path):
+    """读 mcp.json → dict (缺失/空 → 空配置)"""
+    try:
+        raw = client.read_file(name, config_path)
+    except Exception:
+        return {"mcpServers": {}}
+    text = raw.decode("utf-8", errors="replace").strip()
+    if not text:
+        return {"mcpServers": {}}
+    cfg = json.loads(text)
+    if not isinstance(cfg.get("mcpServers"), dict):
+        cfg = {**cfg, "mcpServers": {}}
+    return cfg
+
+
+@click.group(name="mcp")
+@click.pass_context
+def mcp_group(ctx):
+    """管理沙箱原生 MCP bridge (/mcp: 聚合 MCP server, 改配置热重载)"""
+    pass
+
+
+@mcp_group.command(name="ls")
+@click.argument("name")
+@click.option("--config-path", default="", help="覆盖 mcp.json 路径 (默认自动探测)")
+@click.pass_context
+def mcp_ls(ctx, name, config_path):
+    """列出沙箱已配置的 MCP server (读 mcp.json)"""
+    client = ctx.parent.parent.obj["client"]
+    try:
+        path = _mcp_config_path(client, name, config_path)
+        servers = _load_mcp_config(client, name, path).get("mcpServers", {})
+        if not servers:
+            click.echo(f"(no MCP servers configured in {path})")
+            return
+        click.echo(f"# {path}")
+        for sname, sc in servers.items():
+            if sc.get("url"):
+                click.echo(f"  {sname}  →  {sc['url']}  ({sc.get('type', 'streamable-http')})")
+            else:
+                argv = " ".join([sc.get("command", "")] + sc.get("args", [])).strip()
+                click.echo(f"  {sname}  →  {argv}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@mcp_group.command(name="add")
+@click.argument("name")
+@click.argument("server")
+@click.argument("command", required=False)
+@click.option("--url", default="", help="remote MCP endpoint (与 stdio command 二选一)")
+@click.option("--type", "server_type", default="", help="remote 传输: streamable-http(默认)|http|sse")
+@click.option("--env", "envs", multiple=True, help="环境变量 K=V (可多次)")
+@click.option("--header", "headers", multiple=True, help="remote 请求头 K=V (可多次)")
+@click.option("--config-path", default="", help="覆盖 mcp.json 路径")
+@click.pass_context
+def mcp_add(ctx, name, server, command, url, server_type, envs, headers, config_path):
+    """加一个 MCP server (stdio 命令整体加引号)
+
+    stdio:  sandrpod-cli mcp add <sb> exa "npx -y exa-mcp-server" --env EXA_API_KEY=xxx
+    remote: sandrpod-cli mcp add <sb> gh --url https://api.githubcopilot.com/mcp/ --header "Authorization=Bearer xxx"
+    """
+    client = ctx.parent.parent.obj["client"]
+    try:
+        entry = {}
+        if url:
+            entry["url"] = url
+            if server_type:
+                entry["type"] = server_type
+            hdr = _kv(headers)
+            if hdr:
+                entry["headers"] = hdr
+        elif command:
+            parts = shlex.split(command)
+            if not parts:
+                click.echo("Error: stdio command 为空", err=True)
+                sys.exit(1)
+            entry["command"] = parts[0]
+            if len(parts) > 1:
+                entry["args"] = parts[1:]
+        else:
+            click.echo('Error: 需要 stdio command (加引号, 如 "npx -y exa-mcp-server") 或 --url', err=True)
+            sys.exit(1)
+        env = _kv(envs)
+        if env:
+            entry["env"] = env
+        path = _mcp_config_path(client, name, config_path)
+        cfg = _load_mcp_config(client, name, path)
+        servers = {**cfg.get("mcpServers", {}), server: entry}
+        new_cfg = {**cfg, "mcpServers": servers}
+        client.write_file(name, path, json.dumps(new_cfg, indent=2))
+        click.echo(f"Added MCP server '{server}' → {path} (bridge 热重载, `mcp tools {name}` 查看)")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@mcp_group.command(name="rm")
+@click.argument("name")
+@click.argument("server")
+@click.option("--config-path", default="", help="覆盖 mcp.json 路径")
+@click.pass_context
+def mcp_rm(ctx, name, server, config_path):
+    """删除一个 MCP server"""
+    client = ctx.parent.parent.obj["client"]
+    try:
+        path = _mcp_config_path(client, name, config_path)
+        cfg = _load_mcp_config(client, name, path)
+        if server not in cfg.get("mcpServers", {}):
+            click.echo(f"(no such server '{server}' in {path})")
+            return
+        servers = {k: v for k, v in cfg["mcpServers"].items() if k != server}
+        new_cfg = {**cfg, "mcpServers": servers}
+        client.write_file(name, path, json.dumps(new_cfg, indent=2))
+        click.echo(f"Removed MCP server '{server}' → {path} (bridge 热重载)")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+@mcp_group.command(name="url")
+@click.argument("name")
+@click.pass_context
+def mcp_url(ctx, name):
+    """打印沙箱原生 MCP 端点 URL (给 Claude/Cursor 等 MCP 客户端连接)"""
+    client = ctx.parent.parent.obj["client"]
+    click.echo(client.mcp_url(name))
+    auth = client.auth_header()
+    if auth:
+        click.echo(f"# 连接时带鉴权头: Authorization: {auth}", err=True)
+
+
+@mcp_group.command(name="tools")
+@click.argument("name")
+@click.pass_context
+def mcp_tools(ctx, name):
+    """列出实时聚合的 MCP server 及工具数 (查 /mcp/manifest)"""
+    client = ctx.parent.parent.obj["client"]
+    try:
+        manifest = client.mcp_manifest(name)
+        servers = manifest.get("servers", [])
+        click.echo(f"total_tools={manifest.get('total_tools', 0)}  servers={len(servers)}")
+        for s in servers:
+            err = f"  ERR: {s['last_error']}" if s.get("last_error") else ""
+            click.echo(f"  [{s.get('state', '?'):<8}] {s.get('name', '?'):<20} tools={s.get('tool_count', 0)}{err}")
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+
+
+# Register MCP group
+cli.add_command(mcp_group)
 
 
 # ========== Session Commands ==========

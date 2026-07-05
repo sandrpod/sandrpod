@@ -317,6 +317,17 @@ class CLIClient:
         self._handle_error(resp)
         return resp.json()
 
+    def mcp_manifest(self, name: str) -> Dict[str, Any]:
+        """沙箱原生 MCP bridge 的实时清单 (聚合 server、工具数、配置文件路径)"""
+        # /mcp (not /toolbox/mcp): the streaming bridge proxy, which flushes SSE —
+        # the path a real MCP client uses. Works for poder + agent sandboxes.
+        resp = self._request("GET", f"/api/v1/sandboxes/{name}/mcp/manifest")
+        return resp.json()
+
+    def mcp_url(self, name: str) -> str:
+        """沙箱原生 MCP 端点 URL (给 MCP 客户端连接；需带鉴权头)"""
+        return f"{self.api_url}/api/v1/sandboxes/{name}/mcp"
+
     def upload_files(self, name: str, files: List[Tuple[str, bytes]], path: str = "/") -> Dict[str, Any]:
         """上传文件列表到指定目录"""
         file_dict = {}
