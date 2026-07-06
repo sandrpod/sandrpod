@@ -70,6 +70,10 @@ type EnvironmentInfo struct {
 	KernelVersion string `json:"kernel_version"` // e.g. 5.15.0-91-generic
 	Shell         string `json:"shell"`          // e.g. /bin/bash
 	WorkDir       string `json:"work_dir"`       // default working directory
+	// Home is the sandbox user's home directory. Consumers (e.g. Acme's
+	// digital-employee personal-skill discovery) need an absolute anchor for
+	// ~/.sandrpod/skills/ — work_dir is task-scoped and can't derive $HOME.
+	Home string `json:"home"` // e.g. /Users/alice, C:\Users\alice
 }
 
 // Server is the Toolbox HTTP server.
@@ -369,6 +373,7 @@ func getEnvInfo() EnvironmentInfo {
 	}
 
 	workDir, _ := os.Getwd()
+	home, _ := os.UserHomeDir() // empty on failure — consumers must nil-check
 
 	return EnvironmentInfo{
 		Arch:          runtime.GOARCH,
@@ -377,6 +382,7 @@ func getEnvInfo() EnvironmentInfo {
 		KernelVersion: platformKernelVersion(),
 		Shell:         shell,
 		WorkDir:       workDir,
+		Home:          home,
 	}
 }
 
