@@ -348,32 +348,41 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 
 		// Register or update sandbox metadata
 		now := time.Now()
+		// Arch/OS/OS-Version come from untrusted, locale-dependent agent headers
+		// and land in the sandbox row. Postgres enforces valid UTF-8 (SQLite did
+		// not), so a non-UTF-8 value — e.g. a Chinese Windows `cmd /c ver`
+		// emitting GBK bytes in X-Sandbox-OS-Version — makes the INSERT fail.
+		// Sanitize at this boundary so the row always persists.
 		sb := &podpkg.SandboxInfo{
 			ID:           sandboxName,
 			Name:         sandboxName,
-			Region:       r.Header.Get("X-Sandbox-Region"),
+			Region:       sanitizeUTF8(r.Header.Get("X-Sandbox-Region")),
 			ProviderType: "local-agent",
 			State:        podpkg.StateRunning,
 			ProxyURL:     "direct://" + sandboxName,
-			Arch:         r.Header.Get("X-Sandbox-Arch"),
-			OS:           r.Header.Get("X-Sandbox-OS"),
-			OSVersion:    r.Header.Get("X-Sandbox-OS-Version"),
+			Arch:         sanitizeUTF8(r.Header.Get("X-Sandbox-Arch")),
+			OS:           sanitizeUTF8(r.Header.Get("X-Sandbox-OS")),
+			OSVersion:    sanitizeUTF8(r.Header.Get("X-Sandbox-OS-Version")),
 			CreatedAt:    now,
 			LastActivity: now,
 		}
-		// Update if it already exists (agent reconnect), otherwise add
-		if existing, ok := sandboxStore.Get(sandboxName); ok {
-			sandboxStore.Update(sandboxName, func(s *podpkg.SandboxInfo) {
+		// Update if it already exists (agent reconnect), otherwise add. Never
+		// swallow the persist error: a silent failure here (as when the bad-UTF-8
+		// INSERT was rejected) leaves the agent "connected" but absent from the
+		// store — forever offline — with nothing in the logs.
+		if _, ok := sandboxStore.Get(sandboxName); ok {
+			if err := sandboxStore.Update(sandboxName, func(s *podpkg.SandboxInfo) {
 				s.State = podpkg.StateRunning
 				s.ProxyURL = "direct://" + sandboxName
 				s.Arch = sb.Arch
 				s.OS = sb.OS
 				s.OSVersion = sb.OSVersion
 				s.LastActivity = now
-			})
-			_ = existing
-		} else {
-			sandboxStore.Add(sb)
+			}); err != nil {
+				log.Printf("ERROR: agent %s reconnect: persist update failed: %v", sandboxName, err)
+			}
+		} else if err := sandboxStore.Add(sb); err != nil {
+			log.Printf("ERROR: agent %s connect: persist sandbox failed (%v) — will appear OFFLINE despite a live tunnel", sandboxName, err)
 		}
 		log.Printf("Agent %s connected as direct sandbox", sandboxName)
 
