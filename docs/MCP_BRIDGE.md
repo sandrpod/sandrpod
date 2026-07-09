@@ -343,9 +343,27 @@ SANDRPOD_MCP_SENSITIVE_PATTERNS=fire_,grant_admin
 SANDRPOD_MCP_SENSITIVE_PATTERNS_OVERRIDE=delete,destroy,wipe,send_money
 ```
 
-Permanent grants for non-sensitive tools are persisted in
-`~/.sandrpod/mcp_grants.json` (separate file from `permissions.json` to
-keep schemas stable). Delete a server's entry there to revoke.
+**Grant memory** (non-sensitive tools only — sensitive ones always prompt,
+no cache applies):
+
+- **Allow once** — this call only; next call prompts again.
+- **Allow for session** — cached in memory per `server:tool`; silent until
+  the agent restarts. Never written to disk.
+- **Allow permanently** — persisted per `server:tool` in
+  `~/.sandrpod/mcp_grants.json` (separate file from `permissions.json` to
+  keep schemas stable). Delete an entry there to revoke.
+- **Whole-server wildcard** — add `"<server>:*": true` under `"tools"` to
+  pre-approve every non-sensitive tool on that server in one line.
+  Operator-authored only (edit the file); the dialog never creates
+  wildcards, and sensitive tools still prompt through it.
+
+```json
+{
+  "version": 1,
+  "servers": { "browser": true },
+  "tools": { "browser:*": true, "gh:list_issues": true }
+}
+```
 
 `--permission-mode=off` skips all prompts (everything allowed). Use this
 only when the network boundary is your security model (e.g. local LAN

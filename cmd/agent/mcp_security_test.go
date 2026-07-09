@@ -137,3 +137,125 @@ func TestPermissionAdapter_SensitiveToolAlwaysPrompts(t *testing.T) {
 		t.Errorf("sensitive tool should not be persisted; file has: %s", body)
 	}
 }
+
+func TestPermissionAdapter_SessionGrantCachedUntilRestart(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "grants.json")
+	n := &scriptedNotifier{responses: []permission.PromptResponse{
+		permission.PromptAllowSession,
+		permission.PromptDeny, // only reachable after the "restart"
+	}}
+	a, err := newMCPPermissionAdapter(n, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "browser", Tool: "navigate"}
+
+	// Call 1 prompts (allow_session); call 2 is served from the session cache.
+	if d, _ := a.Check(context.Background(), evt); d != mcpbridge.DecisionAllow {
+		t.Fatal("call 1: want Allow")
+	}
+	if d, _ := a.Check(context.Background(), evt); d != mcpbridge.DecisionAllow {
+		t.Fatal("call 2: want Allow from session cache")
+	}
+	if n.calls != 1 {
+		t.Errorf("session grant must silence later calls; prompts=%d (want 1)", n.calls)
+	}
+	// Session grants are memory-only — never persisted.
+	if body, err := os.ReadFile(store); err == nil && strings.Contains(string(body), "navigate") {
+		t.Errorf("session grant must not be persisted; file has: %s", body)
+	}
+
+	// "Restart" the agent: a fresh adapter over the same store prompts again.
+	b, err := newMCPPermissionAdapter(n, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := b.Check(context.Background(), evt); d != mcpbridge.DecisionDeny {
+		t.Fatal("after restart: session grant must be gone (scripted deny)")
+	}
+	if n.calls != 2 {
+		t.Errorf("fresh adapter should have prompted once more; prompts=%d (want 2)", n.calls)
+	}
+}
+
+func TestPermissionAdapter_SessionGrantCoversSpawnAndRestart(t *testing.T) {
+	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptAllowSession}}
+	a, err := newMCPPermissionAdapter(n, filepath.Join(t.TempDir(), "grants.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spawn := mcpbridge.PermissionEvent{Source: "mcp.spawn", Server: "browser", Command: "node"}
+	restart := mcpbridge.PermissionEvent{Source: "mcp.restart", Server: "browser"}
+
+	if d, _ := a.Check(context.Background(), spawn); d != mcpbridge.DecisionAllow {
+		t.Fatal("spawn: want Allow")
+	}
+	// Restart shares the server-level session grant — no second prompt.
+	if d, _ := a.Check(context.Background(), restart); d != mcpbridge.DecisionAllow {
+		t.Fatal("restart: want Allow from session cache")
+	}
+	if n.calls != 1 {
+		t.Errorf("server-level session grant should cover restart; prompts=%d (want 1)", n.calls)
+	}
+}
+
+func TestPermissionAdapter_SensitiveToolNeverSessionCached(t *testing.T) {
+	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptAllowSession}}
+	a, err := newMCPPermissionAdapter(n, filepath.Join(t.TempDir(), "grants.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "gh", Tool: "send_message"}
+
+	for i := 1; i <= 2; i++ {
+		if d, _ := a.Check(context.Background(), evt); d != mcpbridge.DecisionAllow {
+			t.Fatalf("call %d: want Allow", i)
+		}
+	}
+	if n.calls != 2 {
+		t.Errorf("sensitive tool must prompt every time even after allow_session; prompts=%d (want 2)", n.calls)
+	}
+}
+
+func TestPermissionAdapter_ServerWildcardGrant(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "grants.json")
+	// Operator pre-approved every non-sensitive browser tool via the file.
+	seed := `{"version":1,"servers":{},"tools":{"browser:*":true}}`
+	if err := os.WriteFile(store, []byte(seed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptAllowOnce}}
+	a, err := newMCPPermissionAdapter(n, store)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Any non-sensitive tool on the wildcarded server: silent allow.
+	for _, tool := range []string{"navigate", "screenshot", "click"} {
+		evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "browser", Tool: tool}
+		if d, _ := a.Check(context.Background(), evt); d != mcpbridge.DecisionAllow {
+			t.Fatalf("browser:%s: want Allow via wildcard", tool)
+		}
+	}
+	if n.calls != 0 {
+		t.Errorf("wildcard must not prompt for non-sensitive tools; prompts=%d", n.calls)
+	}
+
+	// Sensitive tool on the same server: the wildcard must NOT cover it.
+	del := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "browser", Tool: "delete_history"}
+	if d, _ := a.Check(context.Background(), del); d != mcpbridge.DecisionAllow {
+		t.Fatal("browser:delete_history: want Allow (scripted allow_once)")
+	}
+	if n.calls != 1 {
+		t.Errorf("sensitive tool must still prompt despite wildcard; prompts=%d (want 1)", n.calls)
+	}
+
+	// A different server is out of the wildcard's scope.
+	other := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "gh", Tool: "list_issues"}
+	if _, err := a.Check(context.Background(), other); err != nil {
+		t.Fatal(err)
+	}
+	if n.calls != 2 {
+		t.Errorf("wildcard is per-server; gh should have prompted; prompts=%d (want 2)", n.calls)
+	}
+}

@@ -86,12 +86,22 @@ type mcpPermissionAdapter struct {
 
 	mu     sync.Mutex
 	grants mcpGrants
+	// Session grants ("allow for this session" in the dialog) live here —
+	// in-memory only, cleared when the agent restarts. Mirrors the
+	// persistent store's two-map split so a server literally named
+	// "gh:list_issues" can never collide with a tool key.
+	sessionServers map[string]bool
+	sessionTools   map[string]bool // "server:tool"
 }
 
 type mcpGrants struct {
-	Version   int             `json:"version"`
-	Servers   map[string]bool `json:"servers"`         // server name -> persistent allow for mcp.spawn
-	Tools     map[string]bool `json:"tools,omitempty"` // "server:tool" -> persistent allow for mcp.call
+	Version int             `json:"version"`
+	Servers map[string]bool `json:"servers"` // server name -> persistent allow for mcp.spawn
+	// Tools maps "server:tool" -> persistent allow for mcp.call. The
+	// special key "server:*" pre-approves every NON-sensitive tool on that
+	// server (sensitive ones still prompt — see isSensitiveTool). Wildcards
+	// are operator-authored (edit the file); the dialog never writes one.
+	Tools     map[string]bool `json:"tools,omitempty"`
 	UpdatedAt time.Time       `json:"updated_at"`
 }
 
@@ -104,6 +114,8 @@ func newMCPPermissionAdapter(notifier permission.Notifier, storePath string) (*m
 			Servers: map[string]bool{},
 			Tools:   map[string]bool{},
 		},
+		sessionServers: map[string]bool{},
+		sessionTools:   map[string]bool{},
 	}
 	if err := a.load(); err != nil && !os.IsNotExist(err) {
 		return nil, err
@@ -148,31 +160,36 @@ func (a *mcpPermissionAdapter) flushLocked() error {
 	return os.Rename(tmp, a.storePath)
 }
 
-// Check is the PermissionGate impl. Returns Allow immediately for already-
-// granted entries; otherwise prompts via the notifier and (on
-// PromptAllowPermanent) persists. Failure modes are fail-close (deny).
+// Check is the PermissionGate impl. Resolution order for non-sensitive
+// events: persistent grant (exact key, then the "server:*" wildcard for
+// calls) → session grant (in-memory, gone on agent restart) → prompt.
+// PromptAllowPermanent persists; PromptAllowSession caches in memory
+// only. Failure modes are fail-close (deny).
 //
-// Sensitive tools (delete_*, send_*, …) bypass the cache and prompt every
-// time, even if the user previously chose "allow permanent". This is a
-// safety floor: a permanent grant for a benign tool like list_issues
+// Sensitive tools (delete_*, send_*, …) bypass every cache — exact,
+// wildcard and session — and prompt on each call, even if the user
+// previously chose "allow permanent". This is a safety floor: a standing
+// grant for a benign tool like list_issues (or a whole-server wildcard)
 // should never accidentally cover delete_repo just because they share a
 // server. See sensitiveToolPatterns below for the exact list.
 func (a *mcpPermissionAdapter) Check(ctx context.Context, evt mcpbridge.PermissionEvent) (mcpbridge.Decision, error) {
 	sensitive := evt.Source == "mcp.call" && isSensitiveTool(evt.Tool)
 
-	a.mu.Lock()
-	if evt.Source == "mcp.call" && !sensitive {
-		key := evt.Server + ":" + evt.Tool
-		if a.grants.Tools[key] {
-			a.mu.Unlock()
+	if !sensitive {
+		a.mu.Lock()
+		var granted bool
+		if evt.Source == "mcp.call" {
+			key := evt.Server + ":" + evt.Tool
+			granted = a.grants.Tools[key] || a.grants.Tools[evt.Server+":*"] || a.sessionTools[key]
+		} else {
+			// mcp.spawn / mcp.restart share the server-level grant.
+			granted = a.grants.Servers[evt.Server] || a.sessionServers[evt.Server]
+		}
+		a.mu.Unlock()
+		if granted {
 			return mcpbridge.DecisionAllow, nil
 		}
-	} else if evt.Source != "mcp.call" && a.grants.Servers[evt.Server] {
-		// mcp.spawn / mcp.restart inherit the server-level grant.
-		a.mu.Unlock()
-		return mcpbridge.DecisionAllow, nil
 	}
-	a.mu.Unlock()
 
 	// Build a Request the notifier understands. The path field is a
 	// synthetic identifier so the tray UI's "what is being asked about"
@@ -190,7 +207,20 @@ func (a *mcpPermissionAdapter) Check(ctx context.Context, evt mcpbridge.Permissi
 	}
 
 	switch resp {
-	case permission.PromptAllowOnce, permission.PromptAllowSession:
+	case permission.PromptAllowOnce:
+		return mcpbridge.DecisionAllow, nil
+	case permission.PromptAllowSession:
+		// Remember until the agent restarts. Sensitive tools are never
+		// cached — same reasoning as the permanent case below.
+		if !sensitive {
+			a.mu.Lock()
+			if evt.Source == "mcp.call" {
+				a.sessionTools[evt.Server+":"+evt.Tool] = true
+			} else {
+				a.sessionServers[evt.Server] = true
+			}
+			a.mu.Unlock()
+		}
 		return mcpbridge.DecisionAllow, nil
 	case permission.PromptAllowPermanent:
 		// Sensitive tools never get a permanent grant — even if the
