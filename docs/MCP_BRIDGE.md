@@ -343,19 +343,30 @@ SANDRPOD_MCP_SENSITIVE_PATTERNS=fire_,grant_admin
 SANDRPOD_MCP_SENSITIVE_PATTERNS_OVERRIDE=delete,destroy,wipe,send_money
 ```
 
+**Grant scope** (`-mcp-grant-scope`, env `SANDRPOD_MCP_GRANT_SCOPE`) sets
+what a dialog "allow" covers for tool calls:
+
+- **`server`** (default) — one allow covers every non-sensitive tool on
+  that server; first use of a server prompts once, then it goes quiet.
+  Persisted as the `"<server>:*"` wildcard.
+- **`tool`** — every tool prompts once (grants recorded per `server:tool`).
+  For deployments where each tool is a separately-audited capability.
+
+Scope shapes what a click *writes*, never what a lookup honors: per-tool
+entries, wildcards and session grants all keep working in either mode.
+
 **Grant memory** (non-sensitive tools only — sensitive ones always prompt,
-no cache applies):
+no cache applies, in both scopes):
 
 - **Allow once** — this call only; next call prompts again.
-- **Allow for session** — cached in memory per `server:tool`; silent until
-  the agent restarts. Never written to disk.
-- **Allow permanently** — persisted per `server:tool` in
-  `~/.sandrpod/mcp_grants.json` (separate file from `permissions.json` to
-  keep schemas stable). Delete an entry there to revoke.
-- **Whole-server wildcard** — add `"<server>:*": true` under `"tools"` to
-  pre-approve every non-sensitive tool on that server in one line.
-  Operator-authored only (edit the file); the dialog never creates
-  wildcards, and sensitive tools still prompt through it.
+- **Allow for session** — cached in memory (per scope key above); silent
+  until the agent restarts. Never written to disk.
+- **Allow permanently** — persisted in `~/.sandrpod/mcp_grants.json`
+  (separate file from `permissions.json` to keep schemas stable). Delete
+  an entry there to revoke.
+- **Whole-server wildcard** — `"<server>:*": true` under `"tools"`. This
+  is what server-scope allows write; in tool scope it stays available as
+  an operator-authored edit. Sensitive tools still prompt through it.
 - **Hand-edits apply live** — the agent re-checks the file (mtime/size)
   on every gated call, so edits take effect on the next call in BOTH
   directions: adding a grant silences it, deleting the file revokes every

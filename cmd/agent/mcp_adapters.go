@@ -84,6 +84,7 @@ func redactReason(ev mcpbridge.AuditEvent) string {
 type mcpPermissionAdapter struct {
 	notifier  permission.Notifier
 	storePath string
+	scope     grantScope
 
 	mu     sync.Mutex
 	grants mcpGrants
@@ -106,6 +107,36 @@ type fileStamp struct {
 	size int64
 }
 
+// grantScope is the granularity of grants issued from the consent dialog.
+// It shapes what a click WRITES, never what a lookup honors: existing
+// per-tool entries, wildcards and session grants all keep working in
+// either mode, and sensitive tools prompt every time in both.
+type grantScope string
+
+const (
+	// grantScopeServer: one allow covers every non-sensitive tool on that
+	// server (persisted as the "server:*" wildcard). The default — first
+	// use of a server prompts once, then it goes quiet.
+	grantScopeServer grantScope = "server"
+	// grantScopeTool: today's narrow behavior — every tool prompts once.
+	// For deployments where each tool is a separately-audited capability.
+	grantScopeTool grantScope = "tool"
+)
+
+// parseGrantScope maps a flag/env value to a scope. Unknown values fall
+// back to the NARROW scope (more prompts, never wider access) and log.
+func parseGrantScope(s string) grantScope {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", string(grantScopeServer):
+		return grantScopeServer
+	case string(grantScopeTool):
+		return grantScopeTool
+	default:
+		log.Printf("MCP bridge: unknown -mcp-grant-scope %q — falling back to per-tool grants", s)
+		return grantScopeTool
+	}
+}
+
 type mcpGrants struct {
 	Version int             `json:"version"`
 	Servers map[string]bool `json:"servers"` // server name -> persistent allow for mcp.spawn
@@ -117,10 +148,11 @@ type mcpGrants struct {
 	UpdatedAt time.Time       `json:"updated_at"`
 }
 
-func newMCPPermissionAdapter(notifier permission.Notifier, storePath string) *mcpPermissionAdapter {
+func newMCPPermissionAdapter(notifier permission.Notifier, storePath string, scope grantScope) *mcpPermissionAdapter {
 	a := &mcpPermissionAdapter{
 		notifier:  notifier,
 		storePath: storePath,
+		scope:     scope,
 		grants: mcpGrants{
 			Version: 1,
 			Servers: map[string]bool{},
@@ -192,14 +224,28 @@ func (a *mcpPermissionAdapter) loadIfChanged() {
 }
 
 // grantedLocked reports whether evt is covered by a persistent or session
-// grant. Caller must hold a.mu.
+// grant. Caller must hold a.mu. Both maps honor the exact tool key and
+// the "server:*" wildcard regardless of the configured scope — scope only
+// decides which of the two a dialog click writes.
 func (a *mcpPermissionAdapter) grantedLocked(evt mcpbridge.PermissionEvent) bool {
 	if evt.Source == "mcp.call" {
 		key := evt.Server + ":" + evt.Tool
-		return a.grants.Tools[key] || a.grants.Tools[evt.Server+":*"] || a.sessionTools[key]
+		wild := evt.Server + ":*"
+		return a.grants.Tools[key] || a.grants.Tools[wild] ||
+			a.sessionTools[key] || a.sessionTools[wild]
 	}
 	// mcp.spawn / mcp.restart share the server-level grant.
 	return a.grants.Servers[evt.Server] || a.sessionServers[evt.Server]
+}
+
+// callGrantKey is the key a dialog allow is recorded under for mcp.call
+// events: the whole-server wildcard in server scope, the exact tool in
+// tool scope.
+func (a *mcpPermissionAdapter) callGrantKey(evt mcpbridge.PermissionEvent) string {
+	if a.scope == grantScopeServer {
+		return evt.Server + ":*"
+	}
+	return evt.Server + ":" + evt.Tool
 }
 
 func (a *mcpPermissionAdapter) flushLocked() error {
@@ -246,10 +292,15 @@ func (a *mcpPermissionAdapter) Check(ctx context.Context, evt mcpbridge.Permissi
 	// Build a Request the notifier understands. The path field is a
 	// synthetic identifier so the tray UI's "what is being asked about"
 	// label reads naturally.
+	reason := describeEvent(evt)
+	if a.scope == grantScopeServer && evt.Source == "mcp.call" && !sensitive {
+		// The click grants more than this one tool — say so in the dialog.
+		reason += " — allowing covers ALL non-sensitive tools on this server"
+	}
 	req := permission.Request{
 		Path:   "mcp:" + evt.Server,
 		Mode:   permission.ModeReadWrite,
-		Reason: describeEvent(evt),
+		Reason: reason,
 		Caller: evt.Source,
 	}
 
@@ -267,7 +318,7 @@ func (a *mcpPermissionAdapter) Check(ctx context.Context, evt mcpbridge.Permissi
 		if !sensitive {
 			a.mu.Lock()
 			if evt.Source == "mcp.call" {
-				a.sessionTools[evt.Server+":"+evt.Tool] = true
+				a.sessionTools[a.callGrantKey(evt)] = true
 			} else {
 				a.sessionServers[evt.Server] = true
 			}
@@ -290,7 +341,7 @@ func (a *mcpPermissionAdapter) Check(ctx context.Context, evt mcpbridge.Permissi
 		a.loadIfChanged()
 		a.mu.Lock()
 		if evt.Source == "mcp.call" {
-			a.grants.Tools[evt.Server+":"+evt.Tool] = true
+			a.grants.Tools[a.callGrantKey(evt)] = true
 		} else {
 			a.grants.Servers[evt.Server] = true
 		}

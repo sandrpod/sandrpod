@@ -137,8 +137,9 @@ func buildMCPPermissionGate() (mcpbridge.PermissionGate, string) {
 	// Construction never fails: a corrupt grants file degrades to empty
 	// grants (prompt for everything) instead of the old error path, which
 	// returned a nil gate — silently replaced by allow-all in the bridge.
-	adapter := newMCPPermissionAdapter(notifier, defaultMCPGrantsPath())
-	return adapter, "mode=" + mode + " grants=" + defaultMCPGrantsPath()
+	scope := parseGrantScope(*mcpGrantScope)
+	adapter := newMCPPermissionAdapter(notifier, defaultMCPGrantsPath(), scope)
+	return adapter, "mode=" + mode + " scope=" + string(scope) + " grants=" + defaultMCPGrantsPath()
 }
 
 // buildMCPAuditSink reuses the shared audit recorder set up by
