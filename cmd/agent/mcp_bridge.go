@@ -65,6 +65,7 @@ func installMCPBridge(ctx context.Context) http.Handler {
 		Permission: perm,
 		Audit:      auditSink,
 		Logger:     log.Default(),
+		OAuth:      buildMCPOAuthOptions(),
 	})
 	log.Printf("MCP bridge: permission=%s audit=%s", permDesc, auditDesc)
 	if err := mgr.Start(ctx); err != nil {

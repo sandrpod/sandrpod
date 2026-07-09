@@ -25,6 +25,10 @@ const (
 	StateFailed     ChildState = "failed"
 	StateRestarting ChildState = "restarting"
 	StateStopped    ChildState = "stopped"
+	// StateWaitingAuth parks an auth=oauth child that needs its one-time
+	// browser consent. The supervisor deliberately leaves it alone (no restart
+	// hammering); the OAuth callback completing moves it on via a restart.
+	StateWaitingAuth ChildState = "waiting_auth"
 )
 
 // childTransport is the subset of the mcp-go client we actually use. Defined
@@ -134,11 +138,16 @@ type Child struct {
 	Alias string // namespace prefix (defaults to Name)
 	Cfg   ServerConfig
 
+	// oauth is the bridge's OAuth machinery, set by the manager when enabled.
+	// Nil means OAuth is unavailable (entries with auth=oauth fail clearly).
+	oauth oauthRuntime
+
 	mu           sync.RWMutex
 	transport    childTransport
 	tools        []mcp.Tool
 	state        ChildState
 	lastError    string
+	authURL      string // set while state == StateWaitingAuth
 	startedAt    time.Time
 	restarts     int
 	restartTimes []time.Time // sliding window for MaxRestartPerMin
@@ -167,9 +176,10 @@ func (c *Child) Start(ctx context.Context) error {
 	c.mu.Lock()
 	c.state = StateStarting
 	c.lastError = ""
+	c.authURL = ""
 	c.mu.Unlock()
 
-	t, err := newRealChildTransport(c.Cfg)
+	t, err := c.newTransport()
 	if err != nil {
 		c.setFailed(err)
 		return err
@@ -184,6 +194,9 @@ func (c *Child) Start(ctx context.Context) error {
 
 	if err := t.Start(hsCtx); err != nil {
 		_ = t.Close()
+		if c.awaitAuthorization(err) {
+			return err
+		}
 		c.setFailed(fmt.Errorf("start transport: %w", err))
 		return err
 	}
@@ -196,6 +209,9 @@ func (c *Child) Start(ctx context.Context) error {
 	}
 	if _, err := t.Initialize(hsCtx, initReq); err != nil {
 		_ = t.Close()
+		if c.awaitAuthorization(err) {
+			return err
+		}
 		c.setFailed(fmt.Errorf("initialize: %w", err))
 		return err
 	}
@@ -300,6 +316,67 @@ func (c *Child) WaitDrain(ctx context.Context) bool {
 	case <-ctx.Done():
 		return false
 	}
+}
+
+// newTransport builds the MCP client for this child. Entries that opted into
+// OAuth get the OAuth-aware client (token attach + refresh from the store);
+// everything else takes the plain path. Deliberately NOT auto-detected: the
+// OAuth transport refuses to send requests before a token exists, which would
+// break ordinary no-auth remote servers.
+func (c *Child) newTransport() (childTransport, error) {
+	if !c.Cfg.WantsOAuth() {
+		return newRealChildTransport(c.Cfg)
+	}
+	if err := c.Cfg.Validate(); err != nil {
+		return nil, err
+	}
+	if c.oauth == nil {
+		return nil, fmt.Errorf("server %q requests auth=oauth but OAuth is not enabled on this bridge", c.Name)
+	}
+	return c.oauth.transportFor(c.Name, c.Cfg)
+}
+
+// awaitAuthorization inspects a startup error: when it is mcp-go's
+// authorization-required signal (no token stored yet, or the server rejected
+// the stored one), it kicks off the OAuth flow — discovery, dynamic client
+// registration, authorization URL — parks the child in waiting_auth, and
+// notifies the operator hook (e.g. browser open). Reports whether the error
+// was consumed as an auth handoff.
+func (c *Child) awaitAuthorization(err error) bool {
+	if c.oauth == nil || !client.IsOAuthAuthorizationRequiredError(err) {
+		return false
+	}
+	handler := client.GetOAuthHandler(err)
+	if handler == nil {
+		return false
+	}
+	// Fresh context: the handshake context may be near (or past) its deadline,
+	// and discovery+DCR are quick HTTP calls to the authorization server.
+	actx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	authURL, aerr := c.oauth.begin(actx, c.Name, handler)
+	if aerr != nil {
+		c.setFailed(fmt.Errorf("oauth authorization setup: %w", aerr))
+		return true
+	}
+	c.setWaitingAuth(authURL)
+	c.oauth.notify(c.Name, authURL)
+	return true
+}
+
+func (c *Child) setWaitingAuth(authURL string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.state = StateWaitingAuth
+	c.authURL = authURL
+	c.lastError = "authorization required — approve in the browser"
+}
+
+// AuthURL returns the pending authorization URL ("" unless waiting_auth).
+func (c *Child) AuthURL() string {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.authURL
 }
 
 func (c *Child) setFailed(err error) {

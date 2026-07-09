@@ -76,9 +76,9 @@ func TestLoadConfig_missingFile(t *testing.T) {
 
 func TestSortedKeys_stable(t *testing.T) {
 	cfg := &Config{McpServers: map[string]ServerConfig{
-		"zeta": {Command: "z"},
+		"zeta":  {Command: "z"},
 		"alpha": {Command: "a"},
-		"mid": {Command: "m"},
+		"mid":   {Command: "m"},
 	}}
 	got := cfg.SortedKeys()
 	want := []string{"alpha", "mid", "zeta"}

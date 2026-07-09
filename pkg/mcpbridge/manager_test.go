@@ -13,13 +13,13 @@ import (
 
 // fakeTransport satisfies childTransport without spawning a subprocess.
 type fakeTransport struct {
-	mu        sync.Mutex
-	tools     []mcp.Tool
-	closed    bool
-	lastCall  string
-	lastArgs  any
-	callResp  *mcp.CallToolResult
-	callErr   error
+	mu       sync.Mutex
+	tools    []mcp.Tool
+	closed   bool
+	lastCall string
+	lastArgs any
+	callResp *mcp.CallToolResult
+	callErr  error
 }
 
 func (f *fakeTransport) Start(context.Context) error { return nil }

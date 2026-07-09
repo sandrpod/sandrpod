@@ -27,7 +27,7 @@ func NewHTTPHandler(mgr *ChildManager) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.Handle("/mcp", streamable)
-	mux.Handle("/mcp/manifest", manifestHandler(mgr))
+	mux.Handle("/mcp/manifest", manifestHandler(mgr, false))
 	// Anything else under /mcp/ (e.g. future /mcp/sse) falls through to the
 	// Streamable server so it can negotiate SSE itself.
 	mux.Handle("/mcp/", streamable)
@@ -47,7 +47,7 @@ func NewHTTPHandler(mgr *ChildManager) http.Handler {
 //	POST /admin/servers/{name}/disable         — stop one server (in-memory)
 func NewAdminHandler(mgr *ChildManager) http.Handler {
 	mux := http.NewServeMux()
-	mux.Handle("/admin/manifest", manifestHandler(mgr))
+	mux.Handle("/admin/manifest", manifestHandler(mgr, true))
 	mux.HandleFunc("/admin/reload", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -107,7 +107,12 @@ type Manifest struct {
 	ConfigPath string `json:"config_path,omitempty"`
 }
 
-func manifestHandler(mgr *ChildManager) http.HandlerFunc {
+// manifestHandler serves the bridge manifest. includeAuthURL distinguishes the
+// two mounts: the public /mcp/manifest redacts pending OAuth authorization
+// URLs (the browser handoff is a local, user-session concern — see the
+// AuthURL field comment), while the local-only /admin/manifest keeps them so
+// the desktop/tray can open the consent page.
+func manifestHandler(mgr *ChildManager, includeAuthURL bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -115,9 +120,12 @@ func manifestHandler(mgr *ChildManager) http.HandlerFunc {
 		}
 		snap := mgr.Snapshot()
 		total := 0
-		for _, s := range snap {
+		for i, s := range snap {
 			if s.State == string(StateReady) {
 				total += s.ToolCount
+			}
+			if !includeAuthURL {
+				snap[i].AuthURL = ""
 			}
 		}
 		m := Manifest{

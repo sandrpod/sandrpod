@@ -132,6 +132,13 @@ var (
 	mcpListen        = flag.String("mcp-listen", envOr("SANDRPOD_MCP_LISTEN", "127.0.0.1:7090"), "HTTP listen address used in --mcp-only mode.")
 	mcpToken         = flag.String("mcp-token", envOr("SANDRPOD_MCP_TOKEN", ""), "Shared secret required on /mcp requests (Authorization: Bearer <token>). Empty disables auth — only safe when the tunnel/listener is itself the trust boundary.")
 	mcpGuardManifest = flag.Bool("mcp-guard-manifest", envBool("SANDRPOD_MCP_GUARD_MANIFEST", false), "Also require -mcp-token on /mcp/manifest. Default false: the manifest is read-only metadata (server names/tool counts, no credentials) and stays reachable with platform auth alone.")
+
+	// Native OAuth for remote MCP servers (mcp.json entries with "auth":
+	// "oauth") — browser consent once, token persisted + auto-refreshed.
+	// See docs/MCP_AUTH.md.
+	mcpOAuth         = flag.Bool("mcp-oauth", envBool("SANDRPOD_MCP_OAUTH", true), "Enable the browser OAuth flow for mcp.json entries with auth=oauth.")
+	mcpOAuthCallback = flag.String("mcp-oauth-callback", envOr("SANDRPOD_MCP_OAUTH_CALLBACK", "127.0.0.1:7099"), "Loopback listen address for the OAuth redirect callback.")
+	mcpOAuthTokenDir = flag.String("mcp-oauth-token-dir", envOr("SANDRPOD_MCP_OAUTH_TOKEN_DIR", ""), "Directory for persisted OAuth tokens (default: ~/.sandrpod/oauth).")
 )
 
 func main() {

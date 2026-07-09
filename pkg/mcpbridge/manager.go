@@ -53,6 +53,10 @@ type ManagerOptions struct {
 	// SupervisorInterval is the per-child ping interval used to detect dead
 	// stdio children. Zero uses defaultPingInterval.
 	SupervisorInterval time.Duration
+
+	// OAuth enables the browser OAuth flow for entries with `"auth": "oauth"`.
+	// Nil disables it (such entries fail with a clear error). See oauth.go.
+	OAuth *OAuthOptions
 }
 
 // ChildManager owns the set of stdio children.
@@ -64,6 +68,10 @@ type ChildManager struct {
 	fqIndex  map[string]fqEntry
 
 	onChange []func()
+
+	// oauth is the shared broker (callback server + pending auth table);
+	// nil when OAuth is disabled.
+	oauth *oauthBroker
 
 	// supervisor goroutine bookkeeping
 	supervisorCtx    context.Context
@@ -114,6 +122,30 @@ func NewManager(opts ManagerOptions) *ChildManager {
 // hard error — silently swallowing bad JSON would mask configuration
 // mistakes that the user wants to fix.
 func (m *ChildManager) Start(ctx context.Context) error {
+	// OAuth broker binds its loopback callback listener before any child
+	// spawns: the redirect URI must be known when the OAuth client is built.
+	if m.opts.OAuth != nil && m.oauth == nil {
+		b := newOAuthBroker(*m.opts.OAuth, m.opts.Logger)
+		if err := b.listen(); err != nil {
+			m.opts.Logger.Printf("mcpbridge: %v — OAuth disabled, auth=oauth entries will fail", err)
+		} else {
+			b.restartChild = func(name string) {
+				if err := m.RestartServer(context.Background(), name); err != nil {
+					m.opts.Logger.Printf("mcpbridge: restart after oauth %q: %v", name, err)
+				}
+			}
+			b.failChild = func(name, reason string) {
+				m.mu.RLock()
+				c := m.children[name]
+				m.mu.RUnlock()
+				if c != nil {
+					c.setFailedReason(reason)
+				}
+			}
+			m.oauth = b
+		}
+	}
+
 	cfg, err := LoadConfig(m.opts.ConfigPath)
 	switch {
 	case err == nil:
@@ -154,6 +186,9 @@ func (m *ChildManager) Stop(ctx context.Context) error {
 	if m.watcher != nil {
 		_ = m.watcher.Close()
 		m.watcher = nil
+	}
+	if m.oauth != nil {
+		m.oauth.close()
 	}
 
 	m.mu.Lock()
@@ -342,6 +377,9 @@ func (m *ChildManager) spawnLocked(ctx context.Context, name string, sc ServerCo
 	}
 
 	child := newChild(name, sc)
+	if m.oauth != nil {
+		child.oauth = m.oauth
+	}
 	child.configHash = hashServerConfig(sc)
 	if err := child.Start(ctx); err != nil {
 		m.opts.Logger.Printf("mcpbridge: start %q failed: %v", name, err)
@@ -452,6 +490,7 @@ func (m *ChildManager) Snapshot() []ChildSnapshot {
 			StartedAt: c.startedAt,
 			Restarts:  c.restarts,
 			LastError: c.lastError,
+			AuthURL:   c.authURL,
 		})
 		c.mu.RUnlock()
 	}
@@ -475,6 +514,11 @@ type ChildSnapshot struct {
 	StartedAt time.Time `json:"started_at,omitzero"`
 	Restarts  int       `json:"restart_count"`
 	LastError string    `json:"last_error,omitempty"`
+	// AuthURL is the pending OAuth authorization URL while state ==
+	// waiting_auth. Redacted from the public /mcp/manifest — only the
+	// local-only admin surface exposes it (the browser handoff is a
+	// local, user-session concern).
+	AuthURL string `json:"auth_url,omitempty"`
 }
 
 // OnChange registers a callback fired whenever the aggregated tool set may
@@ -790,6 +834,8 @@ func hashServerConfig(sc ServerConfig) string {
 		URL      string
 		Type     string
 		HeaderKV [][2]string // sorted
+		Auth     string
+		OAuth    *OAuthServerOpts
 		Sandrpod *SandrpodOpts
 	}
 	kv := make([][2]string, 0, len(sc.Env))
@@ -811,6 +857,8 @@ func hashServerConfig(sc ServerConfig) string {
 		URL:      sc.URL,
 		Type:     sc.Type,
 		HeaderKV: hkv,
+		Auth:     sc.Auth,
+		OAuth:    sc.OAuth,
 		Sandrpod: sc.Sandrpod,
 	})
 	sum := sha256.Sum256(b)

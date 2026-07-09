@@ -23,9 +23,14 @@ type Config struct {
 //   - HTTP:  set URL (+ Type/Headers) — connected over Streamable-HTTP or SSE.
 //
 // Exactly one of Command / URL must be set. The HTTP fields (url/type/headers)
-// mirror Claude Code's remote-server shape for config compatibility. OAuth
-// HTTP servers are not handled here — bridge them with the stdio `mcp-remote`
-// shim instead.
+// mirror Claude Code's remote-server shape for config compatibility.
+//
+// OAuth-protected HTTP servers (MCP authorization spec: OAuth 2.1 + PKCE +
+// dynamic client registration — Notion/GitHub/Linear-style endpoints) opt in
+// with `"auth": "oauth"`. The bridge then runs the browser-consent flow once
+// (child parks in waiting_auth with an authorization URL), persists the token,
+// and refreshes it unattended. See docs/MCP_AUTH.md. The stdio `mcp-remote`
+// shim remains a valid alternative.
 type ServerConfig struct {
 	// stdio transport
 	Command string            `json:"command,omitempty"`
@@ -37,12 +42,33 @@ type ServerConfig struct {
 	Type    string            `json:"type,omitempty"`    // "streamable-http" (default) | "http" | "sse"
 	Headers map[string]string `json:"headers,omitempty"` // request headers; values support ${ENV} expansion
 
+	// Auth selects the auth mechanism for an HTTP entry. "" (default) means
+	// static Headers only; "oauth" opts into the browser OAuth flow.
+	Auth string `json:"auth,omitempty"`
+	// OAuth carries optional OAuth details; its presence also implies
+	// Auth=oauth. Nil is the norm (dynamic client registration).
+	OAuth *OAuthServerOpts `json:"oauth,omitempty"`
+
 	// Sandrpod holds bridge-specific options. Optional; nil means defaults.
 	Sandrpod *SandrpodOpts `json:"sandrpod,omitempty"`
 }
 
+// OAuthServerOpts pins OAuth client details for servers that don't support
+// dynamic registration, and requests non-default scopes. Values support
+// ${ENV} expansion like Headers.
+type OAuthServerOpts struct {
+	ClientID     string   `json:"client_id,omitempty"`
+	ClientSecret string   `json:"client_secret,omitempty"`
+	Scopes       []string `json:"scopes,omitempty"`
+}
+
 // IsHTTP reports whether this entry is an HTTP (url-based) server.
 func (s ServerConfig) IsHTTP() bool { return strings.TrimSpace(s.URL) != "" }
+
+// WantsOAuth reports whether this entry opted into the browser OAuth flow.
+func (s ServerConfig) WantsOAuth() bool {
+	return strings.EqualFold(strings.TrimSpace(s.Auth), "oauth") || s.OAuth != nil
+}
 
 // Target returns a human-readable target (command or url) for logs/manifest.
 func (s ServerConfig) Target() string {
@@ -61,6 +87,14 @@ func (s ServerConfig) Validate() error {
 		return fmt.Errorf("both command and url set; specify exactly one")
 	case !hasCmd && !hasURL:
 		return fmt.Errorf("neither command nor url set")
+	}
+	if s.WantsOAuth() {
+		if !hasURL {
+			return fmt.Errorf("auth=oauth requires an http (url) server")
+		}
+		if t := strings.ToLower(strings.TrimSpace(s.Type)); t == "sse" {
+			return fmt.Errorf("auth=oauth requires the streamable-http transport, not sse")
+		}
 	}
 	return nil
 }

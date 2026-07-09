@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -109,10 +110,18 @@ func installMCPBridge(ctx context.Context, server *toolbox.Server) *mcpbridge.Ch
 	// nil here: a server-side container has no interactive user, and the
 	// container itself is the security boundary. The bridge substitutes an
 	// allow-all gate when Permission is nil.
+	// OAuth: enabled so auth=oauth entries work here too, tokens beside the
+	// config. Note the loopback callback is only browser-reachable on a real
+	// host — inside a container the flow can't complete, so OAuth entries are
+	// an agent-first feature (docs/MCP_AUTH.md); the entry parks in
+	// waiting_auth with the URL visible on the admin surface.
 	mgr := mcpbridge.NewManager(mcpbridge.ManagerOptions{
 		ConfigPath: path,
 		HotReload:  *mcpHotReload,
 		Logger:     log.Default(),
+		OAuth: &mcpbridge.OAuthOptions{
+			TokenDir: filepath.Join(filepath.Dir(path), "oauth"),
+		},
 	})
 
 	if err := mgr.Start(ctx); err != nil {

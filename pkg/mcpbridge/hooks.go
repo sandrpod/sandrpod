@@ -40,17 +40,17 @@ func (allowAllGate) Check(context.Context, PermissionEvent) (Decision, error) {
 
 // AuditEvent records a single bridge action for downstream NDJSON / uploader.
 type AuditEvent struct {
-	Source         string
-	Decision       Decision
-	Server         string
-	Tool           string
-	ArgsSummary    string
-	ResultStatus   string
-	DurationMs     int64
-	Reason         string
-	SessionID      string
-	Caller         string
-	Extras         map[string]string
+	Source       string
+	Decision     Decision
+	Server       string
+	Tool         string
+	ArgsSummary  string
+	ResultStatus string
+	DurationMs   int64
+	Reason       string
+	SessionID    string
+	Caller       string
+	Extras       map[string]string
 }
 
 // AuditSink receives audit events. Implementations must be non-blocking

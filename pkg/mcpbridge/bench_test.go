@@ -269,4 +269,3 @@ func callTool(t *testing.T, url, sid string, id int, fqn string) {
 	}
 	resp.Body.Close()
 }
-

@@ -76,9 +76,44 @@ curl <api-server>/api/v1/sandboxes/<name>/mcp/manifest \
   -H "Authorization: Bearer <mcp_token>"        # manifest 默认可省;调用 /mcp 时必带
 ```
 
+## OAuth 型 remote MCP(Notion / GitHub / Linear 官方端点)
+
+以上讲的是**保护 bridge 自己**;这一节是反方向 —— **bridge 作为 MCP 客户端,连需要
+OAuth 授权的上游**(MCP authorization 规范:OAuth 2.1 + PKCE + 动态客户端注册,
+`mcp.notion.com` 这类端点没有"填个 key"一说)。bridge 原生支持,条目 opt-in:
+
+```json
+{ "mcpServers": { "notion": { "url": "https://mcp.notion.com/mcp", "auth": "oauth" } } }
+```
+
+流程(一次浏览器授权,之后无人值守):
+
+1. child 启动 → 无 token → 进入 **`waiting_auth`** 状态(supervisor 不会去轰它),
+   自动完成发现 + 动态注册,生成授权 URL。
+2. **agent(员工机)自动弹系统浏览器**打开该 URL(`OnAuthorizationRequired` 钩子);
+   URL 同时出现在**本地 admin socket** 的 `/admin/manifest`(`auth_url` 字段)——
+   公开的 `/mcp/manifest` **只显示 waiting_auth 状态、不含 URL**(浏览器交接是本机
+   用户会话的事)。
+3. 人在浏览器点同意 → 回跳到 bridge 的**回环回调**(默认 `127.0.0.1:7099/callback`)
+   → PKCE 换 token → 存 **`~/.sandrpod/oauth/<server>.json`**(0600,含 refresh_token,
+   永不出本机)→ child 自动重启 → `ready`。
+4. 之后过期由 mcp-go 用 refresh_token **自动续期** —— 云端数字员工半夜调工具也不需要人。
+
+可选字段:`"oauth": {"client_id": "…", "client_secret": "${ENV}", "scopes": […]}`
+(仅用于不支持动态注册的服务;缺省走 DCR)。
+
+agent 侧开关:`-mcp-oauth`(默认开)、`-mcp-oauth-callback`(默认 127.0.0.1:7099)、
+`-mcp-oauth-token-dir`(默认 ~/.sandrpod/oauth);env 同名 `SANDRPOD_MCP_OAUTH*`。
+
+**范围限定**:这是 **agent(真机)优先**的特性 —— 回调地址是回环,浏览器必须够得到。
+toolbox **容器**内也接了同样的机制(token 存配置旁),但浏览器到不了容器回环,流程
+无法闭环;容器场景请用静态 `headers` 或 stdio `mcp-remote` 垫片。**为什么不给所有
+url 条目自动启用**:mcp-go 的 OAuth transport 在无 token 时**连请求都不发**,自动套
+会把普通无鉴权 remote 全部打进 waiting_auth,故必须显式 `"auth": "oauth"`。
+
 ## 相关
 
 - [MCP_BRIDGE.md](MCP_BRIDGE.md) — bridge 本身(mcp.json、聚合、热重载)
 - [MCP_AUTH_HEADER_CONFLICT_FIX.md](MCP_AUTH_HEADER_CONFLICT_FIX.md) — 两 header 方案的由来
 - [AUTH_AND_KEYS.md](AUTH_AND_KEYS.md) — 平台 token 的签发/管理
-- 代码:`pkg/mcpbridge/auth.go`(`TokenMiddleware`)、`cmd/agent`/`cmd/toolbox`(`-mcp-token` / `-mcp-guard-manifest`)
+- 代码:`pkg/mcpbridge/auth.go`(`TokenMiddleware`)、`pkg/mcpbridge/oauth.go`(OAuth broker/TokenStore)、`cmd/agent`(`-mcp-token` / `-mcp-guard-manifest` / `-mcp-oauth*`)
