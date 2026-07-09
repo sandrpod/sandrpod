@@ -356,6 +356,11 @@ no cache applies):
   pre-approve every non-sensitive tool on that server in one line.
   Operator-authored only (edit the file); the dialog never creates
   wildcards, and sensitive tools still prompt through it.
+- **Hand-edits apply live** — the agent re-checks the file (mtime/size)
+  on every gated call, so edits take effect on the next call in BOTH
+  directions: adding a grant silences it, deleting the file revokes every
+  persistent grant. No agent restart needed. A file that fails to parse
+  keeps the last good grants (never widens access) and logs once.
 
 ```json
 {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -86,12 +87,23 @@ type mcpPermissionAdapter struct {
 
 	mu     sync.Mutex
 	grants mcpGrants
+	// seen is the (mtime, size) of the store as of the last read — the
+	// zero value means "file absent". loadIfChanged compares against it
+	// so hand-edits are picked up without re-parsing on every call.
+	seen fileStamp
 	// Session grants ("allow for this session" in the dialog) live here —
 	// in-memory only, cleared when the agent restarts. Mirrors the
 	// persistent store's two-map split so a server literally named
 	// "gh:list_issues" can never collide with a tool key.
 	sessionServers map[string]bool
 	sessionTools   map[string]bool // "server:tool"
+}
+
+// fileStamp identifies a store-file revision. os.FileInfo mtimes carry no
+// monotonic clock, so == comparison is sound.
+type fileStamp struct {
+	mod  time.Time
+	size int64
 }
 
 type mcpGrants struct {
@@ -105,7 +117,7 @@ type mcpGrants struct {
 	UpdatedAt time.Time       `json:"updated_at"`
 }
 
-func newMCPPermissionAdapter(notifier permission.Notifier, storePath string) (*mcpPermissionAdapter, error) {
+func newMCPPermissionAdapter(notifier permission.Notifier, storePath string) *mcpPermissionAdapter {
 	a := &mcpPermissionAdapter{
 		notifier:  notifier,
 		storePath: storePath,
@@ -117,22 +129,58 @@ func newMCPPermissionAdapter(notifier permission.Notifier, storePath string) (*m
 		sessionServers: map[string]bool{},
 		sessionTools:   map[string]bool{},
 	}
-	if err := a.load(); err != nil && !os.IsNotExist(err) {
-		return nil, err
-	}
-	return a, nil
+	a.loadIfChanged()
+	return a
 }
 
-func (a *mcpPermissionAdapter) load() error {
-	data, err := os.ReadFile(a.storePath)
-	if err != nil {
-		return err
-	}
+// loadIfChanged synchronises in-memory grants with the on-disk store, so
+// hand-edits take effect without an agent restart — in BOTH directions:
+// a new grant is honored on the next check, and deleting the file revokes
+// every persistent grant. Construction and every Check go through here.
+//
+// Cost control: the file is re-read only when its (mtime, size) changed
+// since the last observation; the steady-state cost is one os.Stat, ~µs
+// against the ~ms child tool call each check guards.
+//
+// Failure modes degrade safely: a corrupt file keeps the last good state
+// (logged once per file revision, not per call — a broken permission
+// store must never widen access, and the old constructor error path did
+// exactly that by collapsing to the bridge's allow-all default). Session
+// grants are in-memory only and untouched throughout.
+func (a *mcpPermissionAdapter) loadIfChanged() {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	fi, err := os.Stat(a.storePath)
+	if os.IsNotExist(err) {
+		if a.seen != (fileStamp{}) {
+			a.grants = mcpGrants{Version: 1, Servers: map[string]bool{}, Tools: map[string]bool{}}
+			a.seen = fileStamp{}
+			log.Printf("MCP bridge: %s removed — all persistent MCP grants revoked", a.storePath)
+		}
+		return
+	}
+	if err != nil {
+		log.Printf("MCP bridge: stat %s: %v — keeping previously loaded grants", a.storePath, err)
+		return
+	}
+	stamp := fileStamp{mod: fi.ModTime(), size: fi.Size()}
+	if stamp == a.seen {
+		return
+	}
+	// Record the revision even when it fails to parse below, so a broken
+	// file logs once instead of on every subsequent check.
+	a.seen = stamp
+
+	data, err := os.ReadFile(a.storePath)
+	if err != nil {
+		log.Printf("MCP bridge: read %s: %v — keeping previously loaded grants", a.storePath, err)
+		return
+	}
 	var g mcpGrants
 	if err := json.Unmarshal(data, &g); err != nil {
-		return fmt.Errorf("parse mcp_grants.json: %w", err)
+		log.Printf("MCP bridge: parse %s: %v — keeping previously loaded grants", a.storePath, err)
+		return
 	}
 	if g.Servers == nil {
 		g.Servers = map[string]bool{}
@@ -141,7 +189,17 @@ func (a *mcpPermissionAdapter) load() error {
 		g.Tools = map[string]bool{}
 	}
 	a.grants = g
-	return nil
+}
+
+// grantedLocked reports whether evt is covered by a persistent or session
+// grant. Caller must hold a.mu.
+func (a *mcpPermissionAdapter) grantedLocked(evt mcpbridge.PermissionEvent) bool {
+	if evt.Source == "mcp.call" {
+		key := evt.Server + ":" + evt.Tool
+		return a.grants.Tools[key] || a.grants.Tools[evt.Server+":*"] || a.sessionTools[key]
+	}
+	// mcp.spawn / mcp.restart share the server-level grant.
+	return a.grants.Servers[evt.Server] || a.sessionServers[evt.Server]
 }
 
 func (a *mcpPermissionAdapter) flushLocked() error {
@@ -176,15 +234,9 @@ func (a *mcpPermissionAdapter) Check(ctx context.Context, evt mcpbridge.Permissi
 	sensitive := evt.Source == "mcp.call" && isSensitiveTool(evt.Tool)
 
 	if !sensitive {
+		a.loadIfChanged()
 		a.mu.Lock()
-		var granted bool
-		if evt.Source == "mcp.call" {
-			key := evt.Server + ":" + evt.Tool
-			granted = a.grants.Tools[key] || a.grants.Tools[evt.Server+":*"] || a.sessionTools[key]
-		} else {
-			// mcp.spawn / mcp.restart share the server-level grant.
-			granted = a.grants.Servers[evt.Server] || a.sessionServers[evt.Server]
-		}
+		granted := a.grantedLocked(evt)
 		a.mu.Unlock()
 		if granted {
 			return mcpbridge.DecisionAllow, nil
@@ -231,13 +283,20 @@ func (a *mcpPermissionAdapter) Check(ctx context.Context, evt mcpbridge.Permissi
 		if sensitive {
 			return mcpbridge.DecisionAllow, nil
 		}
+		// Merge the on-disk state first: flushLocked writes the whole
+		// struct, so without this a hand-edit made while the agent runs
+		// (e.g. an operator-added "server:*" wildcard) would be clobbered
+		// by the next dialog click.
+		a.loadIfChanged()
 		a.mu.Lock()
 		if evt.Source == "mcp.call" {
 			a.grants.Tools[evt.Server+":"+evt.Tool] = true
 		} else {
 			a.grants.Servers[evt.Server] = true
 		}
-		_ = a.flushLocked()
+		if err := a.flushLocked(); err != nil {
+			log.Printf("MCP bridge: persist grant failed (%v) — grant holds for this run only", err)
+		}
 		a.mu.Unlock()
 		return mcpbridge.DecisionAllow, nil
 	case permission.PromptDeny:

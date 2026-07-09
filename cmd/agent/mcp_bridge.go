@@ -134,11 +134,10 @@ func buildMCPPermissionGate() (mcpbridge.PermissionGate, string) {
 		notifier = permission.NopNotifier{}
 	}
 
-	adapter, err := newMCPPermissionAdapter(notifier, defaultMCPGrantsPath())
-	if err != nil {
-		log.Printf("MCP bridge: build permission adapter failed: %v — fail-close", err)
-		return nil, "broken (deny-all on error)"
-	}
+	// Construction never fails: a corrupt grants file degrades to empty
+	// grants (prompt for everything) instead of the old error path, which
+	// returned a nil gate — silently replaced by allow-all in the bridge.
+	adapter := newMCPPermissionAdapter(notifier, defaultMCPGrantsPath())
 	return adapter, "mode=" + mode + " grants=" + defaultMCPGrantsPath()
 }
 

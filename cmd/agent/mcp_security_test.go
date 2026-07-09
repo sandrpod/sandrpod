@@ -76,10 +76,7 @@ func TestPermissionAdapter_NormalToolCachesAfterPermanent(t *testing.T) {
 	dir := t.TempDir()
 	store := filepath.Join(dir, "grants.json")
 	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptAllowPermanent}}
-	a, err := newMCPPermissionAdapter(n, store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := newMCPPermissionAdapter(n, store)
 
 	// First call: prompts, gets allow_permanent, persists.
 	evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "gh", Tool: "list_issues"}
@@ -109,10 +106,7 @@ func TestPermissionAdapter_SensitiveToolAlwaysPrompts(t *testing.T) {
 		permission.PromptAllowOnce,
 		permission.PromptDeny,
 	}}
-	a, err := newMCPPermissionAdapter(n, store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := newMCPPermissionAdapter(n, store)
 	evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "gh", Tool: "delete_repo"}
 
 	// Call 1: allow_permanent → allowed but NOT persisted.
@@ -144,10 +138,7 @@ func TestPermissionAdapter_SessionGrantCachedUntilRestart(t *testing.T) {
 		permission.PromptAllowSession,
 		permission.PromptDeny, // only reachable after the "restart"
 	}}
-	a, err := newMCPPermissionAdapter(n, store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := newMCPPermissionAdapter(n, store)
 	evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "browser", Tool: "navigate"}
 
 	// Call 1 prompts (allow_session); call 2 is served from the session cache.
@@ -166,10 +157,7 @@ func TestPermissionAdapter_SessionGrantCachedUntilRestart(t *testing.T) {
 	}
 
 	// "Restart" the agent: a fresh adapter over the same store prompts again.
-	b, err := newMCPPermissionAdapter(n, store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	b := newMCPPermissionAdapter(n, store)
 	if d, _ := b.Check(context.Background(), evt); d != mcpbridge.DecisionDeny {
 		t.Fatal("after restart: session grant must be gone (scripted deny)")
 	}
@@ -180,10 +168,7 @@ func TestPermissionAdapter_SessionGrantCachedUntilRestart(t *testing.T) {
 
 func TestPermissionAdapter_SessionGrantCoversSpawnAndRestart(t *testing.T) {
 	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptAllowSession}}
-	a, err := newMCPPermissionAdapter(n, filepath.Join(t.TempDir(), "grants.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := newMCPPermissionAdapter(n, filepath.Join(t.TempDir(), "grants.json"))
 	spawn := mcpbridge.PermissionEvent{Source: "mcp.spawn", Server: "browser", Command: "node"}
 	restart := mcpbridge.PermissionEvent{Source: "mcp.restart", Server: "browser"}
 
@@ -201,10 +186,7 @@ func TestPermissionAdapter_SessionGrantCoversSpawnAndRestart(t *testing.T) {
 
 func TestPermissionAdapter_SensitiveToolNeverSessionCached(t *testing.T) {
 	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptAllowSession}}
-	a, err := newMCPPermissionAdapter(n, filepath.Join(t.TempDir(), "grants.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := newMCPPermissionAdapter(n, filepath.Join(t.TempDir(), "grants.json"))
 	evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "gh", Tool: "send_message"}
 
 	for i := 1; i <= 2; i++ {
@@ -225,10 +207,7 @@ func TestPermissionAdapter_ServerWildcardGrant(t *testing.T) {
 		t.Fatal(err)
 	}
 	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptAllowOnce}}
-	a, err := newMCPPermissionAdapter(n, store)
-	if err != nil {
-		t.Fatal(err)
-	}
+	a := newMCPPermissionAdapter(n, store)
 
 	// Any non-sensitive tool on the wildcarded server: silent allow.
 	for _, tool := range []string{"navigate", "screenshot", "click"} {
@@ -257,5 +236,111 @@ func TestPermissionAdapter_ServerWildcardGrant(t *testing.T) {
 	}
 	if n.calls != 2 {
 		t.Errorf("wildcard is per-server; gh should have prompted; prompts=%d (want 2)", n.calls)
+	}
+}
+
+func TestPermissionAdapter_HandEditTakesEffectWithoutRestart(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "grants.json")
+	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptDeny}}
+	a := newMCPPermissionAdapter(n, store) // file absent at startup
+
+	// Operator hand-writes a wildcard while the agent is running.
+	if err := os.WriteFile(store, []byte(`{"version":1,"tools":{"browser:*":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "browser", Tool: "find"}
+	if d, _ := a.Check(context.Background(), evt); d != mcpbridge.DecisionAllow {
+		t.Fatal("hand-edited wildcard should allow without a restart")
+	}
+	if n.calls != 0 {
+		t.Errorf("no prompt expected — reload-on-miss should have picked up the edit; prompts=%d", n.calls)
+	}
+}
+
+func TestPermissionAdapter_DeletingGrantsFileRevokes(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "grants.json")
+	if err := os.WriteFile(store, []byte(`{"version":1,"tools":{"browser:*":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptDeny}}
+	a := newMCPPermissionAdapter(n, store)
+
+	evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "browser", Tool: "find"}
+	if d, _ := a.Check(context.Background(), evt); d != mcpbridge.DecisionAllow {
+		t.Fatal("wildcard present at startup should allow")
+	}
+	if err := os.Remove(store); err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := a.Check(context.Background(), evt); d != mcpbridge.DecisionDeny {
+		t.Fatal("deleting the grants file should revoke persistent grants")
+	}
+	if n.calls != 1 {
+		t.Errorf("expected exactly one prompt after revocation; prompts=%d", n.calls)
+	}
+}
+
+func TestPermissionAdapter_CorruptFileDegradesToPromptNotAllowAll(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "grants.json")
+	if err := os.WriteFile(store, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptDeny}}
+	a := newMCPPermissionAdapter(n, store) // must not fail construction
+
+	evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "gh", Tool: "list_issues"}
+	if d, _ := a.Check(context.Background(), evt); d != mcpbridge.DecisionDeny {
+		t.Fatal("corrupt grants file must degrade to prompting (deny here), never allow-all")
+	}
+	if n.calls != 1 {
+		t.Errorf("expected the call to prompt; prompts=%d", n.calls)
+	}
+}
+
+func TestPermissionAdapter_CorruptReloadKeepsLastGoodGrants(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "grants.json")
+	if err := os.WriteFile(store, []byte(`{"version":1,"tools":{"browser:*":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptDeny}}
+	a := newMCPPermissionAdapter(n, store)
+
+	// File turns to garbage while running (e.g. interrupted manual edit).
+	if err := os.WriteFile(store, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Covered tool: still allowed from the last good in-memory state.
+	evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "browser", Tool: "find"}
+	if d, _ := a.Check(context.Background(), evt); d != mcpbridge.DecisionAllow {
+		t.Fatal("corrupt reload should keep the last good grants")
+	}
+	if n.calls != 0 {
+		t.Errorf("covered tool should not prompt; prompts=%d", n.calls)
+	}
+}
+
+func TestPermissionAdapter_PermanentGrantPreservesHandEdit(t *testing.T) {
+	store := filepath.Join(t.TempDir(), "grants.json")
+	// Operator wildcard already on disk; adapter has NOT loaded it (file
+	// written after construction) — the flush-merge must not clobber it.
+	n := &scriptedNotifier{responses: []permission.PromptResponse{permission.PromptAllowPermanent}}
+	a := newMCPPermissionAdapter(n, store)
+	if err := os.WriteFile(store, []byte(`{"version":1,"tools":{"browser:*":true}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// A different server's tool prompts → permanent → flush.
+	evt := mcpbridge.PermissionEvent{Source: "mcp.call", Server: "gh", Tool: "list_issues"}
+	if d, _ := a.Check(context.Background(), evt); d != mcpbridge.DecisionAllow {
+		t.Fatal("want Allow")
+	}
+	body, err := os.ReadFile(store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{`"browser:*": true`, `"gh:list_issues": true`} {
+		if !strings.Contains(string(body), key) {
+			t.Errorf("flush clobbered or missed %s; file: %s", key, body)
+		}
 	}
 }
