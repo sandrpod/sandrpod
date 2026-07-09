@@ -15,25 +15,14 @@ import (
 	"github.com/getlantern/systray"
 )
 
-// trayIcon is the embedded PNG bytes shown in the menu bar / system tray.
-// macOS will tint a monochrome image automatically; on Windows/Linux we
-// ship a simple opaque PNG. Sprint 2 uses a placeholder; Sprint 4 will
-// replace with a proper Acme asset.
-//
-// 1×1 transparent PNG — minimal valid bytes so systray has *something*
-// without us shipping a real asset yet.
-var trayIcon = []byte{
-	0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
-	0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-	0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00,
-	0x0d, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0x00, 0x01, 0x00, 0x00,
-	0x05, 0x00, 0x01, 0x0d, 0x0a, 0x2d, 0xb4, 0x00, 0x00, 0x00, 0x00, 0x49,
-	0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
-}
+// trayIcon (shield + check) is embedded per-platform — see icon_unix.go
+// (PNG for macOS/Linux) and icon_windows.go (ICO: the Windows tray loads
+// icons via LoadImage(IMAGE_ICON), which rejects PNG bytes and renders an
+// empty icon). Regenerate both assets with scripts/gen_tray_icon.py.
 
 func onTrayReady() {
 	systray.SetIcon(trayIcon)
-	systray.SetTitle("🛡 Acme") // text fallback for environments where icons render poorly
+	systray.SetTitle("Acme") // shown next to the icon on macOS; no-op on Windows
 	systray.SetTooltip("Acme Sandbox 权限守护")
 
 	// Header (disabled, just a label)
