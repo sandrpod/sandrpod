@@ -104,6 +104,24 @@ func TestMatchSessionAllow_WildcardSessionID(t *testing.T) {
 	}
 }
 
+// A grant scoped to a specific session must NOT leak to a sessionless request
+// (SessionID == "") — the regression guard for the "this session only" consent
+// leak. It still matches a request carrying its own session id.
+func TestMatchSessionAllow_ScopedGrantDoesNotLeakToSessionless(t *testing.T) {
+	grants := []Rule{
+		{Path: "/x", Mode: ModeRead, SessionID: "sess-A", ExpiresAt: time.Now().Add(time.Hour)},
+	}
+	if matchSessionAllow(Request{Path: "/x/f", Mode: ModeRead, SessionID: ""}, grants, "/home", time.Now()) {
+		t.Error("a session-scoped grant must not match a sessionless request")
+	}
+	if matchSessionAllow(Request{Path: "/x/f", Mode: ModeRead, SessionID: "sess-B"}, grants, "/home", time.Now()) {
+		t.Error("a session-scoped grant must not match a different session")
+	}
+	if !matchSessionAllow(Request{Path: "/x/f", Mode: ModeRead, SessionID: "sess-A"}, grants, "/home", time.Now()) {
+		t.Error("a session-scoped grant must match its own session")
+	}
+}
+
 func TestNoopAuditSink_RecordDoesNothing(t *testing.T) {
 	// Just exercise the noop sink; must not panic and is a no-op.
 	noopAuditSink{}.Record("s", "d", "p", "m", "c", "sid", "r", "mc")

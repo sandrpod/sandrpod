@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html"
 	"log"
 	"net"
 	"net/http"
@@ -322,6 +323,14 @@ func (b *oauthBroker) handleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	b.mu.Unlock()
 
+	// Enforce the TTL at consumption, not only in begin()'s opportunistic
+	// sweep: a child parked in waiting_auth never re-runs begin(), so without
+	// this an unredeemed state would stay valid for the whole process lifetime
+	// instead of pendingAuthTTL.
+	if p != nil && time.Since(p.created) > pendingAuthTTL {
+		p = nil
+	}
+
 	if state == "" || p == nil {
 		httpHTML(w, http.StatusBadRequest, "授权回调无效或已过期",
 			"unknown or expired state — restart the server entry to get a fresh authorization link.")
@@ -362,7 +371,12 @@ func (b *oauthBroker) handleCallback(w http.ResponseWriter, r *http.Request) {
 func httpHTML(w http.ResponseWriter, status int, title, detail string) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
+	// Escape both fields: `detail` can carry attacker-controlled text — the
+	// callback's error_description query param, or a hostile token endpoint's
+	// raw response body surfaced via err.Error() — and this page renders in the
+	// loopback callback origin.
+	title = html.EscapeString(title)
 	fmt.Fprintf(w, `<!doctype html><meta charset="utf-8"><title>%s</title>
 <body style="font-family:system-ui;margin:4rem auto;max-width:32rem;text-align:center">
-<h2>%s</h2><p style="color:#666">%s</p></body>`, title, title, detail)
+<h2>%s</h2><p style="color:#666">%s</p></body>`, title, title, html.EscapeString(detail))
 }

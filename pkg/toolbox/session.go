@@ -4,6 +4,7 @@
 package toolbox
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -98,6 +99,12 @@ func GenerateSessionId() string {
 func (m *SessionManager) Create(sessionId string) (*Session, error) {
 	if sessionId == "" {
 		sessionId = GenerateSessionId()
+	} else if !validIDRe.MatchString(sessionId) {
+		// The same guard Execute already applies. Without it a caller-supplied
+		// session_id flows into the session dir (m.baseDir + "/" + sessionId →
+		// MkdirAll) and into the log/exit-file paths built from it, so
+		// "../../tmp/x" would create/write outside the sessions base.
+		return nil, &SessionError{Op: "create", Err: fmt.Errorf("invalid session_id")}
 	}
 
 	m.mu.Lock()

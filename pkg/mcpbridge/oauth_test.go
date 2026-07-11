@@ -350,3 +350,15 @@ func containsStr(s, sub string) bool {
 	}
 	return false
 }
+
+func TestHTTPHTML_EscapesDetail(t *testing.T) {
+	rec := httptest.NewRecorder()
+	httpHTML(rec, http.StatusOK, "t", `<script>alert(1)</script>`)
+	body := rec.Body.String()
+	if containsStr(body, "<script>") {
+		t.Errorf("httpHTML did not escape detail; body: %s", body)
+	}
+	if !containsStr(body, "&lt;script&gt;") {
+		t.Errorf("expected escaped payload in body; got: %s", body)
+	}
+}

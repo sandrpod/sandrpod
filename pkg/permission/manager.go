@@ -535,7 +535,11 @@ func matchSessionAllow(req Request, grants []Rule, home string, now time.Time) b
 		if !r.ExpiresAt.IsZero() && now.After(r.ExpiresAt) {
 			continue
 		}
-		if r.SessionID != "" && req.SessionID != "" && r.SessionID != req.SessionID {
+		// A session-scoped grant matches only its own session. The earlier
+		// `req.SessionID != ""` guard made a sessionless request (SessionID
+		// == "", e.g. a stateless one-shot exec) match ANY session grant,
+		// leaking a "this session only" consent to later sessionless callers.
+		if r.SessionID != "" && r.SessionID != req.SessionID {
 			continue
 		}
 		if !r.Mode.Allows(req.Mode) {
