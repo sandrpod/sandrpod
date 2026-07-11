@@ -167,6 +167,12 @@ func DefaultCommandPolicy() CommandPolicy {
 			"sudo", "doas", "su",
 			// Disk / firmware (catastrophic mistakes)
 			"diskutil", "dd", "mkfs",
+			// The gate's own admin CLI: `sandrpod-tray unlock <path>
+			// --i-understand-the-risk` removes a hardlock headlessly, so an AI
+			// running it via the shell could unlock ~/.ssh etc. and then read it.
+			// (Only the /process path scans commands — see the file header's
+			// honest-scope note; this raises the bar, it isn't a hard wall.)
+			"sandrpod-tray",
 		},
 		Warn: []string{
 			// Common exfil vectors that have legitimate uses

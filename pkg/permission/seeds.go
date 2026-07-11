@@ -34,6 +34,17 @@ func DefaultHardlockSeeds() []Rule {
 		"~/.kube",
 		"~/.config/gh",
 		"~/.docker",
+		// sandrpod's own security state: the gate's rules, MCP grants, the
+		// audit trail, and persisted OAuth tokens. Hardlocking these stops the
+		// AI from rewriting its own permissions / grants or deleting audit
+		// evidence via the (gated) file API. Note: this does NOT cover the
+		// arbitrary-code path — `/process` runs open()/os.Remove() directly,
+		// outside the gate — but it closes the file-API vector. mcp.json (the
+		// operator-managed config) is deliberately left writable.
+		"~/.sandrpod/permissions.json",
+		"~/.sandrpod/mcp_grants.json",
+		"~/.sandrpod/audit",
+		"~/.sandrpod/oauth",
 	}
 
 	var osSpec []string
