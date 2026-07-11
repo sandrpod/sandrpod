@@ -22,6 +22,11 @@ func TestIsSensitiveTool(t *testing.T) {
 		"publish_post", "post_tweet",
 		"transfer_funds", "pay_invoice", "charge_card",
 		"merge_pr", "revoke_token", "reset_password", "unsubscribe_all",
+		// extended net: access/moderation/financial/destructive verbs
+		"clear_history", "kill_process", "cancel_order", "archive_channel",
+		"invite_user", "share_document", "withdraw_funds", "downgrade_plan",
+		"grant_access", "approve_payment", "block_user", "ban_member",
+		"disable_account", "deactivate_user", "suspend_subscription",
 	} {
 		if !isSensitiveTool(want) {
 			t.Errorf("expected %q to be sensitive", want)

@@ -387,6 +387,7 @@ func describeEvent(evt mcpbridge.PermissionEvent) string {
 // Extend via SANDRPOD_MCP_SENSITIVE_PATTERNS env (comma-separated).
 // Replace (not extend) via SANDRPOD_MCP_SENSITIVE_PATTERNS_OVERRIDE.
 var sensitiveToolPatterns = []string{
+	// Destructive / irreversible
 	"delete",
 	"remove",
 	"drop",
@@ -394,15 +395,33 @@ var sensitiveToolPatterns = []string{
 	"purge",
 	"destroy",
 	"wipe",
+	"clear", // clear_history, clear_data
+	"kill",  // kill_process, kill_job
+	"reset", // reset_password
+	"cancel",
+	"archive",
+	// Outbound side effects
 	"send",    // send_email, send_message, send_dm, ...
 	"publish", // publish_post, publish_repo, ...
 	"post",    // post_tweet, post_comment, ... (some false positives — OK)
+	"invite",
+	"share", // share grants access to others
+	// Financial
 	"transfer",
 	"pay",
 	"charge",
+	"withdraw",
+	"downgrade",
+	// Access / moderation / state
 	"merge", // merge_pr — irreversible from user POV
 	"revoke",
-	"reset", // reset_password
+	"grant",   // grant_access, grant_role
+	"approve", // approve_pr, approve_payment
+	"block",
+	"ban",
+	"disable",
+	"deactivate",
+	"suspend",
 	"unsubscribe",
 }
 
