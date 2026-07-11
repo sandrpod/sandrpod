@@ -116,6 +116,7 @@ func newE2BGateway(domain string, d e2bDeps) http.Handler {
 	return e2bcompat.Handler(e2bcompat.Config{
 		Domain:          domain,
 		Auth:            d.authenticator(),
+		Authorize:       d.authorizeSandbox,
 		Sandboxes:       &e2bSandboxBackend{d},
 		Envd:            &e2bEnvdBackend{d},
 		Code:            &e2bCodeBackend{d},
@@ -144,6 +145,20 @@ func (d e2bDeps) resolveSingleSandbox(ident string) string {
 		match = sb.Name
 	}
 	return match
+}
+
+// authorizeSandbox is the data-plane ownership gate (e2bcompat.Config.Authorize):
+// the authenticated identity may act on the sandbox only if it owns it. Mirrors
+// the control-plane e2bSandboxBackend.owns semantics exactly — ident=="" is the
+// auth-disabled/anonymous case, and an unowned (legacy) record stays world-
+// visible for back-compat, matching canAccessSandbox. An unknown sandbox is
+// allowed through so the downstream toolbox call returns its normal not-found.
+func (d e2bDeps) authorizeSandbox(ident, sandbox string) bool {
+	sb, ok := d.sandboxes.Get(sandbox)
+	if !ok {
+		return true
+	}
+	return ident == "" || sb.Owner == "" || sb.Owner == ident
 }
 
 // e2bCodeBackend implements the stateful run_code surface by proxying to the

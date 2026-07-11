@@ -49,6 +49,15 @@ type Config struct {
 	// pointed at a fixed E2B_SANDBOX_URL). Given the caller's identity it
 	// returns their sandbox ID. Optional; used only as a fallback.
 	SandboxResolver func(identity string) string
+	// Authorize reports whether the authenticated identity may act on the
+	// resolved sandbox. It gates the DATA plane (envd filesystem/process,
+	// code-interpreter, and the generic port proxy), which — unlike the
+	// control plane — derives its target sandbox from a caller-supplied
+	// header/Host and would otherwise let any authenticated caller reach any
+	// tenant's sandbox by ID. Return true to allow. When nil the check is
+	// skipped (single-tenant / auth-disabled deployments). Called only for a
+	// non-empty resolved sandbox, before forwarding or dispatch.
+	Authorize func(identity, sandbox string) bool
 	// Forwarder, when set, is given each envd/code request once its target
 	// sandbox is known. In multi-instance load mode the sandbox's tunnel may
 	// terminate on a peer node; the forwarder reverse-proxies the request there
@@ -146,6 +155,16 @@ func Handler(cfg Config) http.Handler {
 			if sandbox == "" && cfg.SandboxResolver != nil {
 				sandbox = cfg.SandboxResolver(ident)
 			}
+			// Ownership: the target sandbox came from a caller-controlled
+			// header/Host, so verify the authenticated identity may reach it
+			// before touching any tunnel. 404 (not 403) to avoid confirming a
+			// sandbox the caller doesn't own even exists. Checked on the entry
+			// node — Owner lives in the shared store, no tunnel needed — so an
+			// unauthorized cross-tenant request never gets forwarded.
+			if sandbox != "" && cfg.Authorize != nil && !cfg.Authorize(ident, sandbox) {
+				writeErr(w, http.StatusNotFound, "sandbox not found")
+				return
+			}
 			// Multi-instance: if this sandbox's tunnel lives on a peer node, the
 			// forwarder reverse-proxies the request there (envd/code need the
 			// tunnel; the control plane above does not).
@@ -171,6 +190,13 @@ func Handler(cfg Config) http.Handler {
 				sandbox = cfg.SandboxResolver(ident)
 			}
 			if sandbox != "" {
+				// Ownership gate (see the envd/code branch above): the generic
+				// port proxy reaches arbitrary in-sandbox services, so the same
+				// cross-tenant check applies before forwarding or proxying.
+				if cfg.Authorize != nil && !cfg.Authorize(ident, sandbox) {
+					writeErr(w, http.StatusNotFound, "sandbox not found")
+					return
+				}
 				// Cross-node: forward to the owner node first if the tunnel is remote.
 				if cfg.Forwarder != nil && cfg.Forwarder(w, r, sandbox) {
 					return

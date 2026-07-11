@@ -353,6 +353,13 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		// not), so a non-UTF-8 value — e.g. a Chinese Windows `cmd /c ver`
 		// emitting GBK bytes in X-Sandbox-OS-Version — makes the INSERT fail.
 		// Sanitize at this boundary so the row always persists.
+		// Owner is the identity that registered the agent (this route is
+		// adminOnly, so an operator/admin token). Without it the record is
+		// Owner=="" — which canAccessSandbox treats as world-visible, letting
+		// ANY authenticated token reach the employee's machine. Stamping the
+		// connecting identity scopes access to that identity (all admins still
+		// pass via isAdmin()). Empty only when auth is disabled (single-tenant).
+		owner := identityFrom(r).Name
 		sb := &podpkg.SandboxInfo{
 			ID:           sandboxName,
 			Name:         sandboxName,
@@ -360,6 +367,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			ProviderType: "local-agent",
 			State:        podpkg.StateRunning,
 			ProxyURL:     "direct://" + sandboxName,
+			Owner:        owner,
 			Arch:         sanitizeUTF8(r.Header.Get("X-Sandbox-Arch")),
 			OS:           sanitizeUTF8(r.Header.Get("X-Sandbox-OS")),
 			OSVersion:    sanitizeUTF8(r.Header.Get("X-Sandbox-OS-Version")),
@@ -374,6 +382,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			if err := sandboxStore.Update(sandboxName, func(s *podpkg.SandboxInfo) {
 				s.State = podpkg.StateRunning
 				s.ProxyURL = "direct://" + sandboxName
+				s.Owner = owner // backfill ownerless legacy records on reconnect
 				s.Arch = sb.Arch
 				s.OS = sb.OS
 				s.OSVersion = sb.OSVersion
@@ -595,6 +604,10 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 					IP:           poderResp.IP,
 					PoderID:      pID,
 					ProxyURL:     "tunnel://" + pID,
+					// Owner scopes access to the creating identity; without it the
+					// record is world-visible to every authenticated token (see
+					// the agent-connect path). This route is adminOnly.
+					Owner:        identityFrom(r).Name,
 					Arch:         poderArch,
 					OS:           poderOS,
 					OSVersion:    poderOSVersion,

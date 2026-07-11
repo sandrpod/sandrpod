@@ -504,3 +504,55 @@ func TestPortProxy_GenericPortRouting(t *testing.T) {
 		t.Errorf("envd path should not hit PortProxy")
 	}
 }
+
+// TestDataPlane_OwnershipEnforced guards the cross-tenant IDOR fix: the data
+// plane derives its target sandbox from a caller-controlled header/Host, so a
+// caller authenticated as one identity must NOT reach a sandbox owned by
+// another. Covers all three data-plane branches (envd, code-interpreter, and
+// the generic port proxy) plus the owner-allowed control.
+func TestDataPlane_OwnershipEnforced(t *testing.T) {
+	// user1 owns sbx1; "victim" belongs to someone else.
+	owners := map[string]string{"sbx1": "user1", "victim": "user2"}
+	portHit := false
+	gw := Handler(Config{
+		Domain:    "app.example.com",
+		Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+		Authorize: func(ident, sandbox string) bool { return owners[sandbox] == ident },
+		Sandboxes: newFakeSandboxes(),
+		Envd:      newFakeEnvd(),
+		Code:      &fakeCode{},
+		PortProxy: func(w http.ResponseWriter, _ *http.Request, _ string, _ int) bool {
+			portHit = true
+			w.WriteHeader(http.StatusTeapot)
+			return true
+		},
+	})
+	key := "e2b_" + strings.Repeat("a", 40)
+	call := func(host, method, path string) int {
+		req := httptest.NewRequest(method, "http://"+host+path, nil)
+		req.Host = host
+		req.Header.Set("Authorization", "Bearer "+key)
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	// Cross-tenant: every data-plane branch must 404 before touching the backend.
+	if code := call("49982-victim.app.example.com", "GET", "/files"); code != http.StatusNotFound {
+		t.Errorf("cross-tenant envd: got %d, want 404", code)
+	}
+	if code := call("49999-victim.app.example.com", "POST", "/execute"); code != http.StatusNotFound {
+		t.Errorf("cross-tenant code: got %d, want 404", code)
+	}
+	if code := call("50005-victim.app.example.com", "POST", "/mcp"); code != http.StatusNotFound {
+		t.Errorf("cross-tenant port proxy: got %d, want 404", code)
+	}
+	if portHit {
+		t.Error("PortProxy was invoked for a sandbox the caller does not own")
+	}
+
+	// Owner is still allowed through to the port proxy (sentinel 418).
+	if code := call("50005-sbx1.app.example.com", "POST", "/mcp"); code != http.StatusTeapot {
+		t.Errorf("owner port proxy wrongly denied: got %d, want 418", code)
+	}
+}
