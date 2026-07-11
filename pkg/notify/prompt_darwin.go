@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/sandrpod/sandrpod/pkg/brand"
 	"github.com/sandrpod/sandrpod/pkg/permission"
 )
 
@@ -26,7 +27,7 @@ type MacPrompter struct {
 
 // NewMacPrompter constructs a MacPrompter with sensible defaults.
 func NewMacPrompter() *MacPrompter {
-	return &MacPrompter{AppTitle: "Acme Sandbox 权限请求"}
+	return &MacPrompter{AppTitle: brand.Name() + " Sandbox 权限请求"}
 }
 
 // newPlatformPrompter is the build-tag-selected constructor used by

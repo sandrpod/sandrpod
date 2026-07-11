@@ -24,7 +24,7 @@
 //   - The full prompt the LLM was working from. We capture the request's
 //     "Reason" string when the executor sets one, but we do not pull
 //     conversational context. That's the orchestrator's job, and it
-//     already lives in Acme's session log.
+//     already lives in the consuming platform's session log.
 
 package audit
 

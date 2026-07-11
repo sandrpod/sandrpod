@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/sandrpod/sandrpod/pkg/brand"
 	"github.com/sandrpod/sandrpod/pkg/permission"
 )
 
@@ -66,7 +67,7 @@ func httpIndex(w http.ResponseWriter, r *http.Request) {
 		policyRows.WriteString(`<tr><td colspan="3" class="empty">（暂无命令策略 — 重启 tray 会自动安装默认列表）</td></tr>`)
 	}
 
-	fmt.Fprintf(w, settingsHTML, rulesRows.String(), sessionRows.String(), policyRows.String())
+	fmt.Fprintf(w, settingsHTML, brand.Name(), brand.Name(), rulesRows.String(), sessionRows.String(), policyRows.String())
 }
 
 func renderPolicyRow(cmd, action string) string {
@@ -253,14 +254,14 @@ func httpRuleRemove(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// settingsHTML is a minimal-but-presentable single-page UI. Two %s
-// placeholders: rules table body, session-grants table body. JS does the
-// add/remove via fetch().
+// settingsHTML is a minimal-but-presentable single-page UI. Placeholders
+// (in order): brand ×2 (title, h1), rules table body, session-grants table
+// body, policy table body. JS does the add/remove via fetch().
 const settingsHTML = `<!doctype html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<title>Acme Sandbox 授权管理</title>
+<title>%s Sandbox 授权管理</title>
 <style>
   body { font: 14px/1.5 -apple-system, "Segoe UI", "PingFang SC", sans-serif;
          margin: 32px auto; max-width: 880px; color: #1a1a1a; padding: 0 16px; }
@@ -289,7 +290,7 @@ const settingsHTML = `<!doctype html>
 </style>
 </head>
 <body>
-  <h1>Acme Sandbox 授权管理</h1>
+  <h1>%s Sandbox 授权管理</h1>
   <p class="sub">本页面仅在你的电脑上运行（127.0.0.1）。任何关闭浏览器后规则仍然生效，规则文件位于 <code>~/.sandrpod/permissions.json</code>。</p>
 
   <h2>持久化规则</h2>

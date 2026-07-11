@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/sandrpod/sandrpod/pkg/brand"
 	"github.com/sandrpod/sandrpod/pkg/permission"
 )
 
@@ -45,7 +46,7 @@ type LinuxPrompter struct {
 
 // NewLinuxPrompter constructs a LinuxPrompter with sensible defaults.
 func NewLinuxPrompter() *LinuxPrompter {
-	return &LinuxPrompter{AppTitle: "Acme Sandbox 权限请求"}
+	return &LinuxPrompter{AppTitle: brand.Name() + " Sandbox 权限请求"}
 }
 
 // newPlatformPrompter is the build-tag-selected constructor used by

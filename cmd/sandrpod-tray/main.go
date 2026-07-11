@@ -59,7 +59,7 @@ func socketPath() string {
 }
 
 func usage() {
-	fmt.Fprint(os.Stderr, `sandrpod-tray — Acme Sandbox consent UI
+	fmt.Fprint(os.Stderr, `sandrpod-tray — SandrPod sandbox consent UI
 
 Usage:
   sandrpod-tray [serve]                    — run the tray icon + IPC server (default)

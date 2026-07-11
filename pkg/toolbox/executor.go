@@ -283,7 +283,7 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 	// deny/warn lists from permissions.json BEFORE spawning the runtime —
 	// see pkg/permission/policy.go for the honest scope ("token-level
 	// scan, not a real shell parser"). Warn-level hits are recorded for
-	// the caller via the StreamCallback so the agent UI / Acme backend
+	// the caller via the StreamCallback so the agent UI / platform backend
 	// can surface them as audit events.
 	if mgr != nil {
 		dec := mgr.CheckExec(code)

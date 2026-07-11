@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/sandrpod/sandrpod/pkg/brand"
 	"github.com/sandrpod/sandrpod/pkg/permission"
 )
 
@@ -53,7 +54,7 @@ type WindowsPrompter struct {
 
 // NewWindowsPrompter constructs a WindowsPrompter with sensible defaults.
 func NewWindowsPrompter() *WindowsPrompter {
-	return &WindowsPrompter{AppTitle: "Acme Sandbox 权限请求"}
+	return &WindowsPrompter{AppTitle: brand.Name() + " Sandbox 权限请求"}
 }
 
 // newPlatformPrompter is the build-tag-selected constructor used by

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/getlantern/systray"
+	"github.com/sandrpod/sandrpod/pkg/brand"
 )
 
 // trayIcon (shield + check) is embedded per-platform — see icon_unix.go
@@ -22,11 +23,11 @@ import (
 
 func onTrayReady() {
 	systray.SetIcon(trayIcon)
-	systray.SetTitle("Acme") // shown next to the icon on macOS; no-op on Windows
-	systray.SetTooltip("Acme Sandbox 权限守护")
+	systray.SetTitle(brand.Name()) // shown next to the icon on macOS; no-op on Windows
+	systray.SetTooltip(brand.Name() + " Sandbox 权限守护")
 
 	// Header (disabled, just a label)
-	header := systray.AddMenuItem("Acme Sandbox", "")
+	header := systray.AddMenuItem(brand.Name()+" Sandbox", "")
 	header.Disable()
 
 	statusItem := systray.AddMenuItem(statusLabel(), "IPC server status")
