@@ -18,6 +18,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"net"
@@ -115,14 +118,24 @@ func (notifierProxy) Ask(ctx context.Context, req permission.Request) (permissio
 }
 
 // startHTTP brings up the settings server on 127.0.0.1:<random>. We reach
-// the chosen port out via runHTTPAddr so the tray "授权管理…" menu can pop
-// the right URL. Binding to 127.0.0.1 (not 0.0.0.0) means the page is
-// reachable only from this machine — the tray serves no auth itself, so
-// loopback is the security boundary.
+// the chosen URL out via runHTTPAddr so the tray "授权管理…" menu can pop it.
+//
+// Loopback binding alone is NOT the security boundary: in the direct-agent
+// (employee-PC) deployment the sandbox toolbox's /proxy/<port>/ mount reaches
+// the host's own 127.0.0.1 through the tunnel, so a remote caller could hit
+// this page — and its mutating routes grant permanent filesystem rules. Every
+// route therefore requires a per-session token (trayAuth): the tray mints it
+// at startup, hands it to the browser only via the launch URL (?t=…), and the
+// page echoes it back as X-Tray-Token on each fetch. A caller who reaches the
+// port but never saw the launch URL can neither read the rules nor mutate them.
 func startHTTP() error {
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return err
+	}
+	token, err := randSessionToken()
+	if err != nil {
+		return fmt.Errorf("mint tray session token: %w", err)
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", httpIndex)
@@ -136,7 +149,7 @@ func startHTTP() error {
 	mux.HandleFunc("/api/mcp/server", httpMCPServerAction)
 
 	srv := &http.Server{
-		Handler:           mux,
+		Handler:           trayAuth(token, mux),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	go func() {
@@ -144,10 +157,37 @@ func startHTTP() error {
 			log.Printf("HTTP server: %v", err)
 		}
 	}()
-	addr := fmt.Sprintf("http://%s", lis.Addr().String())
-	runHTTPAddr.Store(addr)
-	log.Printf("settings page available at %s", addr)
+	// The browser needs the token in the URL; the log line must not leak it.
+	runHTTPAddr.Store(fmt.Sprintf("http://%s/?t=%s", lis.Addr().String(), token))
+	log.Printf("settings page available at http://%s (token-gated)", lis.Addr().String())
 	return nil
+}
+
+// randSessionToken returns a 256-bit hex token for the settings page.
+func randSessionToken() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+// trayAuth gates every settings route on the per-session token, presented
+// either as the `t` query param (top-level navigation) or the X-Tray-Token
+// header (fetch calls). Constant-time compare; fail-closed on mismatch.
+func trayAuth(token string, next http.Handler) http.Handler {
+	want := []byte(token)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got := r.Header.Get("X-Tray-Token")
+		if got == "" {
+			got = r.URL.Query().Get("t")
+		}
+		if subtle.ConstantTimeCompare([]byte(got), want) != 1 {
+			http.Error(w, "forbidden: open this page from the tray menu", http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // openInBrowser shells out to the platform-native "open this URL/path"

@@ -335,26 +335,29 @@ const settingsHTML = `<!doctype html>
     <code>sandrpod-tray unlock &lt;path&gt; --i-understand-the-risk</code></p>
 
 <script>
+// The tray hands us the per-session token via the launch URL (?t=…); echo it
+// back on every request so the token-gated routes accept us. location.reload()
+// preserves the query string, so the token survives post-action refreshes.
+const TT = new URLSearchParams(location.search).get('t') || '';
+function post(url, body) {
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Tray-Token': TT },
+    body: JSON.stringify(body),
+  });
+}
 async function addRule(e) {
   e.preventDefault();
   const path = document.getElementById('newPath').value.trim();
   const mode = document.getElementById('newMode').value;
   if (!path) return;
-  const r = await fetch('/api/rules/add', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path, mode }),
-  });
+  const r = await post('/api/rules/add', { path, mode });
   if (r.ok) { location.reload(); }
   else { alert('添加失败：' + (await r.text())); }
 }
 async function rmRule(path) {
   if (!confirm('确认移除：' + path + ' ?')) return;
-  const r = await fetch('/api/rules/rm', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ path }),
-  });
+  const r = await post('/api/rules/rm', { path });
   if (r.ok) { location.reload(); }
   else { alert('移除失败：' + (await r.text())); }
 }
@@ -363,21 +366,13 @@ async function addPolicy(e) {
   const command = document.getElementById('newCmd').value.trim();
   const action = document.getElementById('newAction').value;
   if (!command) return;
-  const r = await fetch('/api/policy/upsert', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command, action }),
-  });
+  const r = await post('/api/policy/upsert', { command, action });
   if (r.ok) { location.reload(); }
   else { alert('添加失败：' + (await r.text())); }
 }
 async function rmPolicy(command) {
   if (!confirm('确认移除命令策略：' + command + ' ?')) return;
-  const r = await fetch('/api/policy/rm', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ command }),
-  });
+  const r = await post('/api/policy/rm', { command });
   if (r.ok) { location.reload(); }
   else { alert('移除失败：' + (await r.text())); }
 }
