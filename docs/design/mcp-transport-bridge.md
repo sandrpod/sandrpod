@@ -1,9 +1,15 @@
 # SandrPod MCP Transport Bridge 设计方案
 
+> **Note:** Historical design draft (2026-05, Chinese) — the blueprint the MCP
+> transport bridge was built from. The auth chapter's assumptions were later
+> revised; see [`mcp-auth-header-conflict-fix.md`](mcp-auth-header-conflict-fix.md).
+> For the CURRENT behavior, see [`../MCP_BRIDGE.md`](../MCP_BRIDGE.md) and
+> [`../MCP_AUTH.md`](../MCP_AUTH.md).
+
 > **状态**: 设计稿 v0.1
 > **更新日期**: 2026-05-27
 > **目标仓库**: `github.com/sandrpod/sandrpod`（独立产品，最终落地于该仓库的 `pkg/mcpbridge/` 与 `cmd/agent`）
-> **本文存放位置**: sandrpod `docs/`（设计源 / 实施依据）；Acme `devdocs/SANDRPOD_MCP_BRIDGE_DESIGN.md` 维护一份镜像副本供消费方平台团队参考
+> **本文存放位置**: sandrpod `docs/design/`（历史归档）
 > **核心定位**: 让 SandrPod 节点（poder / agent）成为本机 stdio MCP 服务器的**远程出口**，对外暴露**单一标准 Streamable HTTP MCP endpoint**，复用 Claude/Cursor/Cline 等工具通用的 `mcp.json` 配置格式
 >
 > 受影响的包：新增 `pkg/mcpbridge`；改动 `cmd/agent`、`cmd/server`、`pkg/permission`、`pkg/audit`、`cmd/sandrpod-tray`
@@ -41,11 +47,11 @@ SandrPod 当前的能力边界停在「让远程 AI agent 在本机执行 shell 
 | 形态 | 现状 | 问题 |
 |---|---|---|
 | **桌面型 AI** (Claude Desktop / Cursor / Cline) | 本机 LLM client + 本机 stdio MCP，配 `mcp.json` 即可 | 只能在桌面跑，不能跨设备、不能给中心化平台用 |
-| **企业平台型 AI** (Acme / Dify / 自研编排器) | 集中编排，能跨渠道，但 MCP 只能后端配 | 员工没有自助权，凭据要进 IT 系统 |
+| **企业平台型 AI** (Dify / 自研编排器等) | 集中编排，能跨渠道，但 MCP 只能后端配 | 员工没有自助权，凭据要进 IT 系统 |
 
 **MCP Transport Bridge 想做的事**：把员工 PC 上「装一个 stdio MCP」变成「远端 AI 也能用」。**用 SandrPod 已有的反向隧道把 stdio MCP 透传成标准的 Streamable HTTP MCP endpoint**——任何符合 MCP 规范的 AI 编排器都能直接接入，无需感知它跑在远端 PC 上。
 
-这一能力对非 Acme 消费方同样有价值：
+这一能力对各类消费方平台同样有价值：
 
 - **任何 LangChain / DeepAgents / OpenAI Function Calling 编排器** 都可以把 SandrPod 暴露的 HTTP MCP 直接当远程 MCP 来用
 - **多用户 SaaS AI 工具** 想为每个用户提供「带个人凭据的 MCP」时，可以让用户安装 sandrpod-agent，自己的 mcp.json 留在自己电脑上
@@ -128,7 +134,7 @@ SandrPod 当前的能力边界停在「让远程 AI agent 在本机执行 shell 
                         │
                         ▼
             Any MCP-compatible AI orchestrator
-            (Acme / LangChain / Dify / OpenAI / …)
+            (LangChain / Dify / OpenAI / …)
 ```
 
 ### 关键设计取舍
@@ -736,7 +742,7 @@ mux.HandleFunc("/api/v1/sandboxes/", func(w http.ResponseWriter, r *http.Request
 
 建议直接抽一个 `proxyHTTPStreaming` 函数复用，或在现有 `proxyHTTP` 内检测 `Content-Type: text/event-stream` 时自动启用 flush。
 
-### 鉴权（已升级两层模型，见 [`MCP_AUTH_HEADER_CONFLICT_FIX.md`](MCP_AUTH_HEADER_CONFLICT_FIX.md)）
+### 鉴权（已升级两层模型，见 [`mcp-auth-header-conflict-fix.md`](mcp-auth-header-conflict-fix.md)）
 
 最初版本只有一层鉴权（API Server `Authorization: Bearer cfg.Token`），引入 `--mcp-token` 后两个值都要塞 `Authorization`，单 header 装不下。修复后改为两个 header 分担：
 
@@ -815,7 +821,7 @@ the listed env vars set. Allow?
   "timestamp": "2026-05-27T10:30:42.123Z",
   "source": "mcp.call",
   "decision": "allow",
-  "caller": "tunnel://api-server/acme-prod",
+  "caller": "tunnel://api-server/prod-1",
   "session_id": "<MCP session id>",
   "matched_command": "github__list_issues",
   "reason": "mcp tool invocation",
@@ -940,9 +946,9 @@ sandrpod-agent \
 - 经 SandrPod API Server：`https://your-sandrpod.example.com/api/v1/sandboxes/{sandbox_name}/mcp`
 - 独立模式：`http://employee-pc.local:7090/mcp`
 
-### Acme 平台对接（参考）
+### 消费方平台对接（参考）
 
-Acme 后端的 `mcp_service_manager` 在加载 session 工具时：
+消费方平台后端的 `mcp_service_manager`（示例）在加载 session 工具时：
 
 1. 解析 orchestrator config 的 `personal_mcp.enabled`
 2. 如启用，通过 `sandbox_user_resolver` 找到当前用户的 sandbox
@@ -950,14 +956,14 @@ Acme 后端的 `mcp_service_manager` 在加载 session 工具时：
 4. 把这些工具与企业级 `mcp_tools` 表 union 后注入 LangGraph agent
 5. 调用时复用现有 MCP client，URL 指向 `https://sandrpod-internal/api/v1/sandboxes/{name}/mcp`
 
-Acme 这边新增的最小工作量：
+消费方平台侧新增的最小工作量：
 
 - `mcp_tools` 表加 `provenance` (`corp` / `personal`) + `sandbox_id` + `owner_user_id` 字段
 - 注册接口 `POST /api/agent-system/sandboxes/{id}/mcp/sync`（sandrpod-agent 启动后回调）
 - License v2 新 feature key：`mcp.personal`
 - DeepAgentsExecutor 工具加载阶段 union 个人 MCP
 
-详细 Acme 侧改动建议放在另一份 `devdocs/PLATFORM_PERSONAL_MCP_INTEGRATION.md`（本文不展开）。
+消费方平台侧的详细改动属于该平台自身的设计文档（本文不展开）。
 
 ### langchain-sandrpod 集成
 
@@ -1101,4 +1107,4 @@ SandrPod MCP Bridge 不试图替代 mcp-proxy/supergateway——它**包含**它
 ---
 
 *Last Updated: 2026-05-27*
-*Maintainers: SandrPod 维护者 + Acme 平台团队（消费方代表）*
+*Maintainers: SandrPod 维护者*

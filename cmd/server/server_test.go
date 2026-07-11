@@ -90,7 +90,7 @@ func TestAuthMiddleware(t *testing.T) {
 }
 
 // TestAuthMiddleware_AuthorizationPreservedForHandler is the regression
-// guard for docs/MCP_AUTH_HEADER_CONFLICT_FIX.md: when authentication
+// guard for docs/design/mcp-auth-header-conflict-fix.md: when authentication
 // succeeds via X-Sandrpod-Token, the Authorization header must reach
 // the handler unchanged so it can be forwarded through the tunnel to
 // the agent's /mcp endpoint.

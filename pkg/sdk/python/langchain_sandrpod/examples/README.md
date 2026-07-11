@@ -80,6 +80,23 @@ python examples/02_sales_analysis.py
 python examples/03_code_review_and_fix.py
 ```
 
+---
+
+### 04 · 个人 MCP 工具 `04_personal_mcp.py`
+
+把员工机（`sandrpod-agent`）上配置的个人 MCP 服务器（github / notion /
+filesystem…）通过沙箱的 `/mcp` 端点交给远端 agent 使用：
+
+1. `sb.mcp_add()` 写入 mcp.json（bridge 热加载并拉起 MCP server）
+2. `sb.mcp_tools()` 列出聚合后的工具（`github__list_issues` 等）
+3. `langchain-mcp-adapters` 用 `sb.mcp_url()` 接入，agent 直接调用
+
+凭据（PAT/OAuth token）全程留在员工机上，只有工具调用过网络。
+
+```bash
+python examples/04_personal_mcp.py
+```
+
 ## 关键 API 速查
 
 ```python

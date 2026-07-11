@@ -3,8 +3,8 @@
 > **状态**: 修复设计稿 v0.1（待实施）
 > **更新日期**: 2026-05-28
 > **严重程度**: 🟥 **Blocker** — 在 `cfg.Token != ""` 的生产部署下，远端 MCP 客户端**无法**同时通过 API Server 鉴权和 agent `--mcp-token` 鉴权。
-> **影响范围**: `cmd/server`（API Server 入站鉴权）+ 文档 `docs/MCP_BRIDGE.md`、`docs/MCP_TRANSPORT_BRIDGE_DESIGN.md`
-> **背景**: 由 Acme 消费侧在准备接入 personal MCP 时端到端验证发现。
+> **影响范围**: `cmd/server`（API Server 入站鉴权）+ 文档 `docs/MCP_BRIDGE.md`、`docs/design/mcp-transport-bridge.md`
+> **背景**: 由消费方平台在准备接入 personal MCP 时端到端验证发现。
 
 ---
 
@@ -243,7 +243,7 @@ Authorization: Bearer <cfg.Token>
 | 威胁 | 是否被缓解 |
 |---|---|
 | 公网攻击者直接打 `/api/v1/*` | ✅ X-Sandrpod-Token 或 Authorization 必须正确 |
-| API Server 被入侵 + 想伪造 MCP 调用 | ✅ 不知 `mcp_token` 仍打不进 agent /mcp（mcp_token 只在 Acme ↔ 员工 PC 链路出现，API Server 进程内不持有） |
+| API Server 被入侵 + 想伪造 MCP 调用 | ✅ 不知 `mcp_token` 仍打不进 agent /mcp（mcp_token 只在消费方平台 ↔ 员工 PC 链路出现，API Server 进程内不持有） |
 | API Server 被入侵 + replay 截获的 MCP 请求 | ⚠ 仍可 replay（与现有"Authorization 透传"模型一致，是已知接受的残余风险） |
 | 旧客户端用 Authorization | ✅ 路径仍兼容，但已不该再这么写新代码 |
 
@@ -462,7 +462,7 @@ client = MultiServerMCPClient({
 })
 ```
 
-### 9.2 `docs/MCP_TRANSPORT_BRIDGE_DESIGN.md`
+### 9.2 `docs/design/mcp-transport-bridge.md`
 
 §七 "鉴权" 子段补一段说明 API Server 用 `X-Sandrpod-Token`，Authorization 透传。
 
@@ -507,7 +507,7 @@ client = MultiServerMCPClient({
 - **Sandrpod Python SDK** (`pkg/sdk/python/`): 同上
 - **sandrpod-tray**：本地 Unix socket 通信不走 HTTP Authorization，**零影响**
 - **既有部署的 Sandbox CRUD 客户端**：用 `Authorization: Bearer` 写法继续工作，**零影响**
-- **Acme 平台**：从 0.1 设计稿开始就走新 header，**直接受益**——可以解锁 personal MCP 集成
+- **消费方平台**：从 0.1 设计稿开始就走新 header，**直接受益**——可以解锁 personal MCP 集成
 - **任何 MCP 客户端**：需要在 sandrpod 升级后切到新 header 才能调 `/mcp`
 
 ### 10.2 发布建议
@@ -531,10 +531,10 @@ client = MultiServerMCPClient({
 - [ ] §8.2 E2E 测试新增并通过——这是这个修复的核心验证点
 - [ ] §8.3 手工烟雾测试三条 curl 行为符合预期
 - [ ] `docs/MCP_BRIDGE.md` §Authentication 重写完成
-- [ ] `docs/MCP_TRANSPORT_BRIDGE_DESIGN.md` §七 更新
+- [ ] `docs/design/mcp-transport-bridge.md` §七 更新
 - [ ] `CHANGELOG.md` 加 Changed + Fixed 条目
 - [ ] Sandrpod Go SDK + Python SDK 调用样例切到 `X-Sandrpod-Token`
-- [ ] 消费方（Acme 等）收到 PR/release notification，知道可以切换
+- [ ] 消费方平台收到 PR/release notification，知道可以切换
 
 ---
 
@@ -550,12 +550,11 @@ client = MultiServerMCPClient({
 
 ## 附录 B：相关讨论与来源
 
-- 由 Acme 消费侧在准备接入 personal MCP 时端到端验证发现
-- Acme 侧设计稿：[`PLATFORM_PERSONAL_MCP_INTEGRATION.md`](https://example.invalid/PLATFORM_PERSONAL_MCP_INTEGRATION.md) §6.2（标了 TODO 等待此修复）
-- 配套文档：[`MCP_TRANSPORT_BRIDGE_DESIGN.md`](MCP_TRANSPORT_BRIDGE_DESIGN.md)（最初设计稿，鉴权章节假设过于乐观，本修复矫正之）
+- 由消费方平台在准备接入 personal MCP 时端到端验证发现
+- 配套文档：[`mcp-transport-bridge.md`](mcp-transport-bridge.md)（最初设计稿，鉴权章节假设过于乐观，本修复矫正之）
 
 ---
 
 *Last Updated: 2026-05-28*
 *Status: 待实施*
-*Maintainer: sandrpod 维护者（实施）+ Acme 平台团队（发现者）*
+*Maintainer: sandrpod 维护者*

@@ -483,7 +483,7 @@ Pointing existing clients: the URL changes from
 
 ## See also
 
-- [`docs/MCP_TRANSPORT_BRIDGE_DESIGN.md`](MCP_TRANSPORT_BRIDGE_DESIGN.md) —
+- [`docs/design/mcp-transport-bridge.md`](design/mcp-transport-bridge.md) —
   full design rationale and architecture
 - [`pkg/mcpbridge/`](../pkg/mcpbridge/) — Go API for embedding
 - [`pkg/sdk/python/langchain_sandrpod/examples/04_personal_mcp.py`](../pkg/sdk/python/langchain_sandrpod/examples/04_personal_mcp.py)

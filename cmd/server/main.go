@@ -150,7 +150,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 	// Authorization for the API token, every MCP client would have to
 	// choose between passing API-Server auth or passing agent auth — they
 	// can't put two different bearer values in one header. See
-	// docs/MCP_AUTH_HEADER_CONFLICT_FIX.md for the full case.
+	// docs/design/mcp-auth-header-conflict-fix.md for the full case.
 	//
 	// New behavior:
 	//   - X-Sandrpod-Token correct           → next; Authorization untouched
@@ -901,7 +901,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		// The bridge (pkg/mcpbridge) runs inside every sandbox's toolbox and
 		// exposes MCP Streamable HTTP, which negotiates SSE on the same endpoint,
 		// so we route through the streaming proxy to preserve real-time flushes.
-		// See docs/MCP_TRANSPORT_BRIDGE_DESIGN.md §七.
+		// See docs/design/mcp-transport-bridge.md §七.
 		if action == "mcp" || strings.HasPrefix(action, "mcp/") {
 			sb, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 			if !ok {

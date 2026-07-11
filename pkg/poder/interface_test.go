@@ -28,9 +28,9 @@ func TestCreatePodRequestJSONTags(t *testing.T) {
 			name: "image_id flows through verbatim",
 			req: CreatePodRequest{
 				Name:    "d-test-abcd",
-				ImageID: "example/sandrpod-toolbox-custom:latest",
+				ImageID: "example/sandrpod-toolbox:latest",
 			},
-			wantJSON: `{"name":"d-test-abcd","image_id":"example/sandrpod-toolbox-custom:latest"}`,
+			wantJSON: `{"name":"d-test-abcd","image_id":"example/sandrpod-toolbox:latest"}`,
 		},
 		{
 			name: "all known fields use snake_case",
@@ -83,7 +83,7 @@ func TestCreatePodRequestRoundTrip(t *testing.T) {
 		"name":         "d-roundtrip-tcjz",
 		"region":       "cn-north-1",
 		"instance_type": "small",
-		"image_id":     "example/sandrpod-toolbox-custom:test",
+		"image_id":     "example/sandrpod-toolbox:test",
 		"provider":     "local",
 		"api_url":      "http://toolbox:8080",
 		"poder_version": "1.2.3",
@@ -97,7 +97,7 @@ func TestCreatePodRequestRoundTrip(t *testing.T) {
 
 	// The critical assertion — without json tags this would fail because
 	// "image_id" doesn't match "ImageID" under Go's default rules.
-	if got := req.ImageID; got != "example/sandrpod-toolbox-custom:test" {
+	if got := req.ImageID; got != "example/sandrpod-toolbox:test" {
 		t.Errorf(
 			"ImageID lost in round-trip: got %q (this is the bug — "+
 				"snake_case key didn't bind to ImageID field)",

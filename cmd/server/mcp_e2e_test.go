@@ -17,7 +17,7 @@ import (
 )
 
 // TestMCPRouteForwardsBearerToAgent is the regression test for the auth
-// header conflict fix (docs/MCP_AUTH_HEADER_CONFLICT_FIX.md):
+// header conflict fix (docs/design/mcp-auth-header-conflict-fix.md):
 //
 //  1. API Server is configured with cfg.Token = api-token-abc.
 //  2. A fake agent is wired in over an in-memory yamux session — it
