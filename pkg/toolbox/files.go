@@ -213,12 +213,22 @@ func (e *Executor) FindInFiles(ctx context.Context, path, pattern string) ([]*Fi
 		return nil, fmt.Errorf("pattern is required")
 	}
 
+	// Bounds so a walk over a huge tree (or `/`) can't exhaust memory: skip
+	// oversized/binary files instead of slurping them whole, and stop once
+	// enough matches are collected.
+	const (
+		findMaxFileSize = 5 << 20 // 5 MiB per file
+		findMaxMatches  = 5000
+	)
 	var results []*FindMatch
 	err = filepath.Walk(safe, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // skip files that cannot be accessed
 		}
 		if info.IsDir() {
+			return nil
+		}
+		if info.Size() > findMaxFileSize {
 			return nil
 		}
 
@@ -234,6 +244,9 @@ func (e *Executor) FindInFiles(ctx context.Context, path, pattern string) ([]*Fi
 					Line:    i + 1,
 					Content: line,
 				})
+				if len(results) >= findMaxMatches {
+					return filepath.SkipAll // enough — stop the walk
+				}
 			}
 		}
 		return nil

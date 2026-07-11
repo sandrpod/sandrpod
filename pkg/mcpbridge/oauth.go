@@ -183,7 +183,29 @@ func newOAuthBroker(opts OAuthOptions, logger *log.Logger) *oauthBroker {
 
 // listen binds the loopback callback listener. Called once at manager start so
 // the redirect URI (which must be known before any client is built) is stable.
+// requireLoopback rejects a callback bind address that isn't loopback. The
+// callback receives the OAuth authorization code, so binding it to a non-
+// loopback interface (e.g. -mcp-oauth-callback=0.0.0.0:7099) would let another
+// host on the LAN reach the completion endpoint. Only an explicit loopback IP
+// or "localhost" is allowed; an empty host (":7099" → all interfaces) is not.
+func requireLoopback(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return fmt.Errorf("oauth callback addr %q: %w", addr, err)
+	}
+	if host == "localhost" {
+		return nil
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return nil
+	}
+	return fmt.Errorf("oauth callback addr %q must bind loopback (127.0.0.1/::1/localhost), got host %q", addr, host)
+}
+
 func (b *oauthBroker) listen() error {
+	if err := requireLoopback(b.opts.CallbackAddr); err != nil {
+		return err
+	}
 	ln, err := net.Listen("tcp", b.opts.CallbackAddr)
 	if err != nil {
 		return fmt.Errorf("oauth callback listen %s: %w", b.opts.CallbackAddr, err)

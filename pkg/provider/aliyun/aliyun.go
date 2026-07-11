@@ -5,6 +5,7 @@ package aliyun
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"sync"
@@ -50,6 +51,18 @@ func NewAliyunProvider(cfg *Config) (*AliyunProvider, error) {
 		vms:        make(map[string]*provider.VMInfo),
 		imageCache: make(map[string]string),
 	}, nil
+}
+
+// instanceIDsJSON builds the JSON-array string Aliyun's DescribeInstances
+// InstanceIds field expects. Marshaling (vs fmt.Sprintf(`["%s"]`, id)) escapes
+// the id, so an id containing `","` can't widen the array to query another
+// instance in the same account/region.
+func instanceIDsJSON(id string) string {
+	b, err := json.Marshal([]string{id})
+	if err != nil { // string slice never fails to marshal
+		return `[]`
+	}
+	return string(b)
 }
 
 func (p *AliyunProvider) Name() string {
@@ -223,7 +236,7 @@ func (p *AliyunProvider) pollForRunningVM(ctx context.Context, instanceID string
 	var lastSeen *provider.VMInfo
 	for {
 		req := ecs.CreateDescribeInstancesRequest()
-		req.InstanceIds = fmt.Sprintf(`["%s"]`, instanceID)
+		req.InstanceIds = instanceIDsJSON(instanceID)
 		if resp, err := p.ecsClient.DescribeInstances(req); err == nil && len(resp.Instances.Instance) > 0 {
 			vm := mapEcsInstanceToVM(resp.Instances.Instance[0])
 			lastSeen = vm
@@ -264,7 +277,7 @@ func (p *AliyunProvider) GetVM(ctx context.Context, vmID string) (*provider.VMIn
 	// return the stale Pending snapshot recorded at create time, so health
 	// checks (VMReady) would never succeed.
 	req := ecs.CreateDescribeInstancesRequest()
-	req.InstanceIds = fmt.Sprintf(`["%s"]`, vmID)
+	req.InstanceIds = instanceIDsJSON(vmID)
 
 	resp, err := p.ecsClient.DescribeInstances(req)
 	if err != nil {

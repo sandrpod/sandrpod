@@ -362,3 +362,16 @@ func TestHTTPHTML_EscapesDetail(t *testing.T) {
 		t.Errorf("expected escaped payload in body; got: %s", body)
 	}
 }
+
+func TestRequireLoopback(t *testing.T) {
+	for _, ok := range []string{"127.0.0.1:7099", "localhost:0", "[::1]:7099"} {
+		if err := requireLoopback(ok); err != nil {
+			t.Errorf("requireLoopback(%q) = %v, want nil", ok, err)
+		}
+	}
+	for _, bad := range []string{"0.0.0.0:7099", ":7099", "192.168.1.5:7099", "example.com:80"} {
+		if err := requireLoopback(bad); err == nil {
+			t.Errorf("requireLoopback(%q) should reject a non-loopback bind", bad)
+		}
+	}
+}
