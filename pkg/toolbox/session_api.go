@@ -177,6 +177,10 @@ func (s *Server) sessionExecHandler(w http.ResponseWriter, r *http.Request, sess
 		sessionId = req.SessionId
 	}
 
+	if !s.gateExec(w, req.Command) {
+		return
+	}
+
 	resp, err := s.sessionManager.Execute(sessionId, "", req.Command, req.Async)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

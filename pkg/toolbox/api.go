@@ -148,6 +148,9 @@ func (s *Server) codeInterpreterHandler(w http.ResponseWriter, r *http.Request) 
 	if req.ContextID == "" {
 		req.ContextID = "default"
 	}
+	if !s.gateExec(w, req.Code) {
+		return
+	}
 	res, err := s.codeInterpreter().Execute(req.ContextID, req.Code)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -208,6 +211,25 @@ const CleanupTimeout = 5 * time.Second
 // pointer is owned by the Server; callers must not retain it past the
 // Server's lifetime.
 func (s *Server) Executor() *Executor { return s.executor }
+
+// gateExec runs a command/code string through the permission manager's
+// CheckExec — the same deny-list scan + audit record the /process path applies.
+// It is called from the alternate execution surfaces (/procmgr/start, session
+// exec, /code-interpreter/execute) so they leave an audit trail and honor the
+// command deny-list instead of silently bypassing both. Returns false (and
+// writes a 403) when the command is denied. No-op — returns true — when no
+// permission manager is installed (Docker/poder, or --permission-mode=off).
+func (s *Server) gateExec(w http.ResponseWriter, command string) bool {
+	mgr := s.executor.PermissionManager()
+	if mgr == nil {
+		return true
+	}
+	if dec := mgr.CheckExec(command); dec.Action == permission.ActionDeny {
+		http.Error(w, dec.Reason, http.StatusForbidden)
+		return false
+	}
+	return true
+}
 
 func NewServer(addr, token string) *Server {
 	ctx, cancel := context.WithCancel(context.Background())

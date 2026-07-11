@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strconv"
+	"strings"
 	"syscall"
 )
 
@@ -36,6 +37,9 @@ func (s *Server) procStartHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.gateExec(w, strings.TrimSpace(req.Cmd+" "+strings.Join(req.Args, " "))) {
 		return
 	}
 	pid, err := s.procManager().Start(ProcStartConfig{
