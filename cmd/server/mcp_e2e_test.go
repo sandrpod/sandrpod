@@ -115,13 +115,12 @@ func TestMCPRouteForwardsBearerToAgent(t *testing.T) {
 	if seenAuth != mcpBearer {
 		t.Errorf("agent saw Authorization=%q, want %q\n  → BUG: API Server rewrote or consumed the MCP Bearer header", seenAuth, mcpBearer)
 	}
-	// X-Sandrpod-Token is also forwarded (we don't filter headers in
-	// proxyHTTPStreaming). This is fine — the agent ignores headers it
-	// doesn't recognize. But assert anyway so accidental filtering of
-	// X-Sandrpod-Token (e.g. a future "strip auth headers" change)
-	// shows up here.
-	if seenSandrpodTok != apiToken {
-		t.Errorf("agent saw X-Sandrpod-Token=%q, want %q", seenSandrpodTok, apiToken)
+	// X-Sandrpod-Token (the platform credential) must NOT reach the worker:
+	// copyProxyHeaders strips it so an employee-controlled agent can't capture
+	// and replay it against the control plane. The Authorization/mcp_token above
+	// is the only credential the worker is meant to see on the MCP path.
+	if seenSandrpodTok != "" {
+		t.Errorf("agent saw X-Sandrpod-Token=%q, want it stripped\n  → LEAK: the platform token reached the worker", seenSandrpodTok)
 	}
 }
 
@@ -186,5 +185,45 @@ func TestMCPRoute_WrongMCPBearer(t *testing.T) {
 	// the "defense in depth" we want.
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Errorf("expected 401 from agent layer, got %d", resp.StatusCode)
+	}
+}
+
+// TestCopyProxyHeaders_StripsPlatformCreds guards the credential-forwarding fix:
+// the platform token (X-Sandrpod-Token, and a legacy Authorization the CLI
+// dual-sends) must never reach a worker, except that the MCP path keeps
+// Authorization (it carries the per-sandbox mcp_token the bridge validates).
+func TestCopyProxyHeaders_StripsPlatformCreds(t *testing.T) {
+	src := http.Header{
+		"Host":             {"api.example.com"},
+		"X-Sandrpod-Token": {"platform-secret"},
+		"Authorization":    {"Bearer some-token"},
+		"Content-Type":     {"application/json"},
+		"X-Custom":         {"keep-me"},
+	}
+
+	// Non-MCP path: both platform credentials dropped; benign headers kept.
+	dst := http.Header{}
+	copyProxyHeaders(dst, src, false)
+	if dst.Get("X-Sandrpod-Token") != "" {
+		t.Error("X-Sandrpod-Token forwarded to worker (non-mcp)")
+	}
+	if dst.Get("Authorization") != "" {
+		t.Error("Authorization forwarded to worker (non-mcp)")
+	}
+	if dst.Get("Content-Type") != "application/json" || dst.Get("X-Custom") != "keep-me" {
+		t.Error("benign headers were dropped")
+	}
+	if dst.Get("Host") != "" {
+		t.Error("Host must not be copied")
+	}
+
+	// MCP path: X-Sandrpod-Token still dropped, Authorization (mcp_token) kept.
+	dstMCP := http.Header{}
+	copyProxyHeaders(dstMCP, src, true)
+	if dstMCP.Get("X-Sandrpod-Token") != "" {
+		t.Error("X-Sandrpod-Token forwarded to worker (mcp)")
+	}
+	if dstMCP.Get("Authorization") != "Bearer some-token" {
+		t.Error("mcp path must preserve Authorization (the mcp_token)")
 	}
 }

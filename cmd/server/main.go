@@ -1756,17 +1756,36 @@ func forwardToNode(nodeURL string, w http.ResponseWriter, r *http.Request) {
 }
 
 // proxyHTTP forwards an HTTP request through the tunnel and copies the response.
+// copyProxyHeaders forwards the client's headers to the worker, minus the
+// platform credentials the server already consumed. The worker (toolbox/agent)
+// authenticates via the tunnel, not the platform token, and in employee-PC mode
+// the worker binary is controlled by the (semi-trusted) end user — so shipping
+// X-Sandrpod-Token / a legacy Authorization: Bearer <platform-token> into it
+// would hand that user a credential they can replay against the control plane.
+// Both are dropped. Authorization is preserved ONLY on the MCP path, where it
+// carries the per-sandbox mcp_token the in-sandbox bridge must see (the two-tier
+// auth split; see docs/design/mcp-auth-header-conflict-fix.md).
+func copyProxyHeaders(dst, src http.Header, keepAuthorization bool) {
+	for k, v := range src {
+		switch k {
+		case "Host", "X-Sandrpod-Token":
+			continue
+		case "Authorization":
+			if !keepAuthorization {
+				continue
+			}
+		}
+		dst[k] = v
+	}
+}
+
 func proxyHTTP(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w http.ResponseWriter) {
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
 	if err != nil {
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
 		return
 	}
-	for k, v := range r.Header {
-		if k != "Host" {
-			req.Header[k] = v
-		}
-	}
+	copyProxyHeaders(req.Header, r.Header, false)
 	resp, err := t.Client.Do(req)
 	if err != nil {
 		log.Printf("tunnel proxy %s error: %v", targetURL, err)
@@ -1812,11 +1831,9 @@ func proxyHTTPStreaming(t *tunnel.PoderTunnel, r *http.Request, targetURL string
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
 		return
 	}
-	for k, v := range r.Header {
-		if k != "Host" {
-			req.Header[k] = v
-		}
-	}
+	// Streaming proxy is used only for the MCP endpoint, whose Authorization
+	// header carries the mcp_token the in-sandbox bridge must receive — keep it.
+	copyProxyHeaders(req.Header, r.Header, true)
 	resp, err := t.StreamClient().Do(req)
 	if err != nil {
 		log.Printf("tunnel streaming proxy %s error: %v", targetURL, err)
