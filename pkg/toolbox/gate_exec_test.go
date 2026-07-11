@@ -48,4 +48,10 @@ func TestGateExec(t *testing.T) {
 	if !NewServer("", "").gateExec(httptest.NewRecorder(), "scp x y") {
 		t.Error("gateExec with no permission manager must be a no-op allow")
 	}
+
+	// auditExec (code interpreter) never blocks — even a deny-listed token must
+	// not panic or error out; it only records. This is the run_code path, kept
+	// audit-only to avoid false-positive denials on arbitrary source.
+	s.auditExec("import os  # dd su nc scp all appear here as tokens")
+	NewServer("", "").auditExec("scp") // no manager → still a safe no-op
 }

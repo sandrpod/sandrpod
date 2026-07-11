@@ -296,6 +296,28 @@ func (m *Manager) CheckExec(code string) ExecDecision {
 	return ExecDecision{Action: ActionAllow, Warns: warns}
 }
 
+// AuditExecOnly records an audit trail for an execution that is deliberately
+// NOT gated by the deny-list — the code interpreter, where scanning arbitrary
+// (e.g. Python) source for shell-command basenames yields false positives.
+// Warn tokens are recorded as warnings, and a deny-listed token is recorded as
+// a warning too (surfacing the risky content in the trail) rather than as a
+// "deny" — because the run is allowed, so an audit entry claiming it was
+// blocked would be false. It never blocks.
+func (m *Manager) AuditExecOnly(code string) {
+	if m.audit == nil {
+		return
+	}
+	warns, deny, hasDeny := CheckCommandPolicy(m.store.Snapshot().CommandPolicy, code)
+	for _, w := range warns {
+		m.audit.Record("exec", "warn", "", "", "", "", w.Token, w.Command)
+	}
+	if hasDeny && deny != nil {
+		m.audit.Record("exec", "warn", "", "", "", "", "deny-listed token permitted (code-interpreter is audit-only)", deny.Command)
+		return
+	}
+	m.audit.Record("exec", "allow", "", "", "", "", "", "")
+}
+
 // CheckPTY asks the human for consent before opening an interactive PTY
 // session. Unlike file-level Check, this is always asked — there is no
 // "silent allow" zone for shells, since by definition a PTY can do anything

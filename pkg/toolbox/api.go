@@ -148,9 +148,9 @@ func (s *Server) codeInterpreterHandler(w http.ResponseWriter, r *http.Request) 
 	if req.ContextID == "" {
 		req.ContextID = "default"
 	}
-	if !s.gateExec(w, req.Code) {
-		return
-	}
+	// Audit-only: the interpreter runs arbitrary code, so deny-list scanning of
+	// the source produces false positives — record the run but never block it.
+	s.auditExec(req.Code)
 	res, err := s.codeInterpreter().Execute(req.ContextID, req.Code)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -229,6 +229,17 @@ func (s *Server) gateExec(w http.ResponseWriter, command string) bool {
 		return false
 	}
 	return true
+}
+
+// auditExec records an execution for the audit trail WITHOUT enforcing the
+// deny-list. Used by the code interpreter: scanning arbitrary source (Python,
+// etc.) for shell-command basenames false-positives (a bare `dd`/`su` token in
+// data-analysis code), so run_code stays unblocked while still leaving a trail.
+// The deny-listed shell endpoints (/procmgr, session exec) use gateExec instead.
+func (s *Server) auditExec(command string) {
+	if mgr := s.executor.PermissionManager(); mgr != nil {
+		mgr.AuditExecOnly(command)
+	}
 }
 
 func NewServer(addr, token string) *Server {
