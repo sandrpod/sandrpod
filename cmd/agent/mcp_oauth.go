@@ -9,11 +9,11 @@ package main
 
 import (
 	"log"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 
+	"github.com/sandrpod/sandrpod/pkg/homedir"
 	"github.com/sandrpod/sandrpod/pkg/mcpbridge"
 )
 
@@ -26,12 +26,7 @@ func buildMCPOAuthOptions() *mcpbridge.OAuthOptions {
 	}
 	dir := *mcpOAuthTokenDir
 	if dir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			log.Printf("MCP bridge: cannot resolve home dir for oauth tokens: %v — OAuth disabled", err)
-			return nil
-		}
-		dir = filepath.Join(home, ".sandrpod", "oauth")
+		dir = filepath.Join(homedir.DataDir(), "oauth")
 	}
 	return &mcpbridge.OAuthOptions{
 		TokenDir:     dir,

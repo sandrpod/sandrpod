@@ -8,6 +8,8 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+
+	"github.com/sandrpod/sandrpod/pkg/homedir"
 )
 
 // Config is the on-disk mcp.json layout. It is intentionally compatible with
@@ -162,16 +164,15 @@ func (c *Config) SortedKeys() []string {
 //	Windows:       %APPDATA%\sandrpod\mcp.json
 func DefaultConfigPath() string {
 	if runtime.GOOS == "windows" {
-		if appData := os.Getenv("APPDATA"); appData != "" {
+		// %APPDATA% is systemprofile\AppData under a LocalSystem service — inside
+		// System32; redirect via homedir in that case (see pkg/homedir).
+		if appData := os.Getenv("APPDATA"); appData != "" && !homedir.IsWindowsServiceProfile(appData) {
 			return filepath.Join(appData, "sandrpod", "mcp.json")
 		}
+		return filepath.Join(homedir.DataDir(), "mcp.json")
 	}
 	if xdg := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME")); xdg != "" {
 		return filepath.Join(xdg, "sandrpod", "mcp.json")
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "mcp.json"
-	}
-	return filepath.Join(home, ".sandrpod", "mcp.json")
+	return filepath.Join(homedir.DataDir(), "mcp.json")
 }

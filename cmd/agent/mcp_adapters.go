@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/audit"
+	"github.com/sandrpod/sandrpod/pkg/homedir"
 	"github.com/sandrpod/sandrpod/pkg/mcpbridge"
 	"github.com/sandrpod/sandrpod/pkg/permission"
 )
@@ -467,9 +468,5 @@ func splitCSVLower(s string) []string {
 
 // defaultMCPGrantsPath returns the conventional store location.
 func defaultMCPGrantsPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "mcp_grants.json"
-	}
-	return filepath.Join(home, ".sandrpod", "mcp_grants.json")
+	return filepath.Join(homedir.DataDir(), "mcp_grants.json")
 }

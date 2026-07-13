@@ -19,11 +19,12 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/sandrpod/sandrpod/pkg/homedir"
 
 	"github.com/getlantern/systray"
 )
@@ -32,11 +33,7 @@ import (
 // convention rather than shared constant to avoid creating a circular
 // import (cmd/agent <-> cmd/sandrpod-tray would be ugly).
 func mcpAdminSocketPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "mcp.sock"
-	}
-	return filepath.Join(home, ".sandrpod", "mcp.sock")
+	return filepath.Join(homedir.DataDir(), "mcp.sock")
 }
 
 // mcpAdminClient is a minimal HTTP-over-unix-socket client.

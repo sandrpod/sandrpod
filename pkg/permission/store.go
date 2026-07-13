@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/sandrpod/sandrpod/pkg/homedir"
 )
 
 // CurrentVersion is the on-disk format version. Bump on backwards-incompatible changes.
@@ -22,11 +24,7 @@ const CurrentVersion = 1
 // DefaultStorePath returns the canonical location of permissions.json
 // under the invoking user's home dir.
 func DefaultStorePath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("locate home dir: %w", err)
-	}
-	return filepath.Join(home, ".sandrpod", "permissions.json"), nil
+	return filepath.Join(homedir.DataDir(), "permissions.json"), nil
 }
 
 // Store is a thread-safe, file-backed Snapshot.

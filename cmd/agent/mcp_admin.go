@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/sandrpod/sandrpod/pkg/homedir"
 	"github.com/sandrpod/sandrpod/pkg/mcpbridge"
 )
 
@@ -18,11 +19,7 @@ import (
 // management socket the tray dials. Mirrors the permission authz socket
 // convention (~/.sandrpod/<name>.sock).
 func defaultMCPAdminSocketPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		return "mcp.sock"
-	}
-	return filepath.Join(home, ".sandrpod", "mcp.sock")
+	return filepath.Join(homedir.DataDir(), "mcp.sock")
 }
 
 // startMCPAdminServer binds an AF_UNIX HTTP server that exposes the

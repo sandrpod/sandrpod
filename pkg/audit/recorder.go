@@ -26,6 +26,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/sandrpod/sandrpod/pkg/homedir"
 )
 
 // DefaultMaxBytes triggers rotation when the active log exceeds 8 MiB.
@@ -54,11 +56,7 @@ type Options struct {
 
 // DefaultDir returns $HOME/.sandrpod/audit, the canonical location.
 func DefaultDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("locate home: %w", err)
-	}
-	return filepath.Join(home, ".sandrpod", "audit"), nil
+	return filepath.Join(homedir.DataDir(), "audit"), nil
 }
 
 // NewRecorder opens (or creates) the active log file and returns a writer.

@@ -52,17 +52,15 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/sandrpod/sandrpod/pkg/homedir"
 )
 
 // DefaultSocketPath returns the canonical Unix socket path for the running
 // user. Living in $HOME (rather than /tmp or /var/run) gives us natural
 // per-user isolation and avoids /tmp's mode-tickle attacks.
 func DefaultSocketPath() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("locate home dir: %w", err)
-	}
-	return filepath.Join(home, ".sandrpod", "authz.sock"), nil
+	return filepath.Join(homedir.DataDir(), "authz.sock"), nil
 }
 
 // ipcRequest is the wire form of a permission ask.

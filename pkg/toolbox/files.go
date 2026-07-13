@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/sandrpod/sandrpod/pkg/homedir"
 	"github.com/sandrpod/sandrpod/pkg/permission"
 )
 
@@ -34,27 +35,15 @@ func (e *Executor) GetProjectDir() string {
 	return e.workDir
 }
 
-// GetUserHomeDir returns the current user's home directory.
+// GetUserHomeDir returns the base directory under which sandrpod's data (incl.
+// the personal skills dir the platform reads as <home>/.sandrpod/skills) lives.
 //
-// os.UserHomeDir does the right thing on every platform:
-//   - Unix:    $HOME (falls back to /etc/passwd lookup if env is empty)
-//   - macOS:   $HOME (same as Unix)
-//   - Windows: %USERPROFILE% (falls back to %HOMEDRIVE%%HOMEPATH%)
-//
-// Only if all of those fail do we fall back to the OS temp dir, which is
-// at least guaranteed to be writable. Returning "/root" on Windows (the
-// previous behavior) was nonsensical and broke session storage.
+// This is os.UserHomeDir() on a normal login, but a Windows service account
+// (LocalSystem) resolves it under System32\config\systemprofile, which the file
+// gate blocks — so pkg/homedir redirects that case to %ProgramData%. See
+// pkg/homedir for the full rationale.
 func (e *Executor) GetUserHomeDir() string {
-	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		return home
-	}
-	if home := os.Getenv("HOME"); home != "" {
-		return home
-	}
-	if home := os.Getenv("USERPROFILE"); home != "" {
-		return home
-	}
-	return os.TempDir()
+	return homedir.DataHome()
 }
 
 // GetWorkDir returns the working directory (equivalent to the project directory).
