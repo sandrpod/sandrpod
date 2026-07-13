@@ -166,25 +166,31 @@ func TestIPCClient_ContextAlreadyCanceled(t *testing.T) {
 
 func TestNewIPCServer_StaleSocketReplaced(t *testing.T) {
 	sock := shortSock(t)
-	// Create a stale socket-named file (a plain file, simulating leftover).
-	srv1 := NewIPCServer(sock, &echoNotifier{resp: PromptAllowOnce})
-	ctx1, cancel1 := context.WithCancel(context.Background())
-	if err := srv1.Start(ctx1); err != nil {
-		t.Fatalf("srv1 Start: %v", err)
+	// Simulate a leftover socket file from a crashed previous run: a plain file
+	// sitting at the socket path. net.Listen("unix", …) fails with EADDRINUSE
+	// unless Start unlinks it first, so this genuinely exercises the
+	// stale-socket reclamation path (Start's best-effort os.Remove).
+	//
+	// The previous version bound a first server and closed its listener to
+	// "leave a stale file", but Go's UnixListener unlinks on Close (so no file
+	// was left), and cancelling the first server's context triggered its async
+	// Stop → os.Remove(sock), which raced the second server's bind and could
+	// unlink the live socket. Creating the file directly is both correct and
+	// deterministic.
+	if err := os.WriteFile(sock, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
-	srv1.lis.Close() // leave the socket file behind without removing it
-	cancel1()
 
-	// A new server on the same path must unlink the stale socket and bind.
-	srv2 := NewIPCServer(sock, &echoNotifier{resp: PromptAllowOnce})
-	ctx2, cancel2 := context.WithCancel(context.Background())
-	defer cancel2()
-	if err := srv2.Start(ctx2); err != nil {
-		t.Fatalf("srv2 Start over stale socket: %v", err)
+	srv := NewIPCServer(sock, &echoNotifier{resp: PromptAllowOnce})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := srv.Start(ctx); err != nil {
+		t.Fatalf("Start over stale socket: %v", err)
 	}
-	defer srv2.Stop()
-	time.Sleep(30 * time.Millisecond)
+	defer srv.Stop()
 
+	// No sleep needed: Start binds+listens synchronously, so a connect queues
+	// in the listen backlog until serveLoop accepts it.
 	cli := NewIPCClient(sock)
 	if _, err := cli.Ask(context.Background(), Request{Path: "/x", Mode: ModeRead}); err != nil {
 		t.Errorf("server over reclaimed stale socket should respond: %v", err)
