@@ -34,7 +34,7 @@ with client.sandbox("my-sandbox") as sb:
 | 能力 | 方法 |
 |------|------|
 | 一次性执行 | `execute(cmd)` |
-| 文件 | `ls / read / write / edit / grep / glob / upload_files / download_files` |
+| 文件 | `ls / read / write / edit / delete / grep / glob / upload_files / download_files`（`write` 覆盖已有文件；`delete` 原生走 `/files/delete`，对齐 deepagents 契约） |
 | 有状态解释器（变量跨调用保留） | `run_code(code, context_id=…)` + `create/list/restart/remove_code_context` |
 | 目录监视 | `watch_dir(path)` / `get_new_events(watcher_id)` |
 | 资源用量 | `metrics()` |

@@ -374,3 +374,57 @@ def test_watch_dir_handle():
         events = h.get_new_events()
     assert events == [{"name": "a.txt", "type": "create"}]
     assert removed.called  # context manager stopped it
+
+
+# ------------------------------------------------------------------ #
+# deepagents 契约适配：write 覆盖语义 + 原生 delete                     #
+# ------------------------------------------------------------------ #
+
+from langchain_sandrpod.sandbox import DeleteResult  # noqa: E402
+
+_TB = f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/toolbox"
+
+
+@respx.mock
+def test_write_overwrites_without_preflight():
+    """write 改为覆盖语义：不再 GET /files/info 预检，直接建目录+上传（截断）。"""
+    info = respx.get(f"{_TB}/files/info")  # 必须一次都不调
+    respx.post(f"{_TB}/files/folder").mock(return_value=httpx.Response(200))
+    upload = respx.post(f"{_TB}/files/upload").mock(return_value=httpx.Response(200))
+
+    sb = _make_sandbox()
+    res = sb.write("/w/f.txt", "hello")
+
+    assert res.error is None
+    assert res.path == "/w/f.txt"
+    assert not info.called, "覆盖语义下 write 不应做存在性预检"
+    assert upload.called
+
+
+@respx.mock
+def test_delete_native_existing():
+    """delete 原生走 DELETE /files/delete，返回 DeleteResult(path)。"""
+    respx.get(f"{_TB}/files/info").mock(return_value=httpx.Response(200))  # 存在
+    dele = respx.delete(f"{_TB}/files/delete").mock(return_value=httpx.Response(200))
+
+    sb = _make_sandbox()
+    res = sb.delete("/w/f.txt")
+
+    assert isinstance(res, DeleteResult)
+    assert res.error is None
+    assert res.path == "/w/f.txt"
+    assert dele.called
+
+
+@respx.mock
+def test_delete_missing_returns_not_found():
+    """不存在的路径按 deepagents 契约返回 not-found，且不发 DELETE。"""
+    respx.get(f"{_TB}/files/info").mock(return_value=httpx.Response(404))  # 不存在
+    dele = respx.delete(f"{_TB}/files/delete")
+
+    sb = _make_sandbox()
+    res = sb.delete("/w/missing.txt")
+
+    assert res.path is None
+    assert res.error and "not found" in res.error.lower()
+    assert not dele.called

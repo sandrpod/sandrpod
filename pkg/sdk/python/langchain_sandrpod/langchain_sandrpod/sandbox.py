@@ -61,8 +61,22 @@ try:
 except ImportError as exc:
     raise ImportError(
         "langchain-sandrpod requires the deepagents package.\n"
-        "Install with:  pip install 'deepagents>=0.5.0,<0.6.0'"
+        "Install with:  pip install 'deepagents>=0.5.0,<0.7.0'"
     ) from exc
+
+# DeleteResult is present only in deepagents versions that added the native
+# `delete` backend method. Import it separately with a shim fallback so this
+# package still imports on older deepagents (where the framework never calls
+# delete()). Defining delete() is harmless there — nothing invokes it.
+try:
+    from deepagents.backends.protocol import DeleteResult
+except ImportError:  # pragma: no cover - deepagents without native delete
+    from dataclasses import dataclass as _dataclass
+
+    @_dataclass
+    class DeleteResult:  # type: ignore[no-redef]
+        error: str | None = None
+        path: str | None = None
 
 logger = logging.getLogger(__name__)
 
@@ -676,20 +690,19 @@ class SandrPodSandbox(BaseSandbox):
         file_path: str,
         content: str,
     ) -> WriteResult:
-        """创建新文件，目标已存在则报错。
+        """创建或**覆盖**文件（deepagents write 契约：不存在则建、已存在则覆盖）。
 
-        流程（与 BaseSandbox.write 语义对齐）：
+        流程：
           1. 校验路径形态
-          2. 通过 ``GET /files/info`` 检查目标是否已存在（200 → 存在，报错）
-          3. 通过 ``POST /files/folder`` 创建父目录（mkdir -p 语义，幂等）
-          4. 通过 ``POST /files/upload`` 写入内容
+          2. 通过 ``POST /files/folder`` 创建父目录（mkdir -p 语义，幂等）
+          3. 通过 ``POST /files/upload`` 写入内容
+
+        历史：早期 deepagents 的 write 是「已存在则报错」，后来契约改为覆盖语义。
+        沙箱 ``/files/upload`` 本就以 ``O_CREATE|O_TRUNC`` 打开（截断已有内容），
+        所以去掉存在预检即得覆盖语义——对新旧 deepagents 都安全、更符合直觉。
         """
         if not _is_valid_path(file_path):
             return WriteResult(error=f"Invalid path: {file_path}")
-
-        # Preflight: 目标不能已存在
-        if self._file_exists(file_path):
-            return WriteResult(error=f"Error: File already exists: '{file_path}'")
 
         # 确保父目录存在（MkdirAll 幂等，父目录已在则不动）
         parent, _ = _split_dir_basename(file_path)
@@ -738,6 +751,37 @@ class SandrPodSandbox(BaseSandbox):
         if resp.is_success:
             return None
         return f"server returned {resp.status_code}: {resp.text[:200]}"
+
+    def delete(self, file_path: str) -> DeleteResult:
+        """删除文件或目录（原生，走 toolbox ``DELETE /files/delete``）。
+
+        覆盖 :class:`BaseSandbox` 默认经 ``execute("rm -rf …")`` 的实现，改用
+        文件 API：请求走沙箱的文件权限门（而非命令门）、不 spawn shell；目录递归删。
+
+        契约对齐 deepagents：不存在的路径返回 not-found 错误。沙箱端的
+        ``/files/delete`` 用 ``os.RemoveAll``（对缺失路径幂等、不报错），所以先用
+        ``GET /files/info`` 判断存在性以匹配契约（破损符号链接是已知边界差异）。
+        """
+        if not _is_valid_path(file_path):
+            return DeleteResult(error=f"Invalid path: {file_path}")
+        if not self._file_exists(file_path):
+            return DeleteResult(error=f"File not found: '{file_path}'")
+        try:
+            resp = self._http.delete(
+                self._toolbox_url("files/delete"),
+                params={"path": file_path},
+                timeout=self._FILE_HTTP_TIMEOUT,
+            )
+        except httpx.RequestError as exc:
+            return DeleteResult(
+                error=f"Failed to delete '{file_path}': request error: {exc}"
+            )
+        if resp.is_success:
+            return DeleteResult(path=file_path)
+        return DeleteResult(
+            error=f"Failed to delete '{file_path}': "
+            f"server returned {resp.status_code}: {resp.text[:200]}"
+        )
 
     def edit(
         self,
