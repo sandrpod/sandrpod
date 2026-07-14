@@ -17,7 +17,8 @@ setup(
     ),
     long_description=long_description,
     long_description_content_type="text/markdown",
-    license="MIT",
+    license="Apache-2.0",
+    author="SandrPod Contributors",
     python_requires=">=3.8",
     packages=["sandrpod_cli"],
     package_data={"sandrpod_cli": ["py.typed", "README.md"]},
@@ -41,7 +42,7 @@ setup(
     },
     classifiers=[
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: MIT License",
+        "License :: OSI Approved :: Apache Software License",
         "Programming Language :: Python :: 3",
         "Topic :: Scientific/Engineering :: Artificial Intelligence",
     ],
