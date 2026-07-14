@@ -27,8 +27,8 @@ CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/sandrp
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrpod-agent-windows-amd64.exe ./cmd/agent
 
 # Build Docker images (amd64)
-docker buildx build --platform linux/amd64 -f docker/Dockerfile.poder   -t sandrpod/poder:latest   --load .
-docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t sandrpod/toolbox:latest --load .
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.poder   -t ghcr.io/sandrpod/poder:latest   --load .
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t ghcr.io/sandrpod/toolbox:latest --load .
 
 # Run API Server (port 8080, in-memory store by default)
 go run ./cmd/server -port 8080
@@ -57,8 +57,8 @@ go run ./cmd/poder -api-url=http://localhost:8080 -region=local -network=sandrpo
 docker run -d --name sandrpod-poder --restart=unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e API_URL=http://host.docker.internal:8080 \
-  -e SANDRPOD_TOOLBOX_IMAGE=sandrpod/toolbox:latest \
-  sandrpod/poder:latest
+  -e SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:latest \
+  ghcr.io/sandrpod/poder:latest
 
 # Run sandrpod-agent (registers local machine directly as a sandbox)
 go run ./cmd/agent -api-url=http://localhost:8080 -name=my-agent
@@ -101,7 +101,7 @@ opt-in permission gate + decision audit, self-hosted data).
 
 定位：面向 AI Agent 的自托管执行基础设施 / 控制平面 —— 三根支柱：跑在你拥有的任何地方、
 想说哪套 SDK 就说哪套、全程你说了算。E2B 兼容是"支撑特性/证明点"，不是身份；不要把产品
-框成"E2B 替代品"。详见 [[product-positioning]]。
+框成"E2B 替代品"。
 
 ### Core Components
 
@@ -190,7 +190,7 @@ sandrpod-cli list
 sandrpod-cli get <name>                                 # 详情
 sandrpod-cli env <name>                                 # 运行时环境（arch/OS/shell）
 sandrpod-cli create <name> --provider gcp --region asia-east1-a --instance-type e2-medium
-sandrpod-cli create <name> --provider local --image sandrpod/toolbox:latest
+sandrpod-cli create <name> --provider local --image ghcr.io/sandrpod/toolbox:latest
 sandrpod-cli create <name> --poder <poder-id>          # 指定 poder 直建（跳过调度器）
 sandrpod-cli create <name> --ttl 3600 --cpu 2 --memory 2048  # 闲置 TTL(秒) + CPU 核 + 内存(MiB)
 sandrpod-cli create <name> --no-wait                   # 异步：立即返回 job id，不等 RUNNING

@@ -1,9 +1,9 @@
 # Copyright 2024 SandrPod
-# Server + Poder 本地开发部署
+# Server + Poder 部署（拉取 GHCR 发布镜像；从源码构建请用 docker-compose.local.yml）
 
 services:
   server:
-    image: sandrpod/server:v0.1.0
+    image: ghcr.io/sandrpod/server:latest
     container_name: sandrpod-server
     ports:
       - "18080:8080"
@@ -22,7 +22,7 @@ services:
       retries: 3
 
   poder:
-    image: sandrpod/poder:v0.1.0
+    image: ghcr.io/sandrpod/poder:latest
     container_name: sandrpod-poder
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -33,7 +33,7 @@ services:
       - REGION=${REGION:-local}
       - PROVIDER_TYPE=${PROVIDER_TYPE:-local}
       - SANDRPOD_TOKEN=${SANDRPOD_TOKEN:-}
-      - SANDRPOD_TOOLBOX_IMAGE=${SANDRPOD_TOOLBOX_IMAGE:-sandrpod/toolbox:latest}
+      - SANDRPOD_TOOLBOX_IMAGE=${SANDRPOD_TOOLBOX_IMAGE:-ghcr.io/sandrpod/toolbox:latest}
     depends_on:
       - server
     restart: unless-stopped

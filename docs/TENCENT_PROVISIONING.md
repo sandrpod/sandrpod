@@ -118,8 +118,8 @@ mainland-China CVMs is often slow or unreliable** — strongly prefer **Tencent
 Container Registry (TCR)**:
 
 ```bash
-SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.3.1
-SANDRPOD_TOOLBOX_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/toolbox:v0.3.1
+SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.4.0
+SANDRPOD_TOOLBOX_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/toolbox:v0.4.0
 ```
 
 Private TCR repos need the VM to `docker login`; the current bootstrap does not,
@@ -138,8 +138,8 @@ All set on the **API Server** process.
 | `TENCENTCLOUD_ZONE` | no | `ap-guangzhou-3` | default availability zone |
 | `SANDRPOD_VM_SECURITY_GROUP` (`_TENCENT`) | recommended | — | security group ID |
 | `SANDRPOD_VM_SUBNET_ID` (`_TENCENT`) | **leave unset** | — | see the VPC caveat above |
-| `SANDRPOD_PODER_IMAGE` (`_TENCENT`) | **yes (cloud)** | `sandrpod/poder:latest` | Poder image (TCR recommended) |
-| `SANDRPOD_TOOLBOX_IMAGE` (`_TENCENT`) | **yes (cloud)** | `sandrpod/toolbox:test` | toolbox image, forwarded to the Poder |
+| `SANDRPOD_PODER_IMAGE` (`_TENCENT`) | **yes (cloud)** | `ghcr.io/sandrpod/poder:latest` | Poder image (TCR recommended) |
+| `SANDRPOD_TOOLBOX_IMAGE` (`_TENCENT`) | **yes (cloud)** | `ghcr.io/sandrpod/toolbox:latest` | toolbox image, forwarded to the Poder |
 
 The `SANDRPOD_VM_*` and image vars accept a provider-scoped `_TENCENT` suffix
 that overrides the unscoped default (see
@@ -155,8 +155,8 @@ export TENCENTCLOUD_SECRET_ID=AKID...
 export TENCENTCLOUD_SECRET_KEY=...
 export TENCENTCLOUD_REGION=ap-guangzhou
 export TENCENTCLOUD_ZONE=ap-guangzhou-3
-export SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.3.1
-export SANDRPOD_TOOLBOX_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/toolbox:v0.3.1
+export SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.4.0
+export SANDRPOD_TOOLBOX_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/toolbox:v0.4.0
 
 go run ./cmd/server -port 8080 -public-url https://api.example.com \
   -db sqlite:./data/sandrpod.db -token "$SANDRPOD_TOKEN"

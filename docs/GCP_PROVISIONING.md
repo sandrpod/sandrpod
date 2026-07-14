@@ -198,8 +198,8 @@ The VM must **pull** the poder image, and the Poder then pulls the toolbox image
 Public GHCR works; **Artifact Registry** is the low-latency / private option:
 
 ```bash
-SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.3.1
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.3.1
+SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
 ```
 
 A private Artifact Registry needs the VM to authenticate; the bootstrap does not
@@ -220,8 +220,8 @@ All set on the **API Server** process.
 | `GCP_ADMIN_USERNAME` | no | `sandrpod` | Linux user created via SSH-key metadata |
 | `SANDRPOD_VM_SUBNET_ID` (`_GCP`) | no | — | subnetwork URL the NIC uses |
 | `SANDRPOD_VM_PUBLIC_IP` (`_GCP`) | no | `true` | must stay true — SSH needs a public IP |
-| `SANDRPOD_PODER_IMAGE` (`_GCP`) | **yes (cloud)** | `sandrpod/poder:latest` | Poder image the VM runs |
-| `SANDRPOD_TOOLBOX_IMAGE` (`_GCP`) | **yes (cloud)** | `sandrpod/toolbox:test` | toolbox image, forwarded to the Poder |
+| `SANDRPOD_PODER_IMAGE` (`_GCP`) | **yes (cloud)** | `ghcr.io/sandrpod/poder:latest` | Poder image the VM runs |
+| `SANDRPOD_TOOLBOX_IMAGE` (`_GCP`) | **yes (cloud)** | `ghcr.io/sandrpod/toolbox:latest` | toolbox image, forwarded to the Poder |
 
 The `SANDRPOD_VM_*` and image vars accept a **provider-scoped** `_GCP` suffix
 that overrides the unscoped default, so one server can drive GCP alongside the
@@ -238,8 +238,8 @@ Server flag: `-public-url <url>` — reachable from the VMs (passed to the Poder
 export GCP_PROJECT=my-project
 export GCP_ZONE=us-central1-a
 export GCP_CREDENTIALS_FILE=/opt/sandrpod/gcp-sa.json
-export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.3.1
-export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.3.1
+export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
+export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
 
 # One-time: allow the server to SSH to provisioned VMs.
 gcloud compute firewall-rules create sandrpod-allow-ssh \
@@ -274,8 +274,8 @@ swapping the drop-in for GCP:
 Environment=GCP_PROJECT=my-project
 Environment=GCP_ZONE=us-central1-a
 Environment=GCP_CREDENTIALS_FILE=/opt/sandrpod/gcp-sa.json
-Environment=SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.3.1
-Environment=SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.3.1
+Environment=SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
+Environment=SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
 ```
 
 Keep the SA JSON root-readable only (`chmod 600`), owned by the service user.

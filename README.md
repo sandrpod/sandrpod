@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/self--hosted-open%20source-16A34A" alt="Self-hosted"/>
   <img src="https://img.shields.io/badge/clouds-8%20providers-0EA5E9" alt="Multi-cloud"/>
   <img src="https://img.shields.io/badge/E2B%20SDK-drop--in-8B5CF6" alt="E2B compatible"/>
-  <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go" alt="Go"/>
+  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go" alt="Go"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
 </p>
 
@@ -165,14 +165,19 @@ go run ./cmd/server -port 8080
 go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
 ```
 
+> ⚠️ **Set an API token before exposing the server beyond localhost.** With no
+> token configured (`SANDRPOD_TOKEN` / `-token` / `-tokens-file` / an issued
+> key), authentication is disabled and every request runs as an anonymous
+> admin. See [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md).
+
 ### 2. Add a worker (Docker)
 
 ```bash
 docker run -d --name sandrpod-poder --restart=unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e API_URL=http://host.docker.internal:8080 \
-  -e SANDRPOD_TOOLBOX_IMAGE=sandrpod/toolbox:latest \
-  sandrpod/poder:latest
+  -e SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:latest \
+  ghcr.io/sandrpod/poder:latest
 ```
 
 > No inbound ports required — Poder dials out to the control plane over a WebSocket reverse tunnel.
@@ -252,11 +257,11 @@ See [`pkg/sdk/python/langchain_sandrpod/examples/`](pkg/sdk/python/langchain_san
 
 ```bash
 pip install sandrpod-cli
-sandrpod-cli set-api-url http://localhost:8080
+sandrpod-cli config set-url http://localhost:8080
 
 # --provider: local | aws | gcp | azure | aliyun | tencent | digitalocean | hetzner | oracle
 sandrpod-cli list
-sandrpod-cli create my-sandbox --provider local --image sandrpod/toolbox:latest
+sandrpod-cli create my-sandbox --provider local --image ghcr.io/sandrpod/toolbox:latest
 sandrpod-cli create gpu-box --provider gcp --region asia-east1-a --instance-type e2-medium
 sandrpod-cli execute my-sandbox "ls /workspace"     # one-shot (stateless)
 sandrpod-cli stream my-sandbox "make build"         # real-time streamed output
@@ -315,8 +320,8 @@ CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/sandrp
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrpod-agent-windows-amd64.exe ./cmd/agent
 
 # Docker images (amd64)
-docker buildx build --platform linux/amd64 -f docker/Dockerfile.poder   -t sandrpod/poder:latest   --load .
-docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t sandrpod/toolbox:latest --load .
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.poder   -t ghcr.io/sandrpod/poder:latest   --load .
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t ghcr.io/sandrpod/toolbox:latest --load .
 ```
 
 ---

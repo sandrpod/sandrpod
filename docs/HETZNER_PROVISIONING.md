@@ -103,8 +103,8 @@ Hetzner server. Point the images at a registry the server can reach (public GHCR
 works well from Hetzner's EU/US locations):
 
 ```bash
-SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.3.1
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.3.1
+SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
 ```
 
 ---
@@ -117,8 +117,8 @@ All set on the **API Server** process.
 |----------|----------|---------|---------|
 | `HCLOUD_TOKEN` | **yes** | — | API token; enables the provider |
 | `HCLOUD_LOCATION` | no | `fsn1` | default location |
-| `SANDRPOD_PODER_IMAGE` (`_HETZNER`) | **yes (cloud)** | `sandrpod/poder:latest` | Poder image the server runs |
-| `SANDRPOD_TOOLBOX_IMAGE` (`_HETZNER`) | **yes (cloud)** | `sandrpod/toolbox:test` | toolbox image, forwarded to the Poder |
+| `SANDRPOD_PODER_IMAGE` (`_HETZNER`) | **yes (cloud)** | `ghcr.io/sandrpod/poder:latest` | Poder image the server runs |
+| `SANDRPOD_TOOLBOX_IMAGE` (`_HETZNER`) | **yes (cloud)** | `ghcr.io/sandrpod/toolbox:latest` | toolbox image, forwarded to the Poder |
 
 `SANDRPOD_VM_SUBNET_ID` / `SANDRPOD_VM_SECURITY_GROUP` are unused. The image vars
 accept a provider-scoped `_HETZNER` suffix. Server flag: `-public-url <url>` —
@@ -131,8 +131,8 @@ reachable from the servers.
 ```bash
 export HCLOUD_TOKEN=...
 export HCLOUD_LOCATION=fsn1
-export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.3.1
-export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.3.1
+export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
+export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
 
 go run ./cmd/server -port 8080 -public-url https://api.example.com \
   -db sqlite:./data/sandrpod.db -token "$SANDRPOD_TOKEN"

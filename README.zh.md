@@ -16,7 +16,7 @@
   <img src="https://img.shields.io/badge/self--hosted-open%20source-16A34A" alt="Self-hosted"/>
   <img src="https://img.shields.io/badge/clouds-8%20providers-0EA5E9" alt="Multi-cloud"/>
   <img src="https://img.shields.io/badge/E2B%20SDK-drop--in-8B5CF6" alt="E2B compatible"/>
-  <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go" alt="Go"/>
+  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go" alt="Go"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
 </p>
 
@@ -154,14 +154,19 @@ go run ./cmd/server -port 8080
 go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
 ```
 
+> ⚠️ **server 暴露到 localhost 以外之前，务必配置 API token。** 不配置任何
+> token（`SANDRPOD_TOKEN` / `-token` / `-tokens-file` / 已签发的 key）时鉴权
+> 处于关闭状态，所有请求都以匿名 admin 身份执行。
+> 详见 [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md)。
+
 ### 2. 加一个 worker（Docker）
 
 ```bash
 docker run -d --name sandrpod-poder --restart=unless-stopped \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -e API_URL=http://host.docker.internal:8080 \
-  -e SANDRPOD_TOOLBOX_IMAGE=sandrpod/toolbox:latest \
-  sandrpod/poder:latest
+  -e SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:latest \
+  ghcr.io/sandrpod/poder:latest
 ```
 
 > 无需暴露任何入站端口 —— Poder 主动拨出到控制平面，走 WebSocket 反向隧道。
@@ -241,11 +246,11 @@ with sb.watch_dir("/workspace") as w:           # 文件系统监视
 
 ```bash
 pip install sandrpod-cli
-sandrpod-cli set-api-url http://localhost:8080
+sandrpod-cli config set-url http://localhost:8080
 
 # --provider: local | aws | gcp | azure | aliyun | tencent | digitalocean | hetzner | oracle
 sandrpod-cli list
-sandrpod-cli create my-sandbox --provider local --image sandrpod/toolbox:latest
+sandrpod-cli create my-sandbox --provider local --image ghcr.io/sandrpod/toolbox:latest
 sandrpod-cli create gpu-box --provider gcp --region asia-east1-a --instance-type e2-medium
 sandrpod-cli execute my-sandbox "ls /workspace"     # 一次性（无状态）
 sandrpod-cli stream my-sandbox "make build"         # 实时流式输出
@@ -304,8 +309,8 @@ CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/sandrp
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrpod-agent-windows-amd64.exe ./cmd/agent
 
 # Docker 镜像（amd64）
-docker buildx build --platform linux/amd64 -f docker/Dockerfile.poder   -t sandrpod/poder:latest   --load .
-docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t sandrpod/toolbox:latest --load .
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.poder   -t ghcr.io/sandrpod/poder:latest   --load .
+docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t ghcr.io/sandrpod/toolbox:latest --load .
 ```
 
 ---

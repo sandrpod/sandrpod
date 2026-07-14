@@ -122,7 +122,7 @@ Client / SDK / CLI
 docker run -d --name sandrpod-poder \
   -v /var/run/docker.sock:/var/run/docker.sock \   # 或 ~/.docker/run/docker.sock
   --add-host host.docker.internal:host-gateway \
-  sandrpod/poder:latest \
+  ghcr.io/sandrpod/poder:latest \
   -api-url=http://host.docker.internal:8080 \
   -region=local
 ```
@@ -396,7 +396,7 @@ go run ./cmd/server -port 8080
 docker run -d --name sandrpod-poder \
   -v ~/.docker/run/docker.sock:/var/run/docker.sock \
   --add-host host.docker.internal:host-gateway \
-  sandrpod/poder:test \
+  ghcr.io/sandrpod/poder:latest \
   -api-url=http://host.docker.internal:8080 -region=local
 
 # 验证
@@ -423,8 +423,8 @@ sandrpod-cli --api-url http://localhost:8080 execute my-laptop "print('hello')" 
 ### 5.4 构建 Docker 镜像
 
 ```bash
-docker build -f docker/Dockerfile.poder   -t sandrpod/poder:latest .
-docker build -f docker/Dockerfile.toolbox -t sandrpod/toolbox:latest .
+docker build -f docker/Dockerfile.poder   -t ghcr.io/sandrpod/poder:latest .
+docker build -f docker/Dockerfile.toolbox -t ghcr.io/sandrpod/toolbox:latest .
 ```
 
 ---

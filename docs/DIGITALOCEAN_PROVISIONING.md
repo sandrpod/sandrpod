@@ -112,8 +112,8 @@ droplet. Point the images at a registry the droplet can reach (public GHCR works
 well from DO regions):
 
 ```bash
-SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.3.1
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.3.1
+SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
 ```
 
 ---
@@ -127,8 +127,8 @@ All set on the **API Server** process.
 | `DIGITALOCEAN_TOKEN` (or `DO_TOKEN`) | **yes** | — | API token; enables the provider |
 | `DO_REGION` | no | `nyc3` | default region slug |
 | `SANDRPOD_VM_SUBNET_ID` (`_DIGITALOCEAN`) | no | — | VPC UUID (optional) |
-| `SANDRPOD_PODER_IMAGE` (`_DIGITALOCEAN`) | **yes (cloud)** | `sandrpod/poder:latest` | Poder image the droplet runs |
-| `SANDRPOD_TOOLBOX_IMAGE` (`_DIGITALOCEAN`) | **yes (cloud)** | `sandrpod/toolbox:test` | toolbox image, forwarded to the Poder |
+| `SANDRPOD_PODER_IMAGE` (`_DIGITALOCEAN`) | **yes (cloud)** | `ghcr.io/sandrpod/poder:latest` | Poder image the droplet runs |
+| `SANDRPOD_TOOLBOX_IMAGE` (`_DIGITALOCEAN`) | **yes (cloud)** | `ghcr.io/sandrpod/toolbox:latest` | toolbox image, forwarded to the Poder |
 
 `SANDRPOD_VM_SECURITY_GROUP` is unused (DO Cloud Firewalls are separate). The
 `SANDRPOD_VM_*`/image vars accept a provider-scoped `_DIGITALOCEAN` suffix.
@@ -141,8 +141,8 @@ Server flag: `-public-url <url>` — reachable from the droplets.
 ```bash
 export DIGITALOCEAN_TOKEN=dop_v1_...
 export DO_REGION=nyc3
-export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.3.1
-export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.3.1
+export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
+export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
 
 go run ./cmd/server -port 8080 -public-url https://api.example.com \
   -db sqlite:./data/sandrpod.db -token "$SANDRPOD_TOKEN"

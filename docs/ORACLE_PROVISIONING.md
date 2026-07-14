@@ -121,8 +121,8 @@ VM. Point the images at a registry the VM can reach (public GHCR, or **OCIR** fo
 low-latency/private pulls):
 
 ```bash
-SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.3.1
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.3.1
+SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
 ```
 
 ---
@@ -150,8 +150,8 @@ All set on the **API Server** process.
 | `OCI_AVAILABILITY_DOMAIN` | **yes** | — | AD to launch into (e.g. `Uocm:PHX-AD-1`) |
 | `OCI_CONFIG_FILE` | no | `~/.oci/config` | OCI config path |
 | `SANDRPOD_VM_SUBNET_ID` (`_ORACLE`) | **yes** | — | public subnet OCID |
-| `SANDRPOD_PODER_IMAGE` (`_ORACLE`) | **yes (cloud)** | `sandrpod/poder:latest` | Poder image the VM runs |
-| `SANDRPOD_TOOLBOX_IMAGE` (`_ORACLE`) | **yes (cloud)** | `sandrpod/toolbox:test` | toolbox image, forwarded to the Poder |
+| `SANDRPOD_PODER_IMAGE` (`_ORACLE`) | **yes (cloud)** | `ghcr.io/sandrpod/poder:latest` | Poder image the VM runs |
+| `SANDRPOD_TOOLBOX_IMAGE` (`_ORACLE`) | **yes (cloud)** | `ghcr.io/sandrpod/toolbox:latest` | toolbox image, forwarded to the Poder |
 
 `SANDRPOD_VM_SECURITY_GROUP` is unused (subnet security lists govern traffic). The
 `SANDRPOD_VM_*`/image vars accept a provider-scoped `_ORACLE` suffix. Server flag:
@@ -165,8 +165,8 @@ All set on the **API Server** process.
 export OCI_COMPARTMENT_OCID=ocid1.compartment.oc1..aaaa...
 export OCI_AVAILABILITY_DOMAIN="Uocm:PHX-AD-1"
 export SANDRPOD_VM_SUBNET_ID_ORACLE=ocid1.subnet.oc1.phx.aaaa...
-export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.3.1
-export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.3.1
+export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
+export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
 
 go run ./cmd/server -port 8080 -public-url https://api.example.com \
   -db sqlite:./data/sandrpod.db -token "$SANDRPOD_TOKEN"

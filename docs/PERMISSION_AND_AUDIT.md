@@ -472,7 +472,8 @@ make build-all
 ✅ **运维盲区**（每条经过网关的决策都进审计，30s 内推到中央）
 
 > **范围限定（重要）**：以上 ✅ 只覆盖**经过网关的路径** —— 文件 API(`files/*`)、
-> `/process`、`/pty/create`。它们是**摩擦层 + 审计层**，不是 OS 级沙箱。**任意代码执行
+> `/process`、`/procmgr/start`、`/process/session/*/exec`、`/pty/create`。
+> 它们是**摩擦层 + 审计层**，不是 OS 级沙箱。**任意代码执行
 > 天然看不住文件访问**：`/process` / `/code-interpreter` 里一句 `open("~/.ssh/id_rsa")`
 > 直接走进程 syscall，不经过 `pkg/permission`，hardlock 也拦不住(见下方 ❌)。真正的文件
 > 边界只能靠 OS 用户隔离 / seccomp / landlock —— 本产品**不做** syscall 级沙箱。
@@ -481,8 +482,10 @@ make build-all
 
 ❌ **任意代码里的文件读写**：`/process` 或 `/code-interpreter` 跑 `open(...)` / `os.remove(...)`
    直接触达文件系统，绕过 hardlock、work_dir、consent —— 这是"跑任意代码"的本质,非 bug
-❌ **绕过网关的执行入口**：`/procmgr/start`、`/process/session/*/exec`、`/code-interpreter/execute`
-   目前**不过命令扫描、也不进审计**(见 issue；`/process` 会扫)
+❌ **`/code-interpreter/execute` 只审计、不拦截**：解释器跑的是任意源码，token 级
+   deny 扫描既误报（源码里一个裸 `dd` 字样）又易绕过（`__import__("o"+"s")`），
+   所以命中 deny 词只记审计 warn，不做阻断（`/procmgr/start` 与
+   `/process/session/*/exec` 已与 `/process` 一致：过扫描 + 审计 + 可拦截）
 ❌ **encoded 命令**：`echo c2NwIC4uLg== | base64 -d | sh` — token 扫描看不到 scp
 ❌ **shell `eval` / 变量插值**：动态构造的命令绕过字面量匹配
 ❌ **PTY 内员工/AI 实时输入**：会话已开就放手，不实时拦字节

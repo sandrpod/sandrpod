@@ -60,9 +60,11 @@ go vet ./...
 ## Reporting security issues
 
 Please **do not** open a public GitHub issue for security vulnerabilities.
-Instead, email the maintainers directly (see repository contact info).
+Follow the process in [SECURITY.md](SECURITY.md) (private vulnerability
+reporting via GitHub Security Advisories).
 
 ## License
 
-By contributing you agree that your contributions will be licensed under the
-[Apache 2.0 License](LICENSE).
+SandrPod does not require a CLA. Contributions are accepted under the
+"inbound = outbound" model: by contributing you agree that your contributions
+will be licensed under the [Apache 2.0 License](LICENSE).
