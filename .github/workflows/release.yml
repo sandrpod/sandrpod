@@ -1,7 +1,7 @@
 name: Release
 
 # On a v* tag: publish CGO-free release binaries AND multi-arch container
-# images to GHCR (ghcr.io/<owner>/{poder,toolbox,toolbox-centos}).
+# images to GHCR (ghcr.io/<owner>/{server,poder,toolbox,toolbox-centos}).
 # CGO binaries (sandrpod-tray) are excluded — they need platform toolchains
 # and are built/distributed separately.
 on:
@@ -66,6 +66,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: server
+            dockerfile: docker/Dockerfile.server
+            platforms: linux/amd64,linux/arm64
           - name: poder
             dockerfile: docker/Dockerfile.poder
             platforms: linux/amd64,linux/arm64

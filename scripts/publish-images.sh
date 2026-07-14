@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 # Publish SandrPod container images to GHCR from a local machine.
 #
-# The repository is not hosted on GitHub, so the GitHub Actions release
-# workflow does not run for it. This script does the equivalent locally:
-# log in to GHCR with a GitHub PAT and push multi-arch images.
+# The GitHub Actions release workflow (.github/workflows/release.yml) publishes
+# these automatically on every v* tag. This script does the equivalent locally,
+# for out-of-band pushes or pre-release testing: log in to GHCR with a GitHub
+# PAT and push multi-arch images.
 #
 # Usage:
 #   GITHUB_PAT=ghp_xxx GHCR_USER=<your-github-username> \
-#     ./scripts/publish-images.sh v0.3.1
+#     ./scripts/publish-images.sh v0.4.0
 #
 # Env:
 #   GITHUB_PAT   GitHub personal access token with write:packages (for login).

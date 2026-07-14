@@ -28,3 +28,9 @@ updates:
     directory: "/pkg/sdk/python/langchain_sandrpod"
     schedule:
       interval: "weekly"
+
+  # Python CLI (sandrpod-cli, setup.py at the python SDK root).
+  - package-ecosystem: "pip"
+    directory: "/pkg/sdk/python"
+    schedule:
+      interval: "weekly"
