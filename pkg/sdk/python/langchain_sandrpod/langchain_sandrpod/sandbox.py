@@ -799,8 +799,8 @@ class SandrPodSandbox(BaseSandbox):
 
         说明：BaseSandbox 用 ``_edit_via_upload`` 把 old/new 字符串当 tmp 文
         件上传、让服务端脚本就地替换以避免源文件离开沙箱。本实现选择更简
-        单的 download/upload 双向传输——bytes 反正会经过 Acme 代理，没有
-        额外隐私损失，换来跨平台彻底解耦。
+        单的 download/upload 双向传输——bytes 反正会经过 API server 代理，
+        没有额外隐私损失，换来跨平台彻底解耦。
         """
         if not _is_valid_path(file_path):
             return EditResult(error=f"Invalid path: {file_path}")
