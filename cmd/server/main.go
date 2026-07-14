@@ -1353,6 +1353,10 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 	return mux
 }
 
+// version is stamped at release time via -ldflags "-X main.version=v…"
+// (see .github/workflows/release.yml).
+var version = "dev"
+
 func main() {
 	flag.Parse()
 
@@ -1366,7 +1370,7 @@ func main() {
 	// through slog so the whole process shares one format and level.
 	logging.Setup()
 
-	log.Printf("Starting SandrPod API Server v0.3.0 (Control Plane)")
+	log.Printf("Starting SandrPod API Server %s (Control Plane)", version)
 
 	// Register cloud providers
 	if err := aws.Register(); err != nil {
@@ -1485,6 +1489,9 @@ func main() {
 			}
 		}
 		cfg.Keys = keys
+	}
+	if cfg.authDisabled() {
+		log.Printf("WARNING: authentication is DISABLED — no token of any kind is configured, so every request runs as an anonymous admin. Set SANDRPOD_TOKEN (or -token / -tokens-file, or issue a key with `sandrpod-cli token create`) before exposing this server beyond localhost.")
 	}
 	handler := buildMux(cfg, stores, tunnelStore, directStore)
 

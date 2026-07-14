@@ -142,6 +142,10 @@ var (
 	mcpOAuthTokenDir = flag.String("mcp-oauth-token-dir", envOr("SANDRPOD_MCP_OAUTH_TOKEN_DIR", ""), "Directory for persisted OAuth tokens (default: ~/.sandrpod/oauth).")
 )
 
+// version is stamped at release time via -ldflags "-X main.version=v…"
+// (see .github/workflows/release.yml).
+var version = "dev"
+
 func main() {
 	flag.Parse()
 
@@ -170,7 +174,7 @@ func main() {
 		}
 	}
 
-	log.Printf("Starting SandrPod Agent")
+	log.Printf("Starting SandrPod Agent %s", version)
 	log.Printf("Sandbox name: %s", *name)
 	log.Printf("API Server:   %s", *apiURL)
 

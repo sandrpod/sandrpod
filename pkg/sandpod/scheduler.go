@@ -347,14 +347,13 @@ func envBoolDefault(key string, def bool) bool {
 
 // poderImage returns the Poder container image to run on a provisioned cloud
 // VM of the given provider. Override via SANDRPOD_PODER_IMAGE[_<PROVIDER>]
-// (e.g. ghcr.io/<owner>/poder:<tag>, or a region-local ACR repo for Aliyun);
-// it defaults to the unqualified dev image, which only resolves if it has been
-// pushed to a registry the VM can reach.
+// (e.g. a region-local ACR repo for Aliyun, TCR for Tencent); defaults to the
+// public GHCR release image.
 func poderImage(providerType string) string {
 	if img := providerEnv("SANDRPOD_PODER_IMAGE", providerType); img != "" {
 		return img
 	}
-	return "sandrpod/poder:latest"
+	return "ghcr.io/sandrpod/poder:latest"
 }
 
 func shellQuoteSingleValue(s string) string {

@@ -93,7 +93,7 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 	if imageName == "" {
 		imageName = os.Getenv("SANDRPOD_TOOLBOX_IMAGE")
 		if imageName == "" {
-			imageName = "sandrpod/toolbox:test"
+			imageName = "ghcr.io/sandrpod/toolbox:latest"
 		}
 	}
 

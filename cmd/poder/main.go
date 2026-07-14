@@ -73,13 +73,16 @@ var (
 	apiURL            = flag.String("api-url", env("API_URL", "http://localhost:8080"), "API Server URL")
 	apiToken          = flag.String("token", env("SANDRPOD_TOKEN", ""), "API Server bearer token")
 	region            = flag.String("region", env("REGION", "local"), "Region")
-	providerType      = flag.String("provider-type", env("PROVIDER_TYPE", "local"), "Provider type: aws, aliyun, local, docker")
+	providerType      = flag.String("provider-type", env("PROVIDER_TYPE", "local"), "Provider type: local, docker, aws, aliyun, azure, gcp, tencent, digitalocean, hetzner, oracle")
 	vmInstanceID      = flag.String("vm-instance-id", env("VM_INSTANCE_ID", ""), "Cloud VM instance ID this Poder runs on (used for VM reclamation)")
 	poderIDFlag       = flag.String("poder-id", env("PODER_ID", ""), "Poder ID (auto-generated if not set)")
 	networkName       = flag.String("network", env("SANDRPOD_NETWORK", ""), "Docker network name for sandbox containers (empty = Docker default bridge)")
 	heartbeatInterval = flag.Duration("heartbeat-interval", 10*time.Second, "Heartbeat interval")
 	help              = flag.Bool("help", false, "Show help")
 )
+
+// version is stamped at release time via -ldflags "-X main.version=v…".
+var version = "dev"
 
 func main() {
 	flag.Parse()
@@ -89,7 +92,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	log.Printf("Starting SandrPod Poder v0.3.0")
+	log.Printf("Starting SandrPod Poder %s", version)
 	log.Printf("API Server: %s, Region: %s", *apiURL, *region)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -111,7 +114,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"status":  "ok",
-			"version": "0.3.0",
+			"version": version,
 			"mode":    "tunnel",
 		})
 	})
