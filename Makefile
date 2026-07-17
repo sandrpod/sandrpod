@@ -1,4 +1,4 @@
-.PHONY: build build-all test vet lint clean docker-poder docker-toolbox docker-toolbox-centos
+.PHONY: build build-all test vet lint clean docker docker-poder docker-toolbox docker-toolbox-centos help
 
 # ─── Go binaries ────────────────────────────────────────────────────────────
 
@@ -16,7 +16,7 @@ LDFLAGS_BARE  := -s -w
 
 build-all: ## Cross-compile release binaries into dist/
 	mkdir -p dist
-	# server (Linux only — runs in our infra)
+	# server (Linux only — runs on the control-plane host)
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="$(LDFLAGS_BARE)"  -o dist/server-linux-amd64                  ./cmd/server
 	# sandrpod-agent — runs on every employee PC (CGO off; pure-Go works on every target)
 	CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="$(LDFLAGS_AGENT)" -o dist/sandrpod-agent-linux-amd64          ./cmd/agent
@@ -102,17 +102,17 @@ lint: vet ## Run vet + staticcheck (install: go install honnef.co/go/tools/cmd/s
 docker-poder: ## Build the Poder Docker image (linux/amd64)
 	docker buildx build --platform linux/amd64 \
 		-f docker/Dockerfile.poder \
-		-t sandrpod/poder:latest --load .
+		-t ghcr.io/sandrpod/poder:latest --load .
 
 docker-toolbox: ## Build the Toolbox Docker image - Alpine (linux/amd64)
 	docker buildx build --platform linux/amd64 \
 		-f docker/Dockerfile.toolbox \
-		-t sandrpod/toolbox:latest --load .
+		-t ghcr.io/sandrpod/toolbox:latest --load .
 
 docker-toolbox-centos: ## Build the Toolbox Docker image - CentOS Stream 9 full-featured (linux/amd64)
 	docker buildx build --platform linux/amd64 \
 		-f docker/Dockerfile.toolbox.centos \
-		-t sandrpod/toolbox:centos --load .
+		-t ghcr.io/sandrpod/toolbox:centos --load .
 
 docker: docker-poder docker-toolbox ## Build all Docker images
 

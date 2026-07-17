@@ -956,14 +956,9 @@ sandrpod-agent \
 4. 把这些工具与企业级 `mcp_tools` 表 union 后注入 LangGraph agent
 5. 调用时复用现有 MCP client，URL 指向 `https://sandrpod-internal/api/v1/sandboxes/{name}/mcp`
 
-消费方平台侧新增的最小工作量：
-
-- `mcp_tools` 表加 `provenance` (`corp` / `personal`) + `sandbox_id` + `owner_user_id` 字段
-- 注册接口 `POST /api/agent-system/sandboxes/{id}/mcp/sync`（sandrpod-agent 启动后回调）
-- License v2 新 feature key：`mcp.personal`
-- DeepAgentsExecutor 工具加载阶段 union 个人 MCP
-
-消费方平台侧的详细改动属于该平台自身的设计文档（本文不展开）。
+消费方平台侧新增的最小工作量（示意）：给自己的工具表加个人/企业来源与归属字段、
+提供一个注册回调端点（agent 启动后上报可用工具）、在 agent 的工具加载阶段把
+个人 MCP 与企业工具 union。具体实现属于消费方平台自身的设计范畴（本文不展开）。
 
 ### langchain-sandrpod 集成
 

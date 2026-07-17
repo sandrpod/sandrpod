@@ -452,12 +452,8 @@ make build-all
 3. 持久化：建议表索引 `(tenant_id, occurred_at desc)` 给"按沙箱看时间线"用例
 4. 查询 API：让管理员能按 `decision=deny` / `source=exec` / 时间窗过滤
 
-**一个真实消费方平台的实现**作参考：
-
-- 表 `sandbox_decision_events`（migration 011）
-- `POST /api/agent-system/sandboxes/audit/decisions/batch`（去重 + 反查 sandbox_id）
-- `GET /api/agent-system/sandboxes/audit/decisions`（用户/管理员权限分层 + 过滤 + 翻页）
-- 前端 `DecisionAuditPanel.tsx`（30s 自动刷新 + 表格 + 决策过滤 + deny 优先排序高亮）
+照上面的契约实现一个接收端点即可——一张带 `event_id UNIQUE` 的表、
+一个 batch POST、一个带过滤的查询页，就是一个完整的审计消费方。
 
 ---
 
@@ -490,7 +486,7 @@ make build-all
 ❌ **shell `eval` / 变量插值**：动态构造的命令绕过字面量匹配
 ❌ **PTY 内员工/AI 实时输入**：会话已开就放手，不实时拦字节
 ❌ **Python `subprocess.Popen(["s"+"cp", ...])`**：动态构造的非 shell 调用
-❌ **网络出口**：当前**没有 egress allowlist**——AI 只要能跑 `curl` 就能外传数据。这是下个 sprint 的重点
+❌ **网络出口**：当前**没有 egress allowlist**——AI 只要能跑 `curl` 就能外传数据（在路线图上）
 
 ### 安全责任分工
 
@@ -513,21 +509,24 @@ make build-all
 ### 装一台新员工 PC（macOS 演示）
 
 ```bash
-# 在平台 UI 创建 enrollment → 拷出 install 命令
-curl -fsSL <PLATFORM_BASE>/api/agent-system/sandboxes/install/sandrpod-agent.sh \
-  | PLATFORM_ENROLL='<jwt>' bash
+# 起 agent（员工机模式：同意框 + 审计上传）
+sandrpod-agent -api-url=https://your-server.example.com -name=alice-laptop \
+  -permission-mode=prompt \
+  -audit-upload-url=https://your-backend.example.com/api/audit/decisions/batch
+
+# 用户会话里再起 tray（同意框 + 设置页 + 常驻图标）
+sandrpod-tray serve
+sandrpod-tray seed        # 首次安装：写入默认 hardlock（~/.ssh 等）
 
 # 期望日志：
-#   ✓ launchd 已注册: ~/Library/LaunchAgents/com.yourplatform.sandbox.plist
-#   ✓ sandrpod-tray 已注册并启动（菜单栏将出现盾牌图标）
 #   Permission : prompt
-#   Audit URL  : <PLATFORM_BASE>/api/agent-system/sandboxes/audit/decisions/batch
+#   Audit URL  : https://your-backend.example.com/api/audit/decisions/batch
 ```
 
 ### 触发一次同意框
 
 ```bash
-# 在企微/网页让 AI 干一件事，例如：
+# 让接入这台沙箱的 AI agent 干一件事，例如：
 "读 ~/Documents/foo.xlsx 并总结"
 
 # 期望：
@@ -535,7 +534,7 @@ curl -fsSL <PLATFORM_BASE>/api/agent-system/sandboxes/install/sandrpod-agent.sh 
 #   2. 员工选"永久允许"
 #   3. cat ~/.sandrpod/permissions.json | grep Documents → 出现新 rule
 #   4. 第二次同样请求 → 不弹（命中 permanent）
-#   5. 30 秒内平台 UI 的"AI 决策审计"页出现两条 audit
+#   5. 30 秒内审计消费端收到两条 decision 事件
 ```
 
 ### 触发命令策略 deny

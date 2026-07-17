@@ -99,9 +99,8 @@ SDK** (native REST/Python/TS, LangChain/deepagents, and the unmodified E2B SDK a
 a drop-in); **stay in control** (reverse-tunnel workers with zero inbound ports,
 opt-in permission gate + decision audit, self-hosted data).
 
-定位：面向 AI Agent 的自托管执行基础设施 / 控制平面 —— 三根支柱：跑在你拥有的任何地方、
-想说哪套 SDK 就说哪套、全程你说了算。E2B 兼容是"支撑特性/证明点"，不是身份；不要把产品
-框成"E2B 替代品"。
+Docs voice: lead with the three pillars above. Treat E2B compatibility as one
+supporting feature of "speak any SDK", not as the product's identity.
 
 ### Core Components
 
@@ -182,7 +181,7 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 
 ### sandrpod-cli（Python）
 
-源码：`pkg/sdk/python/cli/`，已安装到本机（开发模式，改源码即时生效）：
+源码：`pkg/sdk/python/sandrpod_cli/`（开发时可 `pip install -e pkg/sdk/python`，改源码即时生效）：
 
 ```bash
 # Sandbox 操作（--provider: local | aws | aliyun | azure | gcp | tencent | digitalocean | hetzner | oracle）

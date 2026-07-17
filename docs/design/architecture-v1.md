@@ -20,12 +20,12 @@
 |-------------|---------|------|
 | Proxy+Agent 暴露 `:8081` HTTP 端口 | Poder 通过 WebSocket 反向隧道连接，**不暴露任何端口** | ✅ 已实现（方式变更） |
 | Toolbox 使用 Flask/Python | Toolbox 使用 Go 重写 | ✅ 已实现（语言变更） |
-| `internal/` 多租户、计费、租户服务 | 尚未实现 | 🔲 未实现 |
-| `internal/console/` Web 控制台 | 尚未实现 | 🔲 未实现 |
+| `internal/` 多租户、计费、租户服务 | 命名 token + 角色 + per-owner 配额 + 限流已实现（全开源）；计费未做 | ✅ 大部分实现（开源） |
+| `internal/console/` Web 控制台 | 内嵌 SPA `/console`（`cmd/server/console.html`）已实现 | ✅ 已实现 |
 | `cmd/daemon/` SandPod Daemon | 已合并进 Toolbox | ✅ 已实现（合并） |
 | `cmd/proxy/` 独立 Proxy 进程 | 已合并进 API Server 的隧道代理层 | ✅ 已实现（合并） |
-| `SnapshotService`、`VolumeService` | 尚未实现 | 🔲 未实现 |
-| JWT Auth + Rate Limit + Tenant Quota | 仅实现 Bearer Token 鉴权 | 🔲 部分实现 |
+| `SnapshotService`、`VolumeService` | snapshot（docker commit）已实现；volume 未做 | 🔶 部分实现 |
+| JWT Auth + Rate Limit + Tenant Quota | 命名 token（hash 存储）+ 角色 + 限流 + per-owner 配额已实现（无 JWT） | ✅ 已实现（形式变更） |
 | 存储层（无描述） | 新增 Repository 模式 + SQLite 持久化 | ✅ 已实现（新增） |
 | `sandrpod-agent` 单机直连 | 不在 v1 设计中 | ✅ 已实现（新增） |
 
@@ -1115,68 +1115,9 @@ volumes:
 
 ## 11. 开源闭源边界
 
-### 11.1 开源部分 (SandrPod Open)
-
-```
-SandrPod/
-├── pkg/
-│   ├── provider/           # Provider 抽象层 + 各云厂商实现
-│   ├── poder/             # Poder 核心逻辑
-│   │   ├── docker/        # Docker 操作
-│   │   └── executor/       # 任务执行
-│   ├── SandPod/            # SandPod 核心
-│   └── sdk/                # 多语言 SDK
-│
-├── apis/
-│   └── SandrPod/v1/          # API 定义 (OpenAPI)
-│
-└── scripts/                # 部署脚本
-```
-
-### 11.2 闭源部分 (SandrPod Cloud)
-
-```
-SandrPod/  (不在 GitHub 公开)
-│
-└── internal/
-    ├── api/                 # API 服务实现
-    │   ├── gateway/         # 网关 (认证、限流)
-    │   ├── services/        # 业务逻辑
-    │   │   ├── SandPod/     # 沙箱管理
-    │   │   ├── billing/    # 计费 ⭐
-    │   │   ├── tenant/      # 租户 ⭐
-    │   │   └── quota/       # 配额 ⭐
-    │   └── handlers/       # HTTP 处理
-    │
-    ├── console/             # 控制台 Web ⭐
-    │   ├── pages/
-    │   ├── components/
-    │   └── hooks/
-    │
-    └── billing/             # 计费系统 ⭐
-        ├── billing.go
-        ├── invoice.go
-        └── payment.go
-```
-
-### 11.3 商业化功能
-
-| 功能 | 开源 | 闭源 |
-|------|------|------|
-| SandPod CRUD | ✅ | |
-| 代码执行 | ✅ | |
-| 文件操作 | ✅ | |
-| Git 操作 | ✅ | |
-| PTY 终端 | ✅ | |
-| 多云 Provider | ✅ | |
-| 多租户 | | ⭐ |
-| 计费系统 | | ⭐ |
-| 控制台 | | ⭐ |
-| 审计日志 | | ⭐ |
-| SSO/OIDC | | ⭐ |
-| 团队协作 | | ⭐ |
-| API 统计 | | ⭐ |
-| 告警通知 | | ⭐ |
+> v1.0 曾设想"核心开源 + 商业闭源"的拆分。**这个想法后来被放弃**：
+> 项目整体以 Apache-2.0 开源，当年划入"闭源"的多租户配额、控制台、
+> 审计日志等如今都在本仓库中。本节原始内容已删除，仅留此说明。
 
 ## 12. 技术栈选型
 
