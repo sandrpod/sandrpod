@@ -156,6 +156,11 @@ func (m *ProcManager) Start(cfg ProcStartConfig) (uint32, error) {
 		return mp.info.PID, nil
 	}
 
+	// Own process group, so Signal can reach the whole tree. Without this,
+	// killing `sh -c "…"` leaves grandchildren alive holding the pipe write
+	// ends — the end event then stalls until they exit on their own (the PTY
+	// path gets the same isolation from setsid in the pty library).
+	setSysProcAttr(cmd)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return 0, err
@@ -250,13 +255,14 @@ func (m *ProcManager) CloseStdin(pid uint32) bool {
 	return true
 }
 
-// Signal sends a signal to a process. E2B only uses SIGKILL/SIGTERM.
+// Signal sends a signal to a process (the whole process group on unix).
+// E2B only uses SIGKILL/SIGTERM.
 func (m *ProcManager) Signal(pid uint32, sig syscall.Signal) bool {
 	mp, ok := m.get(pid)
 	if !ok || mp.proc == nil {
 		return false
 	}
-	_ = mp.proc.Signal(sig)
+	signalProcess(mp.proc, sig)
 	return true
 }
 

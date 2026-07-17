@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"syscall"
 )
 
 // platformOSVersion returns a human-readable Windows version string. Shells
@@ -95,6 +96,15 @@ func killProcess(cmd *exec.Cmd) {
 	if cmd != nil && cmd.Process != nil {
 		cmd.Process.Kill() //nolint:errcheck
 	}
+}
+
+// signalProcess delivers sig to the process; Windows has no process groups in
+// the unix sense, so this signals the single process (Kill for SIGKILL).
+func signalProcess(proc *os.Process, sig syscall.Signal) {
+	if proc == nil {
+		return
+	}
+	_ = proc.Signal(sig)
 }
 
 // toNativePath converts forward slashes to backslashes for Windows paths.

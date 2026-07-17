@@ -84,6 +84,17 @@ func killProcess(cmd *exec.Cmd) {
 	}
 }
 
+// signalProcess delivers sig to the process group (falling back to the single
+// process if the group signal fails, e.g. the child never got its own pgid).
+func signalProcess(proc *os.Process, sig syscall.Signal) {
+	if proc == nil {
+		return
+	}
+	if err := syscall.Kill(-proc.Pid, sig); err != nil {
+		_ = proc.Signal(sig)
+	}
+}
+
 // buildCommandWrapper constructs a shell snippet that runs command inside a
 // persistent bash session, captures all output to logFile, and writes the
 // numeric exit code to exitFile.
