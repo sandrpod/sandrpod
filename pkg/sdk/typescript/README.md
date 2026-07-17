@@ -5,9 +5,9 @@ plane. Uses the global `fetch` (Node ≥ 18, browsers, Deno, Bun).
 
 ## Install
 
+Build from source (npm publish pending):
+
 ```bash
-npm install @sandrpod/sdk
-# or build from source:
 cd pkg/sdk/typescript && npm install && npm run build
 ```
 

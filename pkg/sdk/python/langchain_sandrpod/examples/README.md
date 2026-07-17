@@ -1,6 +1,6 @@
 # langchain-sandrpod Examples
 
-三个由浅入深的示例，展示如何用 `langchain-sandrpod` + deepagents 让 LLM Agent 在 SandrPod 沙箱里完成真实编程任务。
+四个由浅入深的示例，展示如何用 `langchain-sandrpod` + deepagents 让 LLM Agent 在 SandrPod 沙箱里完成真实编程任务。
 
 ## 前置条件
 

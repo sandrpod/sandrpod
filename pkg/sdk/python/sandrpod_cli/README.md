@@ -38,4 +38,4 @@ Full command list (cloud providers, snapshots, tokens, contexts, directory watch
 
 ## License
 
-MIT
+Apache-2.0
