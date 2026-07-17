@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // KeyStore persists per-VM ephemeral SSH private keys so that a control-plane
 // restart does not lose the ability to SSH into already-provisioned VMs
 // (DigitalOcean, Hetzner, and any other cloud using the shared SSH executor).

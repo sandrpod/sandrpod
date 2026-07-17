@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Port preview proxy: forwards /proxy/{port}/{path} to a service listening on
 // localhost inside the sandbox, so web apps started by an agent are reachable
 // through the platform (server → tunnel → poder → toolbox → localhost:port).

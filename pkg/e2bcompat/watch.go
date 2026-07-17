@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // E2B filesystem watch surface (watch_dir). The SDK model is poll-based, on the
 // Filesystem connect service:
 //

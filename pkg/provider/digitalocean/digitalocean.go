@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // DigitalOcean Provider implementation
 //
 // DigitalOcean has no managed run-command API, so bootstrap runs over SSH:

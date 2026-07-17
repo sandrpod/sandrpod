@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Shared sandbox-create flow, used by both the synchronous POST /sandboxes
 // path and the async (job-based) path.
 

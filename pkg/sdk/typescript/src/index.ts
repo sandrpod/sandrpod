@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Minimal, dependency-free TypeScript client for the SandrPod API. Uses the
 // global fetch (Node >= 18, browsers, Deno, Bun).
 

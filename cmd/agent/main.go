@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // sandrpod-agent — local machine sandbox agent
 //
 // Registers the local machine directly as a SandrPod Sandbox without

@@ -1,6 +1,6 @@
 //go:build windows
 
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // blacklist_windows.go — Windows-specific replacement for the default
 // (Unix-only) raw blacklists declared in executor.go.
 //

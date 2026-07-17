@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // E2B Process service: the pid-addressed process surface reached over connect-
 // rpc at the envd host. It backs commands.run(background=…)/list/kill/send_stdin
 // /connect and the PTY (pty.create/send_input/resize/kill), which the SDK layers

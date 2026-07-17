@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Package e2bcompat implements a wire-protocol-compatible gateway for the E2B
 // SDKs (e2b / e2b-code-interpreter). The goal is a zero-config drop-in: point
 // the unmodified E2B SDK at a SandrPod deployment via E2B_DOMAIN + an

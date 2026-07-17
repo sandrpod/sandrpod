@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // HTTP handler tests for the Toolbox API server.
 
 package toolbox

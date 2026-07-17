@@ -1,6 +1,6 @@
 //go:build windows
 
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // PTY Session Manager for Windows, backed by ConPTY (Windows 10 1809+).
 //
 // This mirrors pty_unix.go's external surface (PtySession / PtyManager /

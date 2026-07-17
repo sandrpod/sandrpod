@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Tombstones - a small expiring set of recently-deleted poder IDs.
 //
 // When a poder is deleted and its VM terminated, the poder container often

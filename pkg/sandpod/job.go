@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Job model - used for task passing between the API Server and Poder Agent
 
 package sandpod

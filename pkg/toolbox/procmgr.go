@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // procmgr: a pid-addressed, background-capable process table. This backs the
 // E2B Process service surface (Start / Connect / SendInput / SendSignal /
 // Update / List / CloseStdin), which the e2bcompat gateway proxies to.

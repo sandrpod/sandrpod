@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Stateful code interpreter for E2B-compatible run_code. Each "context" is a
 // long-lived Python process holding a persistent global namespace, so variables
 // survive across executions (x=1 then x+=1;x → 2). Output (stdout/stderr) and

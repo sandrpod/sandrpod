@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Prometheus-compatible /metrics endpoint. Dependency-free: it renders the
 // text exposition format directly from the current store snapshot, so there is
 // no client library or background collector to maintain.

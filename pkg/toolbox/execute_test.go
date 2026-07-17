@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Execution-path tests for Executor.Execute / ExecuteStream.
 //
 // These tests spawn real subprocesses but only ever use `bash` (universally

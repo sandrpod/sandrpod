@@ -1,4 +1,4 @@
-# Copyright 2024 SandrPod
+# Copyright 2026 SandrPod Contributors
 # Toolbox 镜像 - Go 实现代码执行服务
 
 FROM golang:1.25-alpine AS builder

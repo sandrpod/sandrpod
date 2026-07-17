@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // HTTP tests for the /process/session routes and executor permission helpers.
 
 package toolbox

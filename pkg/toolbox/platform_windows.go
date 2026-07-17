@@ -1,6 +1,6 @@
 //go:build windows
 
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // platform_windows.go — Windows-specific shell and process helpers.
 // Uses PowerShell as the system shell.
 

@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // HTTP surface for the filesystem watcher and resource metrics. The e2bcompat
 // gateway proxies the E2B watch_dir (CreateWatcher/GetWatcherEvents/
 // RemoveWatcher) and get_metrics surfaces onto these:

@@ -1,6 +1,6 @@
 //go:build !windows
 
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // PTY Session Manager - interactive shell session management (Unix/macOS)
 
 package toolbox

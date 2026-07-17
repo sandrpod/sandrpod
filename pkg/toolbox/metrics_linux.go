@@ -1,6 +1,6 @@
 //go:build linux
 
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Linux resource metrics: /proc/meminfo for memory, /proc/stat sampled twice
 // for CPU percent, statfs for disk. This is the production path (the toolbox
 // runs in Linux sandbox containers).

@@ -1,4 +1,4 @@
-# Copyright 2024 SandrPod
+# Copyright 2026 SandrPod Contributors
 # Server + Poder 部署（拉取 GHCR 发布镜像；从源码构建请用 docker-compose.local.yml）
 
 services:

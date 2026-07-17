@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Tencent Cloud Provider implementation
 //
 // Tencent Cloud provides TAT (TencentCloud Automation Tools), a managed

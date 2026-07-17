@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Additional coverage: server lifecycle, multipart uploads, session exec/command.
 
 package toolbox

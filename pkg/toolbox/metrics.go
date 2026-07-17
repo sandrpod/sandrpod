@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Sandbox resource metrics backing the E2B get_metrics surface. The toolbox
 // reports its own CPU / memory / disk usage; the server wraps a single reading
 // in the E2B SandboxMetric shape.

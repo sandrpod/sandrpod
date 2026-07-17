@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Native OAuth for remote MCP servers (Notion/GitHub/Linear-style endpoints
 // that follow the MCP authorization spec: OAuth 2.1 + PKCE + dynamic client
 // registration). A server entry opts in with `"auth": "oauth"`; the child then

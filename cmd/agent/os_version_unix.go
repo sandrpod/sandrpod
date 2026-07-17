@@ -1,6 +1,6 @@
 //go:build !windows
 
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // os_version_unix.go — read OS distribution string for the WebSocket
 // registration headers (X-Sandbox-OS-Version).
 

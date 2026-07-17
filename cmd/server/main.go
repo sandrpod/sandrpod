@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // API Server - REST API control plane
 // Handles incoming requests and creates jobs; does not connect to cloud providers directly
 

@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Idle reclamation: opt-in reapers for idle sandboxes and empty cloud poders.
 //
 // Both are cost-safety features — a platform that provisions cloud VMs on

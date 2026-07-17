@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Lifecycle webhooks: fire-and-forget POSTs to an operator-configured URL so
 // external systems can react to sandbox/poder transitions without polling.
 

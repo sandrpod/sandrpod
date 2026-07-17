@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Scheduler - sandbox creation scheduling and orchestration logic
 // Dispatches by provider type: prefers existing Poder resources and creates a new VM when none are available
 

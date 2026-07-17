@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Binary-protobuf codecs for the E2B Process service messages that back the
 // pid-addressed surface (Connect / SendInput / SendSignal / Update / List).
 // The JSON path uses ordinary struct (un)marshaling; these mirror it for

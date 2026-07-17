@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Filesystem watcher backing the E2B watch_dir surface. The SDK model is
 // poll-based: create a watcher for a directory, then poll for the events that
 // have accrued since the last poll, then remove it. We keep an fsnotify watcher

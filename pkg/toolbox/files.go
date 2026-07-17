@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // File operation interface.
 //
 // Each method takes a context.Context as its first argument so the permission

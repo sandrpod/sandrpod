@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Provider Factory - dynamic provider registration and lookup
 
 package provider

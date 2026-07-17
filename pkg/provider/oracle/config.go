@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Oracle Cloud Infrastructure (OCI) Provider configuration
 
 package oracle

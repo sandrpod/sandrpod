@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // GCP remote execution over SSH.
 //
 // GCP has no managed run-command service, so ExecuteCommand connects to the VM

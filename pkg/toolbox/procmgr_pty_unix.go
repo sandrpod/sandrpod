@@ -1,6 +1,6 @@
 //go:build !windows
 
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // PTY spawn/resize for the managed process table (Unix/macOS), via creack/pty.
 
 package toolbox

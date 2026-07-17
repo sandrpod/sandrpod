@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Hand-rolled protobuf codec for the envd connect-rpc messages. E2B's SDK
 // connect clients send binary protobuf (Content-Type application/proto or
 // application/connect+proto), so the JSON handlers alone don't satisfy the real

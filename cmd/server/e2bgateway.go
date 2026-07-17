@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Wires the E2B-compatible gateway (pkg/e2bcompat) into the SandrPod server:
 // implements its SandboxBackend over the scheduler/store and its EnvdBackend by
 // proxying filesystem/process ops to the sandbox's toolbox over the tunnel.

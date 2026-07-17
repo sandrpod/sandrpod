@@ -1,6 +1,6 @@
 //go:build !windows
 
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Tests for the Unix PtyManager. CreateSession spawns a login shell, so the
 // lifecycle tests require bash and skip when it is unavailable.
 

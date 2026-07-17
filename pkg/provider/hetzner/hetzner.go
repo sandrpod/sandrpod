@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Hetzner Cloud Provider implementation
 //
 // Like DigitalOcean, Hetzner has no managed run-command API, so bootstrap runs

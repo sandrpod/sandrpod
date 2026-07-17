@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // envd surface: the per-sandbox daemon the E2B SDK reaches at
 // <port>-<sandboxID>.<domain>. We terminate it centrally at the server and
 // translate onto an EnvdBackend (the toolbox, over the tunnel).

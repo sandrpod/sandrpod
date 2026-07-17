@@ -1,6 +1,6 @@
 //go:build !linux
 
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Non-Linux metrics fallback. The toolbox targets Linux sandbox containers in
 // production; on other platforms (a macOS/Windows agent) only the CPU count is
 // reported and the rest is left zero.

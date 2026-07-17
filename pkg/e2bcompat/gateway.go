@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Gateway: one http.Handler that fronts both E2B planes and dispatches by Host.
 //
 //	api.<domain>                    → control plane

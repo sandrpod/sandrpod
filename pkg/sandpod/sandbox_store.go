@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Sandbox Store - in-memory sandbox storage
 
 package sandpod

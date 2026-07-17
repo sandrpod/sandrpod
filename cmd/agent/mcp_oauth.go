@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // mcp_oauth.go — agent-side wiring for the bridge's native OAuth flow
 // (docs/MCP_AUTH.md). The agent runs in the employee's user session, so it can
 // hand the authorization URL straight to the system browser: adding an

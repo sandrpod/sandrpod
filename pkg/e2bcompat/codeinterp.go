@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // E2B code-interpreter surface. The @e2b/code-interpreter SDK's run_code()
 // connects to a code-interpreter server at <ciPort>-<sandboxID>.<domain> and
 // POSTs to /execute, consuming an NDJSON stream of output messages that it

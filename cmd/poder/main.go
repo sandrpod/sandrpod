@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Combined Proxy + Poder Agent service.
 // Deployed on every worker node to join the sandrpod network.
 

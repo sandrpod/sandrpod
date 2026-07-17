@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // E2B control-plane REST surface (api.<domain>). Handlers implement the exact
 // paths/shapes from E2B's spec/openapi.yml, backed by a SandboxBackend that the
 // SandrPod server satisfies over its scheduler + store.

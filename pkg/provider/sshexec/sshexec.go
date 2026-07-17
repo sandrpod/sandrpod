@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Shared SSH remote-execution helper for providers that have no managed
 // run-command API (DigitalOcean, Hetzner, ...). The VM lifecycle differs per
 // provider, but the "connect over SSH with a per-VM ephemeral key and run a

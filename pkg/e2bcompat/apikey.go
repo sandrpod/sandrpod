@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // E2B API-key handling. The E2B SDK validates keys client-side against
 // /^e2b_[0-9a-f]+$/ (packages/js-sdk/src/api/index.ts), so keys handed to it
 // must be in that shape. We therefore issue and accept e2b_<hex> keys and map

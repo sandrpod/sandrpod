@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Per-identity rate limiting for user-role tokens. Admin/system tokens are
 // exempt (poders poll and heartbeat constantly). Disabled unless
 // SANDRPOD_RATE_LIMIT (requests/second per identity) is set.

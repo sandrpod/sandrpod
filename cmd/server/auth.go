@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Named-token authentication and sandbox ownership.
 //
 // Backward compatible by design: the legacy single -token keeps working (as an

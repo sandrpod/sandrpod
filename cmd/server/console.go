@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // A dependency-free single-page web console served at /console. It talks to the
 // same REST API as the CLI/SDK using a token the operator pastes in (kept only
 // in the browser tab's memory). Intentionally minimal — one embedded HTML file,

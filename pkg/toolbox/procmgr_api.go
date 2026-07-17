@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // HTTP surface for the managed process table (/procmgr/*). The e2bcompat
 // gateway proxies the E2B Process service onto these endpoints:
 //

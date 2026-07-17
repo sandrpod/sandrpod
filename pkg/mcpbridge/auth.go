@@ -1,4 +1,4 @@
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // Shared MCP bridge auth: a constant-time Bearer guard for the /mcp surface,
 // used by both cmd/agent and cmd/toolbox (previously duplicated in each).
 

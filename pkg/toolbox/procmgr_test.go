@@ -1,6 +1,6 @@
 //go:build !windows
 
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 package toolbox
 
 import (

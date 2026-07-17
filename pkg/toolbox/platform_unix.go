@@ -1,6 +1,6 @@
 //go:build !windows
 
-// Copyright 2024 SandrPod
+// Copyright 2026 SandrPod Contributors
 // platform_unix.go — Unix/macOS specific shell and process helpers.
 
 package toolbox
