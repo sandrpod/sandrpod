@@ -1,7 +1,9 @@
 # Copyright 2026 SandrPod Contributors
 # Toolbox 镜像 - Go 实现代码执行服务
 
-FROM golang:1.25-alpine AS builder
+# 构建阶段跑在 BUILDPLATFORM（原生架构）上做交叉编译，
+# 避免 buildx 多架构时整个 Go 编译落在 QEMU 仿真里（慢一个数量级）。
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
@@ -13,8 +15,9 @@ COPY . .
 
 # 构建 toolbox + mcp-gateway（E2B `mcp-gateway` 二进制的 drop-in，供
 # Sandbox.create({mcp}) 在沙箱内 `mcp-gateway --config …` 时调用）
-RUN CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=auto go build -o /toolbox ./cmd/toolbox
-RUN CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=auto go build -o /mcp-gateway ./cmd/mcp-gateway
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto go build -ldflags="-s -w" -o /toolbox ./cmd/toolbox
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto go build -ldflags="-s -w" -o /mcp-gateway ./cmd/mcp-gateway
 
 # 最终镜像
 FROM alpine:3.19

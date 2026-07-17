@@ -114,8 +114,8 @@ droplet. Point the images at a registry the droplet can reach (public GHCR works
 well from DO regions):
 
 ```bash
-SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
+SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
 ```
 
 ---
@@ -144,8 +144,8 @@ Server flag: `-public-url <url>` — reachable from the droplets.
 ```bash
 export DIGITALOCEAN_TOKEN=dop_v1_...
 export DO_REGION=nyc3
-export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
-export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
+export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
+export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
 
 go run ./cmd/server -port 8080 -public-url https://api.example.com \
   -db sqlite:./data/sandrpod.db -token "$SANDRPOD_TOKEN"

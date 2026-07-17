@@ -1,7 +1,9 @@
 # Copyright 2026 SandrPod Contributors
 # API Server 镜像 - 控制面服务
 
-FROM golang:1.25-alpine AS builder
+# 构建阶段跑在 BUILDPLATFORM（原生架构）上做交叉编译，
+# 避免 buildx 多架构时整个 Go 编译落在 QEMU 仿真里（慢一个数量级）。
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
 
 WORKDIR /app
 
@@ -11,8 +13,11 @@ RUN apk add --no-cache git
 # 复制源码
 COPY . .
 
-# 构建
-RUN CGO_ENABLED=0 GOOS=linux GOTOOLCHAIN=auto go build -o /server ./cmd/server
+# 构建（VERSION 由 release workflow 以 build-arg 注入）
+ARG TARGETOS TARGETARCH
+ARG VERSION=dev
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto \
+    go build -ldflags="-s -w -X main.version=${VERSION}" -o /server ./cmd/server
 
 # 最终镜像
 FROM alpine:3.19

@@ -104,8 +104,8 @@ Hetzner server. Point the images at a registry the server can reach (public GHCR
 works well from Hetzner's EU/US locations):
 
 ```bash
-SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
+SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
 ```
 
 ---
@@ -133,8 +133,8 @@ reachable from the servers.
 ```bash
 export HCLOUD_TOKEN=...
 export HCLOUD_LOCATION=fsn1
-export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
-export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
+export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
+export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
 
 go run ./cmd/server -port 8080 -public-url https://api.example.com \
   -db sqlite:./data/sandrpod.db -token "$SANDRPOD_TOKEN"

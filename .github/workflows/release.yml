@@ -106,6 +106,8 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: ${{ matrix.platforms }}
           push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
           tags: |
             ${{ steps.ref.outputs.image }}:${{ github.ref_name }}
             ${{ steps.ref.outputs.image }}:latest

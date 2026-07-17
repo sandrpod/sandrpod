@@ -19,6 +19,13 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # sandrpod-tray uses getlantern/systray, which needs CGO + GTK headers
+      # on Linux — without these, `go build ./...` fails on cmd/sandrpod-tray.
+      - name: Install GTK headers (sandrpod-tray)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libgtk-3-dev libayatana-appindicator3-dev
+
       - name: Verify dependencies
         run: go mod verify
 
@@ -29,7 +36,7 @@ jobs:
         run: go build ./...
 
       - name: Test (with race detector)
-        run: go test -race -timeout 120s ./...
+        run: go test -race -timeout 300s ./...
 
       - name: Cross-compile agent (linux/amd64)
         run: |

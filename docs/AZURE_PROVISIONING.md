@@ -148,8 +148,8 @@ the **toolbox** image. Point both at a registry the VM can reach (public GHCR, o
 **Azure Container Registry** for lower latency / private pulls):
 
 ```bash
-SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
+SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
 ```
 
 If using a private ACR, the bootstrap does not `docker login` — keep the repo
@@ -212,8 +212,8 @@ export AZURE_CLIENT_SECRET=<password>
 export AZURE_RESOURCE_GROUP=sandrpod-rg
 export AZURE_LOCATION=eastus
 export SANDRPOD_VM_SUBNET_ID_AZURE=/subscriptions/<sub>/resourceGroups/sandrpod-rg/providers/Microsoft.Network/virtualNetworks/sandrpod-vnet/subnets/default
-export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
-export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
+export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
+export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
 
 go run ./cmd/server -port 8080 \
   -public-url https://api.example.com \
@@ -246,8 +246,8 @@ Environment=AZURE_CLIENT_SECRET=<password>
 Environment=AZURE_RESOURCE_GROUP=sandrpod-rg
 Environment=AZURE_LOCATION=eastus
 Environment=SANDRPOD_VM_SUBNET_ID_AZURE=/subscriptions/<sub>/resourceGroups/sandrpod-rg/providers/Microsoft.Network/virtualNetworks/sandrpod-vnet/subnets/default
-Environment=SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
-Environment=SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
+Environment=SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
+Environment=SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
 ```
 
 ---

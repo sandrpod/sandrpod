@@ -198,8 +198,8 @@ The VM must **pull** the poder image, and the Poder then pulls the toolbox image
 Public GHCR works; **Artifact Registry** is the low-latency / private option:
 
 ```bash
-SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
+SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
 ```
 
 A private Artifact Registry needs the VM to authenticate; the bootstrap does not
@@ -238,8 +238,8 @@ Server flag: `-public-url <url>` — reachable from the VMs (passed to the Poder
 export GCP_PROJECT=my-project
 export GCP_ZONE=us-central1-a
 export GCP_CREDENTIALS_FILE=/opt/sandrpod/gcp-sa.json
-export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
-export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
+export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
+export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
 
 # One-time: allow the server to SSH to provisioned VMs.
 gcloud compute firewall-rules create sandrpod-allow-ssh \
@@ -274,8 +274,8 @@ swapping the drop-in for GCP:
 Environment=GCP_PROJECT=my-project
 Environment=GCP_ZONE=us-central1-a
 Environment=GCP_CREDENTIALS_FILE=/opt/sandrpod/gcp-sa.json
-Environment=SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.4.0
-Environment=SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
+Environment=SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
+Environment=SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
 ```
 
 Keep the SA JSON root-readable only (`chmod 600`), owned by the service user.

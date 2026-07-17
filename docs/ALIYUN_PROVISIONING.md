@@ -99,8 +99,8 @@ strongly consider pushing to **Alibaba Cloud Container Registry (ACR)** and
 pointing the image envs there:
 
 ```bash
-SANDRPOD_PODER_IMAGE=registry.<region>.aliyuncs.com/<ns>/poder:v0.4.0
-SANDRPOD_TOOLBOX_IMAGE=registry.<region>.aliyuncs.com/<ns>/toolbox:v0.4.0
+SANDRPOD_PODER_IMAGE=registry.<region>.aliyuncs.com/<ns>/poder:v0.5.0
+SANDRPOD_TOOLBOX_IMAGE=registry.<region>.aliyuncs.com/<ns>/toolbox:v0.5.0
 ```
 
 If the ACR repos are private the VM needs `docker login` to ACR (the current
@@ -145,8 +145,8 @@ Environment=SANDRPOD_VM_SECURITY_GROUP_AWS=sg-xxxx
 Environment=SANDRPOD_VM_SUBNET_ID_ALIYUN=vsw-xxxx
 Environment=SANDRPOD_VM_SECURITY_GROUP_ALIYUN=sg-xxxx
 # (a region-local ACR image just for Aliyun)
-Environment=SANDRPOD_PODER_IMAGE_ALIYUN=registry.<region>.aliyuncs.com/<ns>/poder:v0.4.0
-Environment=SANDRPOD_TOOLBOX_IMAGE_ALIYUN=registry.<region>.aliyuncs.com/<ns>/toolbox:v0.4.0
+Environment=SANDRPOD_PODER_IMAGE_ALIYUN=registry.<region>.aliyuncs.com/<ns>/poder:v0.5.0
+Environment=SANDRPOD_TOOLBOX_IMAGE_ALIYUN=registry.<region>.aliyuncs.com/<ns>/toolbox:v0.5.0
 ```
 
 The unscoped `SANDRPOD_VM_SUBNET_ID` etc. still work as a shared default when no

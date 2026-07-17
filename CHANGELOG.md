@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.5.0] — 2026-07
+
+### Security
+- **Sandbox ownership is enforced on the E2B data plane** (envd, code
+  interpreter, and the generic port proxy) — previously only the control
+  plane checked ownership, so a valid key holder who learned another
+  tenant's sandbox ID could reach it. Agent-connect and admin-create now
+  stamp `Owner` so no sandbox is world-visible.
+- **Platform credentials are stripped before proxying to workers**
+  (`X-Sandrpod-Token` always; `Authorization` except on the MCP path,
+  which carries the per-sandbox `mcp_token`) — a malicious worker can no
+  longer capture the platform admin token from forwarded requests.
+- **The tray settings server is token-gated** (per-session token via
+  launch URL, constant-time compare) — closes a localhost port-proxy
+  pivot from inside a sandbox.
+- **`/procmgr/start` and session exec go through the command gate**
+  (deny-scan + audit, same as `/process`); `/code-interpreter/execute` is
+  audit-only by design (token scanning of arbitrary source both
+  false-positives and is trivially bypassed — documented honestly in
+  PERMISSION_AND_AUDIT.md).
+- **Loud startup warning when authentication is disabled** — a token-less
+  server runs as anonymous admin; that mode is now impossible to miss.
+- Hardening bundle: permission-gate session-grant leak, `session_id` path
+  traversal, OAuth-callback reflected XSS + state-TTL, seeded hardlocks
+  for sandrpod's own security state, widened MCP sensitive-tool keywords,
+  `/files/find` result caps, loopback-only OAuth callback, Aliyun
+  instance-ID JSON escaping.
+
 ### Added
 - **E2B MCP Gateway compatibility**: in-sandbox `mcp-gateway` shim
   (`:50005`, Streamable-HTTP + Bearer token) plus generic per-port
@@ -33,6 +63,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   requirement); real per-platform icons are embedded now.
 - A corrupt `mcp_grants.json` disabled the permission gate open (allow-all);
   it now degrades to prompt-for-everything.
+- Release binaries could not report their version (`-X main.version`
+  injected into a nonexistent variable); server/agent/poder now carry it,
+  and container images receive it as a build arg.
+- Chinese Windows agents (GBK `ver` output) failed to persist on
+  PostgreSQL and appeared OFFLINE (also listed above — shipped in this
+  release).
+
+### Changed
+- **LICENSE is now the canonical Apache-2.0 text** (the previous file was
+  a paraphrase that license detectors could not recognize); the Python
+  packages' metadata says Apache-2.0 accordingly.
+- Default container images point at the published `ghcr.io/sandrpod/*`
+  names everywhere (code defaults, compose, docs); the release workflow
+  also publishes the `server` image, and image builds cross-compile
+  instead of running under QEMU.
+- Docs accuracy sweep for open-sourcing: E2B compatibility documented as
+  shipped/verified, provisioning guides reflect idle reclamation and
+  SSH-key persistence, architecture doc brought to v0.4 reality.
 
 ## [0.4.0] — 2026-07
 

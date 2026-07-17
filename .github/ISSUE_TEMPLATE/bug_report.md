@@ -26,7 +26,7 @@ What you expected to happen.
 
 - OS: [e.g. macOS 14, Ubuntu 22.04]
 - Go version: [e.g. 1.25.5]
-- SandrPod version / commit: [e.g. v0.4.0 or abc1234]
+- SandrPod version / commit: [e.g. v0.5.0 or abc1234]
 - Deployment mode: [in-memory / SQLite / PostgreSQL / Docker Poder / sandrpod-agent]
 
 ## Logs
