@@ -1,8 +1,8 @@
 # SandrPod 架构文档
 
-> **版本**: v0.3  
-> **更新日期**: 2026-04-19  
-> 本文档描述当前**已实现并正常运行**的架构。历史设计规划见 [`design/architecture-v1.md`](design/architecture-v1.md)，横向扩展方案见 [`design/horizontal-scaling.md`](design/horizontal-scaling.md)。
+> **版本**: v0.4  
+> **更新日期**: 2026-07  
+> 本文档描述当前**已实现并正常运行**的架构。历史设计规划见 [`design/architecture-v1.md`](design/architecture-v1.md)，多实例部署见 [`MULTI_INSTANCE_DEPLOYMENT.md`](MULTI_INSTANCE_DEPLOYMENT.md)。
 
 ---
 
@@ -19,16 +19,16 @@ SandrPod 是面向 AI Agent 的代码执行沙箱平台。核心理念：
 Client / SDK / CLI
         │  HTTP
         ▼
-┌──────────────��────────────────────────────────────┐
+┌────────────────────────────────────────────────────┐
 │              API Server  :8080                     │
-│  ┌─────────────────┐   ┌────────────────���─────┐   │
+│  ┌─────────────────┐   ┌───────────────────────┐   │
 │  │  Control Plane  │   │  Tunnel Proxy        │   │
 │  │  - Sandbox CRUD │   │  - 反代到 Poder 隧道  │   │
 │  │  - Job 管理     │   │  - 反代到 Agent 隧道  │   │
 │  │  - Poder 注册   │   │  - 路由 execute/stream│   │
-│  └─────────────────���   └────────────────��─────┘   │
+│  └──────────────────┘   └──────────────────────┘   │
 │                                                     │
-│  ┌──────────────���──┐   ┌──────────────────────┐   │
+│  ┌──────────────────┐   ┌──────────────────────┐   │
 │  │  tunnelStore    │   │  directStore         │   │
 │  │  poderID→tunnel │   │  sandboxName→tunnel  │   │
 │  └─────────────────┘   └──────────────────────┘   │
@@ -38,10 +38,10 @@ Client / SDK / CLI
 │  │  SandboxRepository  PoderRepository          │   │
 │  │  JobRepository                               │   │
 │  └─────────────────────────────────────────────┘   │
-└──────────────┬──────────────────┬────────────────��┘
+└──────────────┬──────────────────┬──────────────────┘
                │ WebSocket 反向隧道│ WebSocket 反向隧道
                ▼                  ▼
-   ┌────────────────┐    ┌────────────────────��─┐
+   ┌────────────────┐    ┌──────────────────────┐
    │   Poder        │    │   sandrpod-agent     │
    │ (Docker Worker)│    │  (本机直连沙箱)       │
    │                │    │  嵌入 Toolbox         │
@@ -68,9 +68,19 @@ Client / SDK / CLI
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `-port` | `8080` | 监听端口 |
-| `-token` | `""` | API 认证 token（空=不鉴权） |
-| `-db` | `""` | 存储后端：空=内存；`sqlite:<path>`=SQLite |
+| `-token` | `""` | API 认证 token（空=不鉴权，**匿名 admin**，勿对外暴露） |
+| `-tokens-file` | `""` | 命名 token JSON 文件（热加载，见 AUTH_AND_KEYS.md） |
+| `-db` | `""` | 存储后端：空=内存；`sqlite:<path>`；`postgres://…` |
+| `-public-url` | `""` | 云 VM 引导时回连的公网地址（云 provider 必填） |
+| `-node-url` | `""` | 多实例模式下本实例的内部地址（见 MULTI_INSTANCE_DEPLOYMENT.md） |
+| `-tls-cert` / `-tls-key` | `""` | 内建 TLS（直接 HTTPS 监听） |
+| `-rate-limit` | `0` | 每 user-token 请求限速（req/s，0=不限） |
+| `-max-sandboxes-per-owner` | `0` | 每 owner 并发沙箱上限（0=不限） |
 | `-offline-timeout` | `30s` | Poder 心跳超时后标记 OFFLINE |
+| `-reap-timeout` | `10m` | OFFLINE poder 回收（终止云 VM）超时 |
+
+（闲置回收 `SANDRPOD_SANDBOX_IDLE_TIMEOUT` / `SANDRPOD_PODER_IDLE_TIMEOUT`、
+E2B 网关 `SANDRPOD_E2B_DOMAIN` 等经环境变量配置，完整清单见 `.env.example`。）
 
 **WebSocket 端点**：
 
@@ -159,7 +169,7 @@ docker run -d --name sandrpod-poder \
 
 ```bash
 sandrpod-agent \
-  -api-url=https://api.sandrpod.io \
+  -api-url=https://api.example.com \
   -name=my-laptop \
   -work-dir=/home/user/projects
 ```
@@ -203,19 +213,23 @@ sandpod.Stores          ← 三个 Repository 的聚合，注入到所有 handle
 | 包 | 后端 | 适用场景 |
 |----|------|----------|
 | `pkg/store/memory.go` | 进程内 map（加读写锁） | 开发 / 测试，重启即丢失 |
-| `pkg/store/sqlite/` | SQLite（WAL 模式，modernc.org/sqlite） | 生产单节点，持久化 |
+| `pkg/store/sqldb/` | 方言参数化 SQL：SQLite（WAL，modernc.org/sqlite）**或** PostgreSQL（pgx 连接池 + `FOR UPDATE SKIP LOCKED` 并发抢 job） | 生产；单实例用 SQLite，多实例用 PostgreSQL |
 
-启动时通过 `-db` flag 选择：
+同一套 `sqldb` 代码按 `-db` DSN scheme 在启动时选定其一：
 
 ```bash
 # 内存模式（默认）
 go run ./cmd/server
 
-# SQLite 持久化
+# SQLite 持久化（单实例）
 go run ./cmd/server -db sqlite:./data/sandrpod.db
+
+# PostgreSQL（多实例 / 生产）
+go run ./cmd/server -db "postgres://user:pass@host:5432/sandrpod?sslmode=require"
 ```
 
-PostgreSQL 实现（多实例水平扩展）见 [`design/horizontal-scaling.md`](design/horizontal-scaling.md)。
+多实例部署（N 个实例 + 共享 PostgreSQL + 跨节点隧道路由）见
+[`MULTI_INSTANCE_DEPLOYMENT.md`](MULTI_INSTANCE_DEPLOYMENT.md)。
 
 ---
 
@@ -266,10 +280,10 @@ Client          API Server          Poder           Docker
   │                 │                 ├──────────────▶│
   │                 │                 │◀── container ─│
   │                 │ PATCH job       │               │
-  │                 │◀───────────────��│               │
+  │                 │◀────────────────│               │
   │                 │ sandbox.State=RUNNING           │
   │ GET /sandboxes/{name}             │               │
-  ├────────────────��│                 │               │
+  ├────────────────▶│                 │               │
   │◀── {state:RUNNING, ip:…} ─────────│               │
 ```
 
@@ -350,8 +364,10 @@ sandrpod/
 │   ├── provider/        # 云厂商抽象层
 │   │   ├── interface.go     # Provider 接口（CreateVM / DeleteVM 等）
 │   │   ├── factory.go       # 工厂模式注册
-│   │   ├── aws/             # AWS EC2 实现
-│   │   └── aliyun/          # 阿里云 ECS 实现
+│   │   ├── aws/  aliyun/  azure/  gcp/          # 托管 run-command 后端
+│   │   ├── tencent/  oracle/                    # 托管 run-command 后端
+│   │   ├── digitalocean/  hetzner/              # SSH 后端
+│   │   └── sshexec/         # 共享 SSH 执行器（DO/Hetzner）
 │   │
 │   ├── toolbox/         # Toolbox HTTP 服务（Go）
 │   │   ├── api.go           # HTTP handler
@@ -373,9 +389,8 @@ sandrpod/
 │
 ├── docs/
 │   ├── ARCHITECTURE.md          # 本文档（当前实现）
-│   └── design/
-│       ├── architecture-v1.md   # 历史设计规划（v1，部分未实现）
-│       └── horizontal-scaling.md # 横向扩展方案（PostgreSQL + 多实例）
+│   ├── …                        # 完整文档索引见 docs/README.md
+│   └── design/                  # 历史设计存档（带指向现状的横幅）
 │
 ├── go.mod
 ├── go.sum
@@ -440,10 +455,10 @@ docker build -f docker/Dockerfile.toolbox -t ghcr.io/sandrpod/toolbox:latest .
 
 | 组件 | 环境变量 | 说明 |
 |------|----------|------|
-| API Server | `TOKEN` | 认证 token（可选） |
+| API Server | `SANDRPOD_TOKEN` | 认证 token（可选；完整清单见 `.env.example`） |
 | Poder | `API_URL` | API Server 地址 |
 | Poder | `REGION` | 区域标识 |
-| Poder | `PROVIDER_TYPE` | `docker` / `aws` / `aliyun` / `local` |
+| Poder | `PROVIDER_TYPE` | `local` / `docker` / `aws` / `aliyun` / `azure` / `gcp` / `tencent` / `digitalocean` / `hetzner` / `oracle` |
 | sandrpod-agent | `SANDRPOD_API_URL` | API Server 地址 |
 | sandrpod-agent | `SANDRPOD_SANDBOX_NAME` | 沙箱名称 |
 | sandrpod-agent | `SANDRPOD_WORK_DIR` | 工作目录 |
