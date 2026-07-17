@@ -47,9 +47,25 @@ func TestWatchManagerCreateWriteEvents(t *testing.T) {
 	if len(types) == 0 {
 		t.Fatal("expected at least one create/write event for note.txt")
 	}
-	// A drained watcher returns no events on the next poll.
-	if evs, _ := m.Events(id); len(evs) != 0 {
-		t.Fatalf("expected drained watcher to return 0 events, got %d", len(evs))
+	// Draining: with no further FS activity the buffer must go — and stay —
+	// empty. Late stragglers may still be in flight (Linux inotify delivers
+	// create and write separately), so drain until two consecutive polls come
+	// back empty instead of asserting emptiness immediately.
+	empties := 0
+	for time.Now().Before(deadline) && empties < 2 {
+		evs, ok := m.Events(id)
+		if !ok {
+			t.Fatal("watcher vanished")
+		}
+		if len(evs) == 0 {
+			empties++
+		} else {
+			empties = 0
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if empties < 2 {
+		t.Fatal("watcher buffer never drained to empty")
 	}
 }
 
