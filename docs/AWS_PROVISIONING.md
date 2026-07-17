@@ -21,8 +21,9 @@ This is **lazy provision-on-demand**, not an autoscaler:
 - Subsequent `aws` sandboxes in the same region **reuse** that Poder
   (`SelectBest`). One VM/Poder hosts **many** sandboxes (each sandbox is a
   Toolbox container).
-- There is **no** continuous scale-out and **no** idle-VM reclamation. One VM is
-  launched only when a region has no usable Poder.
+- There is **no** continuous scale-out — one VM is launched only when a region
+  has no usable Poder. Idle reclamation is **off by default**; enable via
+  `SANDRPOD_PODER_IDLE_TIMEOUT` / `SANDRPOD_SANDBOX_IDLE_TIMEOUT`.
 
 ### Flow
 
@@ -359,11 +360,11 @@ sudo journalctl -u sandrpod-server -f      # watch provisioning
 
 ## Known limitations
 
-- **No autoscaling / no idle reclamation.** One VM per "region has no Poder".
+- **No autoscaling.** Idle-VM reclamation is opt-in (`SANDRPOD_PODER_IDLE_TIMEOUT`; see [UPGRADING.md](UPGRADING.md)). One VM per "region has no Poder".
   Clean up VMs you no longer need (delete the sandbox/Poder; `Cleanup` terminates
   VMs tagged `sandrpod=true`).
 - **SSM-only bootstrap.** Requires the instance profile and a working SSM agent.
 - **Default AMI is Ubuntu 22.04 (Canonical).** Override per-request with
   `--image` / `ImageID`.
-- The **Aliyun** provider follows the same shape but has not been hardened/tested
-  to the same degree as AWS.
+- The **Aliyun** provider follows the same shape and is likewise live-validated —
+  see [ALIYUN_PROVISIONING.md](ALIYUN_PROVISIONING.md).

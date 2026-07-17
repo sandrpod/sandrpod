@@ -29,7 +29,7 @@ Lazy provision-on-demand, identical lifecycle to the AWS path:
   Docker via TAT → start a Poder → the Poder registers → the sandbox is created.
 - Subsequent `tencent` sandboxes in the same region **reuse** that Poder. One
   VM/Poder hosts **many** sandboxes.
-- **No** autoscaling and **no** idle-VM reclamation.
+- **No** autoscaling. Idle reclamation is **off by default** — enable via `SANDRPOD_PODER_IDLE_TIMEOUT` / `SANDRPOD_SANDBOX_IDLE_TIMEOUT`.
 
 ### Flow
 
@@ -195,7 +195,7 @@ take a few minutes. Reuse the systemd unit + `service.d` drop-in pattern from
 - **Subnet plumbing is VPC-incomplete** — leave the subnet env unset (default
   VPC); setting a subnet without a VPC now fails fast with a clear error
   instead of an opaque API rejection.
-- **No autoscaling / no idle reclamation.** `Cleanup` deletes instances tagged
+- **No autoscaling.** Idle-VM reclamation is opt-in (`SANDRPOD_PODER_IDLE_TIMEOUT`; see [UPGRADING.md](UPGRADING.md)). `Cleanup` deletes instances tagged
   `sandrpod=true`.
 - **Default image is the newest public Ubuntu.** Override per-request with
   `--image img-xxxxxxxx`.

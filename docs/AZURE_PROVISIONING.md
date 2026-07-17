@@ -27,7 +27,7 @@ the AWS path:
   start a Poder → the Poder dials back and registers → the sandbox is created.
 - Subsequent `azure` sandboxes in the same region **reuse** that Poder. One
   VM/Poder hosts **many** sandboxes.
-- **No** continuous scale-out and **no** idle-VM reclamation.
+- **No** continuous scale-out. Idle reclamation is **off by default** — enable via `SANDRPOD_PODER_IDLE_TIMEOUT` / `SANDRPOD_SANDBOX_IDLE_TIMEOUT`.
 
 ### Flow
 
@@ -272,7 +272,7 @@ Environment=SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.4.0
 - **Not end-to-end validated on a live subscription.** The most likely things to
   need real-cloud verification: the Run Command StdOut/StdErr status codes, the
   default image URN's gen2 availability in your region, and power-state parsing.
-- **No autoscaling / no idle reclamation.** One VM per "region has no Poder".
+- **No autoscaling.** Idle-VM reclamation is opt-in (`SANDRPOD_PODER_IDLE_TIMEOUT`; see [UPGRADING.md](UPGRADING.md)). One VM per "region has no Poder".
   `Cleanup` deletes VMs tagged `sandrpod=true` (VM + its NIC + public IP).
 - **Subnet is required** (no default-VNet shortcut); `SANDRPOD_VM_SECURITY_GROUP`
   is ignored (subnet/NSG governs traffic).

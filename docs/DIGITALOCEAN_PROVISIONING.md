@@ -36,7 +36,7 @@ Lazy provision-on-demand, identical lifecycle to the AWS/GCP path:
   SSH key via cloud-init) → SSH in to install Docker → start a Poder → register
   → the sandbox is created.
 - Subsequent droplets in the same region **reuse** that Poder.
-- **No** autoscaling and **no** idle reclamation.
+- **No** autoscaling. Idle reclamation is **off by default** — enable via `SANDRPOD_PODER_IDLE_TIMEOUT` / `SANDRPOD_SANDBOX_IDLE_TIMEOUT`.
 
 ### Flow
 
@@ -57,10 +57,12 @@ POST /api/v1/sandboxes {provider_type: digitalocean}
 
 - `CreateVM` generates a one-time **ed25519** key; the public half is injected
   into the droplet's `root` `authorized_keys` via cloud-init user-data, the
-  private half is held **in-process** for `ExecuteCommand`. It never touches disk
-  and dies with the droplet.
-- Because the key lives only in memory, `ExecuteCommand` works within the same
-  server process that created the droplet — not across restarts.
+  private half is used by `ExecuteCommand`. By default it is held **in-process**
+  (never touches disk, dies with the droplet).
+- Set `SANDRPOD_SSH_KEY_DIR=/var/lib/sandrpod/ssh-keys` to persist per-VM keys
+  (PKCS#8 PEM, `0600`) so a server restart doesn't orphan existing droplets;
+  without it, `ExecuteCommand` only works within the process that created the
+  droplet.
 - Host-key verification uses `InsecureIgnoreHostKey` (first-boot ephemeral host).
 - A non-zero command exit surfaces via `ExitCode`.
 
@@ -127,6 +129,7 @@ All set on the **API Server** process.
 | `DIGITALOCEAN_TOKEN` (or `DO_TOKEN`) | **yes** | — | API token; enables the provider |
 | `DO_REGION` | no | `nyc3` | default region slug |
 | `SANDRPOD_VM_SUBNET_ID` (`_DIGITALOCEAN`) | no | — | VPC UUID (optional) |
+| `SANDRPOD_SSH_KEY_DIR` | recommended | — (in-memory) | persist per-VM SSH keys across server restarts |
 | `SANDRPOD_PODER_IMAGE` (`_DIGITALOCEAN`) | **yes (cloud)** | `ghcr.io/sandrpod/poder:latest` | Poder image the droplet runs |
 | `SANDRPOD_TOOLBOX_IMAGE` (`_DIGITALOCEAN`) | **yes (cloud)** | `ghcr.io/sandrpod/toolbox:latest` | toolbox image, forwarded to the Poder |
 
@@ -178,9 +181,10 @@ take a couple of minutes. Reuse the systemd pattern from
   code: cloud-init can stay "running" indefinitely (bounded wait), and the
   forced root-password expiry is cleared via cloud-init (PAM would otherwise
   kill pubkey command sessions with "Your password has expired").
-- **SSH executor, in-process key.** `ExecuteCommand` only works within the
-  process that created the droplet; reclaim orphans via the reaper / poder delete.
+- **SSH executor.** Keys are in-process by default — set `SANDRPOD_SSH_KEY_DIR`
+  to persist them across server restarts; reclaim orphans via the reaper /
+  poder delete.
 - **Public IP is mandatory** (SSH needs it) — DO assigns one by default.
-- **No autoscaling / no idle reclamation.** `Cleanup` deletes droplets tagged
+- **No autoscaling.** Idle-VM reclamation is opt-in (`SANDRPOD_PODER_IDLE_TIMEOUT`; see [UPGRADING.md](UPGRADING.md)). `Cleanup` deletes droplets tagged
   `sandrpod`.
 - **Default image is `ubuntu-22-04-x64`.** Override per-request with `--image`.

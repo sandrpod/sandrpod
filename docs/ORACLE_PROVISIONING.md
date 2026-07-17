@@ -30,7 +30,7 @@ Lazy provision-on-demand, identical lifecycle to the AWS path:
   public IP via VNIC → install Docker via the instance agent → start a Poder →
   register → the sandbox is created.
 - Subsequent instances **reuse** that Poder.
-- **No** autoscaling and **no** idle reclamation.
+- **No** autoscaling. Idle reclamation is **off by default** — enable via `SANDRPOD_PODER_IDLE_TIMEOUT` / `SANDRPOD_SANDBOX_IDLE_TIMEOUT`.
 
 ### Flow
 
@@ -208,7 +208,7 @@ keep the OCI key file root-readable (`chmod 600`).
   isn't plumbed.
 - **The OCI SDK is large** (one monolithic module); only the compute / agent /
   network packages are compiled in.
-- **No autoscaling / no idle reclamation.** `Cleanup` deletes instances with the
+- **No autoscaling.** Idle-VM reclamation is opt-in (`SANDRPOD_PODER_IDLE_TIMEOUT`; see [UPGRADING.md](UPGRADING.md)). `Cleanup` deletes instances with the
   freeform tag `sandrpod=true`.
 - **Default image is the newest Canonical Ubuntu 22.04.** Override per-request
   with `--image ocid1.image...`.

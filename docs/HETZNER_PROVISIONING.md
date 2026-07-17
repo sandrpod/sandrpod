@@ -33,7 +33,7 @@ Lazy provision-on-demand, identical lifecycle to the GCP path:
   via cloud-init) → SSH in to install Docker → start a Poder → register → the
   sandbox is created.
 - Subsequent servers in the same location **reuse** that Poder.
-- **No** autoscaling and **no** idle reclamation.
+- **No** autoscaling. Idle reclamation is **off by default** — enable via `SANDRPOD_PODER_IDLE_TIMEOUT` / `SANDRPOD_SANDBOX_IDLE_TIMEOUT`.
 
 ### Flow
 
@@ -51,8 +51,9 @@ POST /api/v1/sandboxes {provider_type: hetzner}
 ```
 
 SSH-executor specifics are the same as
-[DigitalOcean](DIGITALOCEAN_PROVISIONING.md): a per-VM ephemeral ed25519 key held
-in-process, injected into `root` `authorized_keys` via cloud-init,
+[DigitalOcean](DIGITALOCEAN_PROVISIONING.md): a per-VM ephemeral ed25519 key
+injected into `root` `authorized_keys` via cloud-init (held in-process by
+default; set `SANDRPOD_SSH_KEY_DIR` to persist across server restarts),
 `InsecureIgnoreHostKey`, real exit codes.
 
 ---
@@ -117,6 +118,7 @@ All set on the **API Server** process.
 |----------|----------|---------|---------|
 | `HCLOUD_TOKEN` | **yes** | — | API token; enables the provider |
 | `HCLOUD_LOCATION` | no | `fsn1` | default location |
+| `SANDRPOD_SSH_KEY_DIR` | recommended | — (in-memory) | persist per-VM SSH keys across server restarts |
 | `SANDRPOD_PODER_IMAGE` (`_HETZNER`) | **yes (cloud)** | `ghcr.io/sandrpod/poder:latest` | Poder image the server runs |
 | `SANDRPOD_TOOLBOX_IMAGE` (`_HETZNER`) | **yes (cloud)** | `ghcr.io/sandrpod/toolbox:latest` | toolbox image, forwarded to the Poder |
 
@@ -164,11 +166,12 @@ minute or two. Reuse the systemd pattern from
 
 - **Not validated on a live account.** Most likely to need verification: cloud-init
   root-key injection and SSH first-connect vs the 3-minute dial-retry.
-- **SSH executor, in-process key.** `ExecuteCommand` only works within the
-  process that created the server; reclaim orphans via the reaper / poder delete.
+- **SSH executor.** Keys are in-process by default — set `SANDRPOD_SSH_KEY_DIR`
+  to persist them across server restarts; reclaim orphans via the reaper /
+  poder delete.
 - **Public IPv4 is always attached** (SSH needs it).
 - **No subnet/security-group plumbing** — attach a Cloud Firewall out-of-band if
   you need to restrict traffic.
-- **No autoscaling / no idle reclamation.** `Cleanup` deletes servers labeled
+- **No autoscaling.** Idle-VM reclamation is opt-in (`SANDRPOD_PODER_IDLE_TIMEOUT`; see [UPGRADING.md](UPGRADING.md)). `Cleanup` deletes servers labeled
   `sandrpod=true`.
 - **Default image is `ubuntu-22.04`.** Override per-request with `--image`.

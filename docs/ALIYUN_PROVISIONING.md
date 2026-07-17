@@ -1,14 +1,14 @@
-# Alibaba Cloud (Aliyun) Auto-Provisioning — Plan & Guide
+# Alibaba Cloud (Aliyun) Auto-Provisioning Guide
 
 How to bring the **Aliyun** provider to the same working state as AWS: create an
 ECS instance on demand, bootstrap a Poder on it via Cloud Assist, and run
 sandboxes there.
 
-> **Status: NOT yet hardened or end-to-end validated.** The AWS path is fully
-> working and tested; the Aliyun provider (`pkg/provider/aliyun/aliyun.go`) is
-> real SDK code but carries the **same class of bugs the AWS provider had before
-> we fixed them**. This document is both the fix plan and the deployment guide.
-> See [AWS_PROVISIONING.md](AWS_PROVISIONING.md) for the working reference.
+> **Status: live-validated end-to-end** (`cn-beijing`): create → ECS launch →
+> Cloud Assist installs Docker → Poder registers over the cross-cloud tunnel →
+> sandbox RUNNING → code executes → poder delete terminates the ECS instance
+> with no leak. The provider carries the same hardening the AWS path received
+> (§2). See [AWS_PROVISIONING.md](AWS_PROVISIONING.md) for the shared mechanics.
 
 ---
 
@@ -28,13 +28,13 @@ Aliyun deployment config. The control-plane / scheduler / poder plumbing is done
 
 ---
 
-## 2. Provider fixes needed (`pkg/provider/aliyun/aliyun.go`)
+## 2. Hardening applied (`pkg/provider/aliyun/aliyun.go`)
 
-Apply the same fixes the AWS provider received. Mapping to the actual Aliyun
-methods:
+The provider received the same hardening as the AWS path. What shipped, mapped
+to the Aliyun methods:
 
-| Issue (fixed in AWS) | Aliyun location | Fix |
-|----------------------|-----------------|-----|
+| Issue class (first seen in AWS) | Aliyun method | Shipped behavior |
+|---------------------------------|---------------|------------------|
 | `CreateVM` returns no IP | `CreateVM` (~104): `CreateInstance` → `StartInstance` → caches a bare `VMInfo` | After the instance is **Running**, `DescribeInstances` and read `PublicIpAddress` / `InnerIpAddress`. Aliyun assigns the public IP **asynchronously** once `InternetMaxBandwidthOut > 0` and the instance starts, so it isn't known at create time. |
 | `GetVM` returns stale cache | `GetVM` (~203): reads `p.vms` first | Always `DescribeInstances`; refresh the cache. The cached snapshot is `Pending` forever otherwise → health never ready. |
 | `ExecuteCommand` false success on timeout, lost stderr, wrong exit code | `ExecuteCommand` (~254): `InvokeCommand` → poll `DescribeInvocationResults` | Honor the ctx deadline; on timeout return an **error** (not exit 0); read the real `ExitCode` and `ErrorInfo`/stderr; guard nil pointers. |
@@ -46,8 +46,9 @@ methods:
 > (and a security group). There is no "default VPC" fast path like EC2-Classic —
 > set `SANDRPOD_VM_SUBNET_ID` (→ `VSwitchId`) and `SANDRPOD_VM_SECURITY_GROUP`.
 
-Add pure-function unit tests mirroring `pkg/provider/aws/aws_test.go`
-(state mapping, instance→VMInfo mapping, image selection).
+Pure-function unit tests mirroring `pkg/provider/aws/aws_test.go` ship in
+`pkg/provider/aliyun/aliyun_test.go` (state mapping, instance→VMInfo mapping,
+image selection).
 
 ---
 
@@ -153,19 +154,17 @@ The unscoped `SANDRPOD_VM_SUBNET_ID` etc. still work as a shared default when no
 
 ---
 
-## 5. Implementation & validation plan
+## 5. End-to-end validation (how to reproduce)
 
-Mirrors how AWS was done, but much smaller (only the provider file changes):
+This is the flow the live validation ran; reuse it to verify your own
+deployment:
 
-1. **Fix `aliyun.go`** — the six items in §2; wire region/credentials in
-   `config.go` if missing.
-2. **Build & test** — `go build/vet/test`; add provider unit tests.
-3. **Publish images** — to ACR (recommended) or ensure GHCR is reachable; set
+1. **Publish images** — to ACR (recommended) or ensure GHCR is reachable; set
    the image envs.
-4. **Aliyun setup** — VPC + VSwitch + security group; verify the chosen image
+2. **Aliyun setup** — VPC + VSwitch + security group; verify the chosen image
    has Cloud Assist.
-5. **Deploy** — add the Aliyun envs to the server (systemd drop-in) and restart.
-6. **End-to-end test** — reuse the AWS validation flow verbatim, only changing
+3. **Deploy** — add the Aliyun envs to the server (systemd drop-in) and restart.
+4. **End-to-end test** — reuse the AWS validation flow verbatim, only changing
    `provider_type=aliyun` and the region:
    ```bash
    curl -X POST http://<server>/api/v1/sandboxes -H "Authorization: Bearer <token>" \
@@ -173,12 +172,9 @@ Mirrors how AWS was done, but much smaller (only the provider file changes):
    ```
    Expect: ECS launches → Cloud Assist installs Docker → Poder starts → registers
    (with `vm_id`) → sandbox RUNNING → code executes.
-7. **Verify reclamation** — delete the aliyun poder → ECS terminated
+5. **Verify reclamation** — delete the aliyun poder → ECS terminated
    (`vm_terminated:true`); confirm the reaper reclaims OFFLINE aliyun poders.
-   These already support `aliyun` in the shared code; they only need `DeleteVM`
-   to work (it does — `DeleteInstance`) and the Poder to report `vm_id` (shared,
-   already working).
-8. **Clean up** test resources.
+6. **Clean up** test resources.
 
 ---
 

@@ -3,8 +3,8 @@
 How SandrPod creates Google Compute Engine VMs on demand, bootstraps a Poder on
 each **over SSH**, and runs sandboxes there — and exactly what you must configure.
 
-> **Status: validated end-to-end on a live project** (project `your-project-id`,
-> zone `asia-east1-a`, `e2-medium`): create → SSH bootstrap → Docker install →
+> **Status: validated end-to-end on a live project** (zone `asia-east1-a`,
+> `e2-medium`): create → SSH bootstrap → Docker install →
 > Poder registers over the cross-cloud tunnel → sandbox RUNNING → code executes →
 > poder delete terminates the VM with no leak. Poder **reuse** was also confirmed
 > (2nd/3rd sandbox in the same zone reuses the VM, no new instance). The three
@@ -35,7 +35,7 @@ Lazy provision-on-demand, identical lifecycle to the AWS path:
   the sandbox is created.
 - Subsequent `gcp` sandboxes in the same zone **reuse** that Poder. One VM/Poder
   hosts **many** sandboxes.
-- **No** continuous scale-out and **no** idle-VM reclamation.
+- **No** continuous scale-out. Idle reclamation is **off by default** — enable via `SANDRPOD_PODER_IDLE_TIMEOUT` / `SANDRPOD_SANDBOX_IDLE_TIMEOUT`.
 
 ### Flow
 
@@ -303,7 +303,7 @@ Keep the SA JSON root-readable only (`chmod 600`), owned by the service user.
 
 ## Known limitations & caveats
 
-- **Validated end-to-end** (project `your-project-id`, `asia-east1-a`, `e2-medium`):
+- **Validated end-to-end** (`asia-east1-a`, `e2-medium`):
   create → SSH bootstrap → Poder registers → sandbox RUNNING → code runs → delete
   terminates the VM (no leak); poder reuse confirmed (2nd/3rd sandbox shares the
   VM). SSH first-connect timing, `ssh-keys` propagation, and `InsecureIgnoreHostKey`
@@ -315,7 +315,7 @@ Keep the SA JSON root-readable only (`chmod 600`), owned by the service user.
   reaper / poder delete rather than expecting further `ExecuteCommand` on them.
 - **Public IP + a firewall rule opening 22 are mandatory** — this is the biggest
   operational difference from the other clouds.
-- **No autoscaling / no idle reclamation.** `Cleanup` deletes VMs labeled
+- **No autoscaling.** Idle-VM reclamation is opt-in (`SANDRPOD_PODER_IDLE_TIMEOUT`; see [UPGRADING.md](UPGRADING.md)). `Cleanup` deletes VMs labeled
   `sandrpod=true` (the boot disk auto-deletes with the instance).
 - **Default image is Ubuntu 22.04 LTS** from `ubuntu-os-cloud`. Override
   per-request with `--image` (a source-image URL).
