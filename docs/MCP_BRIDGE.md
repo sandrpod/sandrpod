@@ -1,7 +1,8 @@
 # SandrPod MCP Transport Bridge — User Guide
 
-> **Status**: Beta (v0.1). Local-only deployments are stable; remote-via-tunnel
-> deployments need the API Server upgrade described in §SERVER.
+> **Status**: shipped. Works standalone on a LAN (`-mcp-only`), on a directly
+> registered agent, and remote-via-tunnel through the API Server
+> (`/api/v1/sandboxes/{name}/mcp`, see §SERVER).
 
 ## What it does
 
@@ -123,6 +124,20 @@ Standard Claude Desktop layout, with optional sandrpod extensions:
 Other tools (Claude Desktop, Cursor) ignore the `sandrpod` sub-object, so the
 same file works everywhere.
 
+### Top-level entry fields (HTTP transport)
+
+Besides stdio (`command`/`args`/`env`), an entry can point at a **remote HTTP
+MCP server** directly — the field shape mirrors Claude Code's remote-server
+config:
+
+| Field | Meaning |
+|---|---|
+| `url` | Remote MCP endpoint; setting it makes the entry HTTP instead of stdio. |
+| `type` | `streamable-http` (default) \| `http` \| `sse`. |
+| `headers` | Static request headers; values support `${ENV}` expansion. |
+| `auth` | `""` (default: static headers only) \| `"oauth"` — opt into the browser OAuth flow. |
+| `oauth` | Optional `{client_id, client_secret, scopes}` for servers without dynamic client registration. |
+
 ## Connecting OAuth-only services (Notion, Linear, Sentry, …)
 
 A growing class of services expose only a **remote, OAuth-authenticated**
@@ -130,12 +145,17 @@ MCP server and deliberately do **not** offer a static API token. Notion's
 hosted server (`https://mcp.notion.com/mcp`) is the canonical example: it
 requires per-user OAuth 2.1 (PKCE) and explicitly rejects bearer tokens.
 
-The bridge only forks **stdio** children — it does not connect to remote
-HTTP MCP servers directly, and by design **sandrpod never stores OAuth
-tokens** (they are personal credentials; keeping them would make us
-responsible for refresh, encryption, and GDPR deletion). Both constraints
-are satisfied by the community [`mcp-remote`](https://github.com/geelen/mcp-remote)
-stdio bridge, which Notion's own docs recommend:
+**Native OAuth (recommended on agent hosts):** give the entry a `url` and
+`"auth": "oauth"`. The bridge runs the browser-consent flow once (the child
+parks in `waiting_auth` with an authorization URL), persists the token under
+`~/.sandrpod/oauth/` (`0600`), and refreshes it unattended. Controlled by the
+agent flags `-mcp-oauth` / `-mcp-oauth-callback` / `-mcp-oauth-token-dir`.
+Full details in [MCP_AUTH.md](MCP_AUTH.md).
+
+**Inside containers** (toolbox sandboxes) the loopback OAuth callback is not
+reachable, so the browser flow can't complete there. Use the community
+[`mcp-remote`](https://github.com/geelen/mcp-remote) stdio bridge instead,
+which Notion's own docs recommend:
 
 ```jsonc
 {
@@ -301,6 +321,11 @@ client = MultiServerMCPClient({
 | **Both tokens** (recommended for production) | Multi-tenant or shared API Server | Server: `-token …`; agent: `--mcp-token …`; client sends both headers |
 | **API token only** | Single-tenant API Server, no shared infra | Server: `-token …`; agent omits `--mcp-token`; client sends only `X-Sandrpod-Token` |
 | **No auth** | Loopback `--mcp-only`, dev box | Omit both flags |
+
+`GET /mcp/manifest` is exempt from the MCP token by default (it is read-only
+metadata — server names and tool counts, no credentials — and stays reachable
+with platform auth alone). Pass `-mcp-guard-manifest` to require the MCP token
+there too.
 
 ### Legacy `Authorization: Bearer <cfg.Token>` clients
 

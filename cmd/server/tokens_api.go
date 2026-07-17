@@ -26,7 +26,7 @@ func writeTokenJSON(w http.ResponseWriter, status int, v any) {
 func handleTokens(cfg serverConfig, tokens podpkg.APITokenRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if tokens == nil {
-			http.Error(w, "token store not configured (start the server with -db sqlite:...)", http.StatusNotImplemented)
+			http.Error(w, "token store not configured (start the server with a persistent -db backend: sqlite:... or postgres://...)", http.StatusNotImplemented)
 			return
 		}
 		switch r.Method {
@@ -104,7 +104,7 @@ func handleTokens(cfg serverConfig, tokens podpkg.APITokenRepository) http.Handl
 func handleTokenDelete(cfg serverConfig, tokens podpkg.APITokenRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if tokens == nil {
-			http.Error(w, "token store not configured (start the server with -db sqlite:...)", http.StatusNotImplemented)
+			http.Error(w, "token store not configured (start the server with a persistent -db backend: sqlite:... or postgres://...)", http.StatusNotImplemented)
 			return
 		}
 		if r.Method != http.MethodDelete {

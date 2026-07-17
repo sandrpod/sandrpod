@@ -1,15 +1,13 @@
-# E2B Wire-Protocol Compatibility — Implementation Blueprint
+# E2B Wire-Protocol Compatibility
 
-Goal: make the **unmodified** official E2B SDKs (`e2b`, `@e2b/code-interpreter`,
+The **unmodified** official E2B SDKs (`e2b`, `@e2b/code-interpreter`,
 `e2b-code-interpreter`) work against a SandrPod deployment by pointing them at
-our domain — no code changes for the user, only `E2B_DOMAIN` + an API key. This
-is the "true drop-in" level (what Tencent AGSX / PPIO advertise as
-"E2B-interface compatible").
+your domain — no code changes, only `E2B_DOMAIN` + an API key ("true drop-in").
 
-Status: **blueprint** — reverse-engineered from E2B's Apache-2.0 sources
-(`e2b-dev/E2B`, `e2b-dev/infra`) on 2026-07-03. Endpoint- and proto-level detail
-marked _(verify during impl)_ must be pulled from the specs before coding each
-phase.
+Status: **shipped and verified against the real, unmodified E2B SDKs**
+(`e2b` v2.30.0 + `e2b-code-interpreter`, real Docker toolbox container) — see
+the compatibility matrix in §4. The wire contract was reverse-engineered from
+E2B's Apache-2.0 sources (`e2b-dev/E2B`, `e2b-dev/infra`).
 
 ---
 
@@ -55,100 +53,61 @@ E2B_DOMAIN (default e2b.app)
 
 ---
 
-## 2. Mapping to SandrPod
+## 2. Enabling it on your deployment
 
-| E2B plane | SandrPod component | Fit today | Work needed |
-|---|---|---|---|
-| Control plane `api.<domain>` | **API server** (`cmd/server`) | partial — we have create/list/get/delete/timeout | Add an **E2B-shaped REST surface** (`/sandboxes` with E2B's exact request/response schemas), `X-API-KEY` auth, `e2b_<hex>` key issuance, pause/resume, template & snapshot endpoints (map to our snapshot), env vars, metadata |
-| Domain routing to a sandbox | **tunnel + toolbox** | we already proxy `/sandboxes/{name}/toolbox/*` and `/proxy/{port}` | Add **hostname-based routing** (`<port>-<sandboxID>.<domain>`) that resolves to the same tunnel→toolbox path; needs a wildcard-DNS + host header router in the server |
-| envd filesystem | toolbox `/files/*` | good coverage | Wrap in **envd's connect-rpc service shape** (Filesystem service: stat/list/read/write/watch) |
-| envd process/commands | toolbox `/process`, `/execute` | good coverage | Wrap in envd's **Process service** (start/stream/sendInput/sendSignal) |
-| envd PTY | toolbox `/pty/*` | good coverage | Map to envd PTY RPCs |
-| code interpreter `run_code` | toolbox `/execute` is **one-shot, stateless** | ❌ gap | Add a **persistent Jupyter kernel** in the toolbox image + the code-interpreter HTTP contract (execution id, streamed logs, rich `results`) |
-| templates | our `image_id` | conceptual match | Map E2B `templateID` ↔ our image/tag; expose the minimal template endpoints the SDK calls on create |
+**Production (host-routed, what the SDK expects by default):**
+
+1. **Wildcard DNS + TLS** for `*.<your-domain>` pointing at the server (or a
+   TLS-terminating proxy in front of it). A full walkthrough — including a
+   Caddy config with wildcard certificates — is in
+   [MULTI_INSTANCE_DEPLOYMENT.md](MULTI_INSTANCE_DEPLOYMENT.md) Part 4; it
+   works the same on a single instance.
+2. Set `SANDRPOD_E2B_DOMAIN=<your-domain>` on the server. This activates the
+   host router: `api.<domain>` → control plane,
+   `<port>-<sandboxID>.<domain>` → envd (tunnel → toolbox).
+3. Issue an `e2b_<hex>`-shaped key: `sandrpod-cli token create <name>` (see
+   [AUTH_AND_KEYS.md](AUTH_AND_KEYS.md)). Point the SDK at your deployment:
+
+   ```bash
+   export E2B_DOMAIN=<your-domain>
+   export E2B_API_KEY=e2b_…
+   ```
+
+**Local debugging (no DNS/TLS needed):** set `SANDRPOD_E2B_DEBUG_PORT=3333` —
+a plain-HTTP listener serving the gateway in path mode. SDK env:
+`E2B_API_URL` + `E2B_SANDBOX_URL` = `http://<host>:3333`,
+`E2B_VALIDATE_API_KEY=false` (or use an `e2b_`-shaped key). For
+`e2b-code-interpreter` use `E2B_DEBUG=true` — the debug listener also binds
+`:49983`/`:49999` because the SDK hardcodes those under debug.
+
+---
+
+## 3. How it maps to SandrPod
+
+| E2B plane | SandrPod implementation |
+|---|---|
+| Control plane `api.<domain>` | E2B-shaped REST surface (`pkg/e2bcompat` + `cmd/server/e2bgateway.go`): create/list/get/kill, set-timeout, pause/resume, metrics, metadata; `X-API-KEY` auth with `e2b_<hex>` keys mapped to the named-token/owner model (ownership + quotas still apply) |
+| Domain routing | Host-header router: `<port>-<sandboxID>.<domain>` → tunnel → toolbox; non-envd ports go through the generic port proxy (e.g. the in-sandbox MCP gateway on `:50005`, see [E2B_MCP_COMPAT.md](E2B_MCP_COMPAT.md)) |
+| envd filesystem / process / PTY | connect-rpc **Filesystem** + **Process** services (PTY rides Process) backed by the toolbox `/files/*`, `/process`, `/pty/*` |
+| code interpreter `run_code` | Stateful kernel in the toolbox (one resident interpreter per context; variables persist) + the code-interpreter HTTP contract; matplotlib charts are captured as PNG into `Execution.results` |
+| templates | E2B `templateID` ↔ SandrPod `image_id` |
 
 Key architectural point: SandrPod's **tunnel already gives us exactly the
 control-plane-proxies-to-in-sandbox-daemon topology** E2B has. envd ≈ our
-toolbox. So the work is **protocol adaptation**, not new architecture.
+toolbox. So the work was **protocol adaptation**, not new architecture. In
+multi-instance deployments the E2B surface is fully cross-node: a request
+landing on any instance is forwarded to the node holding the sandbox's tunnel
+(see [MULTI_INSTANCE_DEPLOYMENT.md](MULTI_INSTANCE_DEPLOYMENT.md)).
 
 ---
 
-## 3. The hard parts (rank-ordered by risk)
-
-1. **envd connect-rpc protocol** — the highest-uncertainty piece. Must
-   reproduce E2B's protobuf services (Filesystem, Process, and the PTY/exec
-   surface) over connect-rpc so the SDK's generated client speaks to us. Pull
-   `spec/envd/*.proto` and generate matching Go handlers; back them with the
-   existing toolbox operations. Test with the real SDK's `files`/`commands`.
-2. **Sandbox domain routing** — the SDK reaches envd at
-   `<port>-<sandboxID>.<domain>`. Needs wildcard DNS (`*.<domain>`) + TLS and a
-   host-header router in the server that maps `<sandboxID>` → tunnel/toolbox.
-   Without this, only the control plane works and in-sandbox ops break.
-3. **Code-interpreter Jupyter semantics** — persistent kernel + rich results
-   (charts). New toolbox capability (bundle jupyter, proxy exec to the kernel,
-   surface `results`/`logs`/`text`). Needed for `@e2b/code-interpreter`, the
-   most-used SDK.
-4. **API-key shape + auth** — issue `e2b_<hex>` keys; accept `X-API-KEY`; map to
-   our named-token/owner model so quotas/ownership still apply.
-5. **Template/snapshot mapping** — reconcile E2B's template/snapshot IDs with
-   our `image_id` + docker-commit snapshots.
-
----
-
-## 4. Phased plan (each phase independently shippable + testable vs the real SDK)
-
-**Phase 0 — pin the contract.** Vendor E2B's `spec/openapi.yml` and
-`spec/envd/*.proto` into `docs/e2b-spec/`; generate Go types. Stand up a
-conformance harness that runs the real `e2b` / `e2b-code-interpreter` SDK
-against a local SandrPod with `E2B_DOMAIN` overridden. Every later phase is
-"make more of that harness pass."
-
-**Phase 1 — control plane.** Implement the E2B-shaped `/sandboxes` REST surface
-on the server (create/list/get/kill/set-timeout, then pause/resume) with
-`X-API-KEY` auth and `e2b_<hex>` keys, mapping onto our existing sandbox store +
-scheduler. Milestone: `Sandbox.create()`, `.getInfo()`, `.setTimeout()`,
-`.kill()`, `Sandbox.list()` pass against SandrPod.
-
-**Phase 2 — domain routing + envd filesystem/process.** Add wildcard host
-routing (`<port>-<sandboxID>.<domain>`) → tunnel→toolbox, and implement envd's
-connect-rpc Filesystem + Process services backed by the toolbox. Milestone:
-`sbx.files.*` and `sbx.commands.run()` pass.
-
-**Phase 3 — code interpreter.** Add the Jupyter kernel to the toolbox image and
-the code-interpreter HTTP contract. Milestone: `sbx.run_code("x=1")` then
-`run_code("x+=1; x")` returns `2` with streamed logs + rich results.
-
-**Phase 4 — long tail.** PTY, env vars, metadata, network egress rules,
-templates/snapshots parity, MCP config — as demand dictates.
-
----
-
-## 5. Compatibility test strategy
-
-The definition of done is **the real E2B SDK passing**, not our reimplementation
-of it. Phase 0's harness pins `pip install e2b-code-interpreter` /
-`npm i @e2b/code-interpreter` at fixed versions, sets `E2B_DOMAIN` +
-`E2B_API_KEY` at a local SandrPod, and asserts the quickstart + lifecycle +
-files + commands + run_code flows. Track a compatibility matrix (SDK method →
-pass/fail/NA) in this doc as phases land.
-
----
-
-## 6. Non-goals (for now)
-
-- Teams/billing/dashboard endpoints beyond what `create` transitively needs.
-- Exact parity of E2B's network-transform rules and MCP-server bundling.
-- Byte-for-byte error message parity (status codes + error shape suffice).
-
----
-
-## 7. Implementation status (as of 2026-07-03)
+## 4. Verified compatibility
 
 Built in `pkg/e2bcompat` (gateway + wire types) and `cmd/server/e2bgateway.go`
 (backends over scheduler/store/toolbox), enabled by `SANDRPOD_E2B_DOMAIN`.
 
-Legend: ☑ built + unit-tested to the spec · ◐ built, needs live/real-SDK
-verification · ☐ not yet.
+Legend: ☑ verified against the real unmodified SDK · ◐ built + unit-tested,
+not yet exercised by the real SDK.
 
 | Surface | SDK call | Status | Notes |
 |---|---|---|---|
@@ -165,6 +124,8 @@ verification · ☐ not yet.
 | code interpreter | `runCode` + contexts | ☑ | **stateful** kernel + create/list/restart/remove contexts; **matplotlib charts** captured as PNG → `Execution.results[].png`; verified live |
 | metadata | create/list `metadata` | ☑ | stored in labels, filterable |
 | env vars | `envVars` | ◐ | accepted on create; per-process injection via the process table's `envs` |
+| MCP gateway | in-sandbox `mcp-gateway` on `:50005` | ☑ | E2B-style shim over the native bridge; reached via the generic port proxy; verified live over a real TLS vanity domain |
+| cross-node routing | any SDK call on a multi-instance cluster | ☑ | requests are forwarded to the node holding the sandbox's tunnel; verified live with a real cloud poder |
 
 ### Verified against the REAL unmodified E2B SDK over HTTP + a real container (2026-07-03)
 
@@ -218,28 +179,29 @@ container over HTTP:
   (real `/proc` cpu/mem + statfs disk), and `pause`/`resume` (poder docker
   pause; `Sandbox.connect` auto-resumes and runs commands after).
 
-Still out of scope: multi-sandbox code-interpreter under `E2B_DEBUG` (that mode
-is single-sandbox by design — production uses host-based routing); a production
-vanity-domain drop-in still needs wildcard DNS + TLS. The hand-rolled
-binary-protobuf connect path exists (and now covers the Process/watch messages)
-but this SDK negotiated `connect+json`. E2B `pause` is a VM snapshot; SandrPod
-freezes in place — the sandbox ID stays valid for resume, which is what the SDK
-observes.
+The production **host-routed path was also verified over a real wildcard TLS
+domain**: with only `E2B_DOMAIN` set, the real SDK created a sandbox on a cloud
+VM and ran the full ops suite through `api.<domain>` /
+`<port>-<id>.<domain>` (deployment recipe in
+[MULTI_INSTANCE_DEPLOYMENT.md](MULTI_INSTANCE_DEPLOYMENT.md) Part 4).
 
-### What "◐ needs live verification" means honestly
+---
 
-Three things stand between the current build and an **unmodified E2B SDK passing
-end-to-end**, none of which can be exercised without a running deployment:
+## 5. Remaining edges & non-goals
 
-1. **Wildcard DNS + TLS** for `*.<domain>` so the SDK can reach
-   `<port>-<sandboxID>.<domain>`. Deployment infra, not code.
-2. **Binary-protobuf connect path.** The handlers speak connect **JSON**
-   (valid per the connect spec and unit-tested). E2B's JS/Python clients may
-   default to binary protobuf; if so, a buf-generated binary path must be added
-   alongside the JSON one.
-3. **A real toolbox + jupyter image** to confirm the envd↔toolbox field
-   mapping and rich code-interpreter results.
+Known edges (by design or awaiting demand):
 
-The conformance harness in §5 (run the real `e2b`/`e2b-code-interpreter` SDK
-against a local SandrPod) is the gate that turns every ◐ into ☑. Until then the
-wire contract is verified against the spec with unit tests, not against the SDK.
+- **`envVars`** is accepted on create and injected per-process via the process
+  table; it hasn't been exercised by the real SDK yet (the one remaining ◐).
+- **Binary-protobuf connect path** exists (covers the Filesystem/Process/watch
+  messages) but current E2B SDKs negotiate `connect+json`, so the binary path
+  sees no real-SDK traffic.
+- **Multi-sandbox code-interpreter under `E2B_DEBUG`** — that debug mode is
+  single-sandbox by design; production uses host-based routing.
+- **`pause` semantics**: E2B pauses via VM snapshot; SandrPod freezes the
+  container in place (`docker pause`). The sandbox ID stays valid for resume,
+  which is what the SDK observes.
+
+Non-goals: teams/billing/dashboard endpoints beyond what `create` transitively
+needs; exact parity of E2B's network-transform rules; byte-for-byte error
+message parity (status codes + error shape suffice).

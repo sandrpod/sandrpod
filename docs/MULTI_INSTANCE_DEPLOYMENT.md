@@ -357,9 +357,6 @@ backstop.
 
 ### Known limits (inherited from SCALING.md)
 
-- **Token revocation is eventual (≤30 s)** across nodes — the issuing node drops
-  it immediately, peers converge on the next index re-sync. A Postgres
-  `LISTEN/NOTIFY` channel would make it instant.
 - **Heartbeat write volume** — each poder's ~10 s heartbeat is a DB write; a very
   large fleet benefits from batching these.
 - **Reapers are single-node by recommendation**, not by lock — if you set the
@@ -378,4 +375,3 @@ backstop.
 - [ ] (E2B) wildcard cert at the LB; `E2B_DOMAIN` set on every node
 - [ ] `LimitNOFILE` raised well above the expected per-node tunnel count
 - [ ] Cross-node smoke test (Part 6) passes
-```

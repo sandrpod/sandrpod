@@ -63,7 +63,8 @@ sandrpod-server -token <admin> -tokens-file /etc/sandrpod/tokens.json ...
 ### 3. DB-backed issuance API — `/api/v1/tokens` (dynamic, persisted) — recommended
 
 Admin endpoints that mint / list / revoke tokens persisted in the store
-(requires `-db sqlite:<path>`). Issued keys use E2B's canonical `e2b_<hex>`
+(requires a persistent `-db` backend — `sqlite:<path>` or `postgres://…`).
+Issued keys use E2B's canonical `e2b_<hex>`
 shape, so they double as a drop-in `E2B_API_KEY`. **Only the SHA-256 hash is
 stored** — the raw key is returned once at creation and is never retrievable.
 
@@ -94,8 +95,10 @@ sandrpod-cli token rm e2b_1a2b3c4d5e6f             # revoke by prefix
 - Self-serve issuance + revocation over the API; survives restart (loaded into
   the in-memory auth index at startup, so the hot path never hits the DB).
 - Hash-only storage: a leaked database yields no usable keys.
-- Best for multi-client / programmatic key management. Needs the SQLite backend
-  (with the in-memory store, issued keys are ephemeral and lost on restart).
+- Best for multi-client / programmatic key management. Needs a persistent
+  backend — SQLite or PostgreSQL (with the in-memory store, issued keys are
+  ephemeral and lost on restart). On PostgreSQL, revocation propagates to all
+  instances instantly via `LISTEN/NOTIFY`.
 
 ### Auth disabled (no credentials) — dev only
 
@@ -154,8 +157,9 @@ They compose freely: e.g. an admin `-token` for operations **plus** DB-issued
 - **Comparison**: `-token` and tokens-file use constant-time comparison; DB keys
   are looked up by hash (preimage resistance means the map lookup leaks nothing
   usable).
-- **Transport**: always terminate TLS in front of the API in production (see the
-  Caddy/`SANDRPOD_E2B_DOMAIN` setup in [E2B_COMPAT.md](E2B_COMPAT.md)); tokens are
-  bearer credentials.
+- **Transport**: always terminate TLS in front of the API in production (built-in
+  `-tls-cert`/`-tls-key`, or the Caddy wildcard-TLS walkthrough in
+  [MULTI_INSTANCE_DEPLOYMENT.md](MULTI_INSTANCE_DEPLOYMENT.md) Part 4, referenced
+  from [E2B_COMPAT.md](E2B_COMPAT.md) §2); tokens are bearer credentials.
 - **Blast radius**: give customers `user` keys, keep `admin` for operators. Use
   `-rate-limit` and `-max-sandboxes-per-owner` to bound abuse.

@@ -5,7 +5,7 @@ infrastructure — fast, secure sandboxes provisioned on demand across eight
 clouds, consumed by AI agents (LangChain deepagents) through a Python SDK and
 CLI. Reference points for feature parity: E2B, Modal, Daytona.
 
-_Last updated: 2026-07-03. Status legend: ☐ open · ◐ partial · ☑ done._
+_Last updated: 2026-07-17. Status legend: ☐ open · ◐ partial · ☑ done._
 
 ---
 
@@ -24,6 +24,10 @@ _Last updated: 2026-07-03. Status legend: ☐ open · ◐ partial · ☑ done._
 - **Sandbox feature base** — lifecycle (create/start/stop/delete), code
   execution (python/node/bash) with real exit codes, SSE streaming, stateful
   sessions, a full file API, logs; CLI + Python SDK cover all of it.
+- **E2B wire-protocol compatibility** — the unmodified official E2B SDKs work
+  against a SandrPod deployment (control plane, envd files/process/PTY,
+  stateful code interpreter with chart capture, pause/resume, metrics), all
+  verified against the real SDK; see E2B_COMPAT.md.
 - **Employee-PC mode** — sandrpod-agent permission gate + audit pipeline +
   tray companion (separate product surface; see its own backlog note in P2).
 - **Engineering hygiene** — CI, unit tests on provider mapping/pure logic,
@@ -74,8 +78,9 @@ longer aborts it), but the right shape is:
 
 ### 4. Transport security ◐
 - ☑ First-class built-in TLS (`-tls-cert`/`-tls-key`); the SDKs/console speak
-  `wss://` automatically. ☐ Still open: HTTPS-only guidance rolled into every
-  provisioning doc.
+  `wss://` automatically. ☑ HTTPS guidance lives in the provisioning docs'
+  systemd sections and the wildcard-TLS walkthrough in
+  MULTI_INSTANCE_DEPLOYMENT.md Part 4.
 
 ### 5. Quotas & rate limiting ☑
 Nothing stops a loop from provisioning unbounded VMs.
@@ -95,7 +100,8 @@ inside the sandbox), reachable end-to-end at
 `/api/v1/sandboxes/{name}/toolbox/proxy/{port}/...` and via `sandrpod-cli
 preview`. Live-validated end-to-end (server → tunnel → embedded toolbox →
 in-sandbox web service: 200 with body, subpaths, and 502 for a dead port).
-☐ Nice-to-have later: vanity `https://<sandbox>.<domain>` hostnames.
+☑ Vanity `https://<port>-<sandbox>.<domain>` hostnames ship with the E2B
+gateway's host router (`SANDRPOD_E2B_DOMAIN`, see E2B_COMPAT.md).
 
 ### 7. Interactive shell (PTY) ☑
 The server proxies `/sandboxes/{name}/pty` end-to-end over the tunnel and

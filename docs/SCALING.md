@@ -49,8 +49,9 @@ systemd units, the load-balancer config, TLS, and a cross-node smoke test) see
    expires a crashed node's rows so routing recovers as its poders reconnect.
    **Set a unique `-node-url` on every instance.**
 3. **Token coherence** — issued keys live in the shared store; an instance
-   validates a peer-issued key via a hash lookup (then caches it), and a periodic
-   index re-sync converges revocations (≤30 s).
+   validates a peer-issued key via a hash lookup (then caches it). Revocation
+   propagates instantly via Postgres `LISTEN/NOTIFY`, with a periodic index
+   re-sync (≤30 s) as backstop.
 4. **Load balancer** — must allow long-lived WebSocket connections (poders dial
    in and stay) and spread them across instances; that spread *is* the connection
    sharding below.
