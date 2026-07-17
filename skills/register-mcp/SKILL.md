@@ -69,6 +69,7 @@ fields are ignored.
       "url": "https://host/mcp",        // remote endpoint (omit command when set)
       "type": "streamable-http",        // "streamable-http"(default) | "http" | "sse"
       "headers": { "Authorization": "Bearer ${TOKEN}" }, // optional; ${ENV} expanded
+      "auth": "oauth",                  // optional: browser OAuth flow (agent hosts only, see below)
       "sandrpod": {                     // optional: bridge-specific knobs (all optional)
         "enabled": true,                // default true. false = kept in file but not spawned
         "alias": "myalias",             // default = <server-name>. tool namespace prefix
@@ -94,6 +95,7 @@ fields are ignored.
 | `url` | one of command/url | — | remote MCP endpoint (HTTP) |
 | `type` | no | `streamable-http` | HTTP transport: `streamable-http` / `http` / `sse` |
 | `headers` | no | `{}` | HTTP request headers; values support `${ENV}` expansion |
+| `auth` | no | `""` | `"oauth"` opts an HTTP entry into the browser OAuth flow — works on `sandrpod-agent` hosts; **not** inside containers (see the OAuth section) |
 | `sandrpod.enabled` | no | `true` | `false` registers without spawning |
 | `sandrpod.alias` | no | server-name | namespace prefix; tools appear as `<alias>__<tool>` |
 | `sandrpod.tool_allowlist` | no | (none) | expose only these tool names |
@@ -127,12 +129,19 @@ Streamable-HTTP (default) or SSE — no subprocess, no `mcp-remote`:
 Header (and URL) `${VAR}` / `$VAR` placeholders are expanded from the server's
 `env` map first, then the process environment — so secrets stay out of the file.
 
-### OAuth-protected HTTP servers → use `mcp-remote`
+### OAuth-protected HTTP servers
 
-Native `url` config does **not** perform the interactive OAuth browser flow.
-For servers that require OAuth (e.g. hosted Notion), bridge them with the stdio
-[`mcp-remote`](https://github.com/geelen/mcp-remote) shim, which handles the
-login and token cache:
+Two recipes, depending on where the bridge runs:
+
+- **On a `sandrpod-agent` host** (a real machine with a browser): use native
+  OAuth — give the entry a `url` plus `"auth": "oauth"`. The bridge runs the
+  browser-consent flow once (the entry parks in `waiting_auth` with an
+  authorization URL), persists the token under `~/.sandrpod/oauth/`, and
+  refreshes it unattended. See `docs/MCP_AUTH.md`.
+- **Inside a toolbox container**: the loopback OAuth callback is unreachable
+  there, so `auth:"oauth"` entries park in `waiting_auth` forever. Bridge with
+  the stdio [`mcp-remote`](https://github.com/geelen/mcp-remote) shim instead,
+  which handles the login and token cache:
 
 ```jsonc
 "notion": {
@@ -150,7 +159,8 @@ The schema is aligned with Claude's MCP config on both shapes:
   Claude, and vice-versa).
 - **HTTP** (`url`/`type`/`headers`) — matches Claude Code's remote-server shape.
   Caveat: `type` accepts `streamable-http` (default), `http`, or `sse`; OAuth is
-  not auto-negotiated here (use the `mcp-remote` recipe above).
+  opt-in via `"auth": "oauth"` (agent hosts) or the `mcp-remote` recipe above
+  (containers), not auto-negotiated.
 - Top-level keys other than `mcpServers` (e.g. `imports`) are ignored.
 
 ## 3. Register a server (safe read-modify-write)

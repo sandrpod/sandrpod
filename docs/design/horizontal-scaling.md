@@ -1,6 +1,14 @@
 # SandrPod Horizontal Scaling Design
 
-> **Note:** This document is written in Chinese. It is an internal design note describing a future path from single-node SQLite to multi-instance + PostgreSQL, with zero-downtime migration and no breaking changes to the existing API or Poder tunnel protocol.
+> **Note:** Historical design draft (2026-05, Chinese). Multi-instance scaling
+> **has since shipped**, and the final design diverged from this draft: the
+> shipped mechanism uses `least_conn` load balancing + a `tunnel_owners` table
+> with inter-node request forwarding (not sticky sessions), `pkg/store/sqldb`
+> (one dialect-parameterised backend for SQLite *and* PostgreSQL, not a separate
+> `pkg/store/postgres/`), and Postgres `LISTEN/NOTIFY` (no Redis). **Do not
+> deploy from this document** — the current guide is
+> [`../MULTI_INSTANCE_DEPLOYMENT.md`](../MULTI_INSTANCE_DEPLOYMENT.md), the
+> capacity model [`../SCALING.md`](../SCALING.md).
 
 ---
 

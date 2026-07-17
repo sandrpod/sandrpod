@@ -1,4 +1,4 @@
-# Copyright 2024 SandrPod
+# Copyright 2026 SandrPod Contributors
 # 本地开发部署 - 从源码构建所有镜像
 
 services:
@@ -48,4 +48,5 @@ services:
 networks:
   sandrpod:
     name: sandrpod
+    # Pre-create once on a fresh machine: docker network create sandrpod
     external: true

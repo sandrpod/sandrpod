@@ -56,6 +56,14 @@ per-VM ephemeral keys):
 |---|---|
 | [PERMISSION_AND_AUDIT.md](PERMISSION_AND_AUDIT.md) **(中文)** | The consent gate (work_dir → hardlock → permanent → session → ask), native dialogs, `sandrpod-tray`, and the decision-audit upload pipeline |
 
+## Agent skills
+
+The repo ships two agent skills under [`skills/`](../skills/) (Claude-skill
+format, usable by any agent framework that reads SKILL.md files):
+[`sandrpod-cli`](../skills/sandrpod-cli/SKILL.md) — the full CLI surface as a
+cheat sheet; [`register-mcp`](../skills/register-mcp/SKILL.md) — how an agent
+running inside a sandbox safely self-registers MCP servers in `mcp.json`.
+
 ## design/ — historical archive
 
 Early design notes kept for archaeology; each carries a header pointing to

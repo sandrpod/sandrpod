@@ -47,6 +47,7 @@ publish() {
     --push .
 }
 
+publish server  docker/Dockerfile.server  "$PLATFORMS"
 publish poder   docker/Dockerfile.poder   "$PLATFORMS"
 publish toolbox docker/Dockerfile.toolbox "$PLATFORMS"
 
@@ -55,5 +56,5 @@ if [ "$PUSH_CENTOS" = "1" ]; then
   publish toolbox-centos docker/Dockerfile.toolbox.centos "linux/amd64"
 fi
 
-echo "✓ published to ${REGISTRY}/${OWNER}: poder, toolbox$([ "$PUSH_CENTOS" = "1" ] && echo ", toolbox-centos") @ ${TAG}"
+echo "✓ published to ${REGISTRY}/${OWNER}: server, poder, toolbox$([ "$PUSH_CENTOS" = "1" ] && echo ", toolbox-centos") @ ${TAG}"
 echo "  Remember: make the packages public (or configure pull auth) so VMs can pull them."

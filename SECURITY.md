@@ -68,7 +68,7 @@ Access to the Docker socket is equivalent to root on the host. A compromised Pod
 
 **Mitigations:**
 - Poder is a trusted internal component — it communicates only with the SandrPod API server via an authenticated WebSocket tunnel.
-- The API server requires a Bearer token (`SANDRPOD_TOKEN`) for all Poder registration and heartbeat calls.
+- When a token is configured (`SANDRPOD_TOKEN` — strongly recommended; without one, auth is disabled and every request runs as an anonymous admin), the API server requires it for all Poder registration and heartbeat calls.
 - This is a standard trade-off shared by tools such as Portainer, Watchtower, and other Docker management services.
 
 ---

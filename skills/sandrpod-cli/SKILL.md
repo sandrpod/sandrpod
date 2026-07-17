@@ -25,7 +25,7 @@ sandrpod-cli --api-url http://localhost:8080 list   # or per-command flag
 sandrpod-cli list
 sandrpod-cli get <name>                     # details
 sandrpod-cli env <name>                     # runtime env (arch/OS/shell)
-sandrpod-cli create <name> --provider local --image sandrpod/toolbox:latest
+sandrpod-cli create <name> --provider local --image ghcr.io/sandrpod/toolbox:latest
 sandrpod-cli create <name> --provider gcp --region asia-east1-a --instance-type e2-medium
 sandrpod-cli create <name> --ttl 3600 --cpu 2 --memory 2048
 sandrpod-cli create <name> --no-wait        # async: returns a job id

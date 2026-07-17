@@ -1,6 +1,11 @@
 # MCP 路由鉴权头冲突修复方案
 
-> **状态**: 修复设计稿 v0.1（待实施）
+> **Note:** Historical fix-design draft (2026-05, Chinese). The fix **shipped**:
+> API-platform auth moved to the `X-Sandrpod-Token` header so `Authorization`
+> can carry the MCP Bearer end-to-end. For current behavior see
+> [`../MCP_AUTH.md`](../MCP_AUTH.md) and [`../MCP_BRIDGE.md`](../MCP_BRIDGE.md).
+
+> **状态**: 已实施（历史存档）
 > **更新日期**: 2026-05-28
 > **严重程度**: 🟥 **Blocker** — 在 `cfg.Token != ""` 的生产部署下，远端 MCP 客户端**无法**同时通过 API Server 鉴权和 agent `--mcp-token` 鉴权。
 > **影响范围**: `cmd/server`（API Server 入站鉴权）+ 文档 `docs/MCP_BRIDGE.md`、`docs/design/mcp-transport-bridge.md`
