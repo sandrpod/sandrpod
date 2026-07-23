@@ -20,7 +20,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto go build -l
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto go build -ldflags="-s -w" -o /mcp-gateway ./cmd/mcp-gateway
 
 # 最终镜像
-FROM alpine:3.19
+FROM alpine:3.24
 
 # Runtime deps. nodejs+npm provide `npx`, which the MCP bridge uses to spawn
 # npx-based MCP servers (and the `mcp-remote` shim for remote HTTP servers).
