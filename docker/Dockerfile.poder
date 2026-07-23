@@ -3,7 +3,7 @@
 
 # 构建阶段跑在 BUILDPLATFORM（原生架构）上做交叉编译，
 # 避免 buildx 多架构时整个 Go 编译落在 QEMU 仿真里（慢一个数量级）。
-FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
 
 WORKDIR /app
 
