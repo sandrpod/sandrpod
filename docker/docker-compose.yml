@@ -6,7 +6,7 @@ services:
     image: ghcr.io/sandrpod/server:latest
     container_name: sandrpod-server
     ports:
-      - "18080:8080"
+      - "8080:8080"
     networks:
       - sandrpod
     environment:
@@ -33,6 +33,10 @@ services:
       - REGION=${REGION:-local}
       - PROVIDER_TYPE=${PROVIDER_TYPE:-local}
       - SANDRPOD_TOKEN=${SANDRPOD_TOKEN:-}
+      # Create sandbox containers on THIS network so the Poder can reach them.
+      # Without it they land on the default bridge, unreachable from here, and
+      # code execution hangs.
+      - SANDRPOD_NETWORK=sandrpod
       - SANDRPOD_TOOLBOX_IMAGE=${SANDRPOD_TOOLBOX_IMAGE:-ghcr.io/sandrpod/toolbox:latest}
     depends_on:
       - server

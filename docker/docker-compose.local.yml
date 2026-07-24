@@ -39,7 +39,11 @@ services:
       - API_URL=http://server:8080
       - REGION=local
       - PROVIDER_TYPE=local
-      - SANDRPOD_TOOLBOX_IMAGE=sandrpod/toolbox:dev
+      # Sandbox containers must join THIS network or the Poder can't reach them
+      # (see docker-compose.yml). Only server+poder are built from source here;
+      # the toolbox image is pulled from GHCR.
+      - SANDRPOD_NETWORK=sandrpod
+      - SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:latest
     depends_on:
       server:
         condition: service_healthy
@@ -48,5 +52,3 @@ services:
 networks:
   sandrpod:
     name: sandrpod
-    # Pre-create once on a fresh machine: docker network create sandrpod
-    external: true
