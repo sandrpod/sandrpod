@@ -61,7 +61,7 @@ try:
 except ImportError as exc:
     raise ImportError(
         "langchain-sandrpod requires the deepagents package.\n"
-        "Install with:  pip install 'deepagents>=0.5.0,<0.7.0'"
+        "Install with:  pip install 'deepagents>=0.5.0,<0.8.0'"
     ) from exc
 
 # DeleteResult is present only in deepagents versions that added the native

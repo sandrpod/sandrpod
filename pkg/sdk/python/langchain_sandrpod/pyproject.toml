@@ -8,7 +8,7 @@ description = "SandrPod sandbox integration for Deep Agents"
 readme = "README.md"
 license = { text = "Apache-2.0" }
 authors = [{ name = "SandrPod Contributors" }]
-version = "0.2.6"
+version = "0.2.7"
 requires-python = ">=3.11,<4.0"
 
 classifiers = [
@@ -22,7 +22,7 @@ classifiers = [
 ]
 
 dependencies = [
-    "deepagents>=0.5.0,<0.7.0",
+    "deepagents>=0.5.0,<0.8.0",
     "httpx>=0.27.0",
 ]
 
