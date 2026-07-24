@@ -1,0 +1,76 @@
+# Copyright 2026 SandrPod Contributors
+# Server + Poder + PostgreSQL（生产 / 多实例后端）。拉取 GHCR 发布镜像。
+#   docker compose -f docker/docker-compose.pg.yml up -d
+# 单实例快速开始（SQLite）用 docker-compose.yml；多实例横向扩展见
+# docs/MULTI_INSTANCE_DEPLOYMENT.md（本文件是它的单机 PostgreSQL 起点）。
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sandrpod-postgres
+    environment:
+      - POSTGRES_USER=sandrpod
+      # Change this before any non-local deployment.
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-sandrpod}
+      - POSTGRES_DB=sandrpod
+    networks:
+      - sandrpod
+    volumes:
+      - sandrpod-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandrpod -d sandrpod"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  server:
+    image: ghcr.io/sandrpod/server:latest
+    container_name: sandrpod-server
+    command:
+      - "-port=8080"
+      - "-db=postgres://sandrpod:${POSTGRES_PASSWORD:-sandrpod}@postgres:5432/sandrpod?sslmode=disable"
+    ports:
+      - "8080:8080"
+    networks:
+      - sandrpod
+    environment:
+      # Optional. Empty = auth disabled (anonymous admin) — localhost only.
+      - SANDRPOD_TOKEN=${SANDRPOD_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  poder:
+    image: ghcr.io/sandrpod/poder:latest
+    container_name: sandrpod-poder
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - sandrpod
+    environment:
+      - API_URL=http://server:8080
+      - REGION=${REGION:-local}
+      - PROVIDER_TYPE=${PROVIDER_TYPE:-local}
+      - SANDRPOD_TOKEN=${SANDRPOD_TOKEN:-}
+      # Create sandbox containers on THIS network so the Poder can reach them
+      # (see docker-compose.yml for why).
+      - SANDRPOD_NETWORK=sandrpod
+      - SANDRPOD_TOOLBOX_IMAGE=${SANDRPOD_TOOLBOX_IMAGE:-ghcr.io/sandrpod/toolbox:latest}
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  sandrpod-pgdata:
+
+networks:
+  sandrpod:
+    name: sandrpod

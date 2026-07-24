@@ -198,9 +198,12 @@ print(Sandbox.create().commands.run("echo hello from SandrPod").stdout)
 
 <details><summary>其它启动方式</summary>
 
+- **PostgreSQL**（生产 / 多实例后端）：`docker compose -f docker/docker-compose.pg.yml up -d` —— 横向扩展见 [docs/MULTI_INSTANCE_DEPLOYMENT.md](docs/MULTI_INSTANCE_DEPLOYMENT.md)。
 - **从源码构建**（贡献者）：`docker compose -f docker/docker-compose.local.yml up -d --build`
 - **直接跑 Go**：`go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db`，再用上面的 `docker run …/poder` 一行命令或 `go run ./cmd/poder -api-url=http://localhost:8080` 加一个 worker。
 - **完全不用 Docker** —— 把任意机器变成沙箱：`go run ./cmd/agent -api-url=http://localhost:8080 -name=my-machine`
+
+默认的 `docker-compose.yml` 用 SQLite 持久化（`sandrpod-data` 卷），沙箱和 token 重启不丢。
 </details>
 
 ### 4. 管控它（员工 PC 模式）

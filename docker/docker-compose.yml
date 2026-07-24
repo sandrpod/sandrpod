@@ -1,19 +1,22 @@
 # Copyright 2026 SandrPod Contributors
-# Server + Poder 部署（拉取 GHCR 发布镜像；从源码构建请用 docker-compose.local.yml）
+# Server + Poder 部署（拉取 GHCR 发布镜像；SQLite 持久化，单实例）。
+# 从源码构建请用 docker-compose.local.yml；生产/多实例(PostgreSQL)用 docker-compose.pg.yml。
 
 services:
   server:
     image: ghcr.io/sandrpod/server:latest
     container_name: sandrpod-server
+    # SQLite persistence — sandboxes/poders/tokens survive a restart.
+    command: ["-port=8080", "-db=sqlite:/data/sandrpod.db"]
     ports:
       - "8080:8080"
     networks:
       - sandrpod
     environment:
-      - PORT=8080
-      - TOKEN=${SANDRPOD_TOKEN:-}
-      - OFFLINE_TIMEOUT=${OFFLINE_TIMEOUT:-30s}
-      - PUBLIC_URL=${SANDRPOD_PUBLIC_URL:-}
+      # Optional. Empty = auth disabled (anonymous admin) — localhost only.
+      - SANDRPOD_TOKEN=${SANDRPOD_TOKEN:-}
+    volumes:
+      - sandrpod-data:/data
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
@@ -41,6 +44,9 @@ services:
     depends_on:
       - server
     restart: unless-stopped
+
+volumes:
+  sandrpod-data:
 
 networks:
   sandrpod:
