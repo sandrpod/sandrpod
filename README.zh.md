@@ -144,51 +144,64 @@ CLI ───────┘    Poder (Worker) ──→ Toolbox (Sandbox 容器
 
 ## 快速开始
 
-### 1. 启动控制平面
+一条命令用发布镜像同时拉起**控制平面**和一个 **Docker worker** —— 不需要 Go
+工具链、不用构建、也不用 clone 仓库。
+
+### 1. 启动整套服务
 
 ```bash
-# 内存模式（默认）
-go run ./cmd/server -port 8080
-
-# SQLite 持久化模式（推荐）
-go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
+curl -O https://raw.githubusercontent.com/sandrpod/sandrpod/main/docker/docker-compose.yml
+docker compose up -d
 ```
 
-> ⚠️ **server 暴露到 localhost 以外之前，务必配置 API token。** 不配置任何
-> token（`SANDRPOD_TOKEN` / `-token` / `-tokens-file` / 已签发的 key）时鉴权
-> 处于关闭状态，所有请求都以匿名 admin 身份执行。
-> 详见 [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md)。
-
-### 2. 加一个 worker（Docker）
+它会拉取 `ghcr.io/sandrpod/{server,poder,toolbox}` 并启动：`localhost:8080` 上的
+**控制平面** + 一个 **Docker worker（Poder）**，Poder 走反向隧道拨出，worker 上
+无需任何入站端口。验证：
 
 ```bash
-docker run -d --name sandrpod-poder --restart=unless-stopped \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e API_URL=http://host.docker.internal:8080 \
-  -e SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:latest \
-  ghcr.io/sandrpod/poder:latest
+curl localhost:8080/health          # {"status":"ok",...}
 ```
 
-> 无需暴露任何入站端口 —— Poder 主动拨出到控制平面，走 WebSocket 反向隧道。
+> ⚠️ 这套开发栈**默认关闭鉴权**（匿名 admin）—— 仅限 localhost 用。对外暴露前
+> 请设置 `SANDRPOD_TOKEN`，详见 [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md)。
 
-或者把**任意机器变成沙箱**，完全不用 Docker：
+### 2. 建沙箱、跑代码
 
 ```bash
-go run ./cmd/agent -api-url=http://localhost:8080 -name=my-machine
+pip install sandrpod-cli
+sandrpod-cli --api-url http://localhost:8080 create demo --provider local
+sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
 ```
 
-### 3. 跑代码 —— SDK 随你挑
+<details><summary>…或直接用 <code>curl</code>（免安装）</summary>
+
+```bash
+curl -X POST localhost:8080/api/v1/sandboxes \
+  -d '{"name":"demo","provider_type":"local"}'
+curl -X POST "localhost:8080/api/v1/sandboxes/execute?sandbox=demo" \
+  -d '{"code":"print(6*7)","language":"python"}'
+```
+</details>
+
+### 3. …或用 SDK 驱动
 
 ```python
-# 原生
+# 原生 Python SDK
 from langchain_sandrpod import SandrPodClient
-sb = SandrPodClient(api_url="http://localhost:8080").get_sandbox("my-sandbox")
-sb.execute("echo hello from SandrPod")
+sb = SandrPodClient(api_url="http://localhost:8080").get_sandbox("demo")
+print(sb.execute("echo hello from SandrPod").output)
 
-# …或原封不动的 E2B SDK（把 E2B_API_URL/E2B_SANDBOX_URL 设为你的服务器）
+# …或原封不动的 E2B SDK（把 E2B_API_URL / E2B_SANDBOX_URL 设为你的服务器）
 from e2b import Sandbox
 print(Sandbox.create().commands.run("echo hello from SandrPod").stdout)
 ```
+
+<details><summary>其它启动方式</summary>
+
+- **从源码构建**（贡献者）：`docker compose -f docker/docker-compose.local.yml up -d --build`
+- **直接跑 Go**：`go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db`，再用上面的 `docker run …/poder` 一行命令或 `go run ./cmd/poder -api-url=http://localhost:8080` 加一个 worker。
+- **完全不用 Docker** —— 把任意机器变成沙箱：`go run ./cmd/agent -api-url=http://localhost:8080 -name=my-machine`
+</details>
 
 ### 4. 管控它（员工 PC 模式）
 

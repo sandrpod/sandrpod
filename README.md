@@ -155,51 +155,65 @@ CLI ───────┘    Poder (Worker) ──→ Toolbox (Sandbox contai
 
 ## Getting Started
 
-### 1. Start the control plane
+One command brings up the control plane **and** a Docker worker from the
+published images — no Go toolchain, no build, no cloning the repo.
+
+### 1. Start the stack
 
 ```bash
-# In-memory mode (default)
-go run ./cmd/server -port 8080
-
-# SQLite persistence (recommended)
-go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
+curl -O https://raw.githubusercontent.com/sandrpod/sandrpod/main/docker/docker-compose.yml
+docker compose up -d
 ```
 
-> ⚠️ **Set an API token before exposing the server beyond localhost.** With no
-> token configured (`SANDRPOD_TOKEN` / `-token` / `-tokens-file` / an issued
-> key), authentication is disabled and every request runs as an anonymous
-> admin. See [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md).
-
-### 2. Add a worker (Docker)
+That pulls `ghcr.io/sandrpod/{server,poder,toolbox}` and starts:
+the **control plane** on `localhost:8080` and one **Docker worker** (Poder) that
+dials back over a reverse tunnel — no inbound ports on the worker. Check it:
 
 ```bash
-docker run -d --name sandrpod-poder --restart=unless-stopped \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -e API_URL=http://host.docker.internal:8080 \
-  -e SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:latest \
-  ghcr.io/sandrpod/poder:latest
+curl localhost:8080/health          # {"status":"ok",...}
 ```
 
-> No inbound ports required — Poder dials out to the control plane over a WebSocket reverse tunnel.
+> ⚠️ This dev stack runs with **authentication disabled** (anonymous admin) —
+> fine on localhost. Before exposing it, set `SANDRPOD_TOKEN` (see
+> [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md)).
 
-Or turn **any machine into a sandbox** with no Docker at all:
+### 2. Create a sandbox and run code
 
 ```bash
-go run ./cmd/agent -api-url=http://localhost:8080 -name=my-machine
+pip install sandrpod-cli
+sandrpod-cli --api-url http://localhost:8080 create demo --provider local
+sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
 ```
 
-### 3. Run code — pick your SDK
+<details><summary>…or with plain <code>curl</code> (no install)</summary>
+
+```bash
+curl -X POST localhost:8080/api/v1/sandboxes \
+  -d '{"name":"demo","provider_type":"local"}'
+curl -X POST "localhost:8080/api/v1/sandboxes/execute?sandbox=demo" \
+  -d '{"code":"print(6*7)","language":"python"}'
+```
+</details>
+
+### 3. …or drive it from an SDK
 
 ```python
-# Native
+# Native Python SDK
 from langchain_sandrpod import SandrPodClient
-sb = SandrPodClient(api_url="http://localhost:8080").get_sandbox("my-sandbox")
-sb.execute("echo hello from SandrPod")
+sb = SandrPodClient(api_url="http://localhost:8080").get_sandbox("demo")
+print(sb.execute("echo hello from SandrPod").output)
 
-# …or the unmodified E2B SDK (set E2B_API_URL/E2B_SANDBOX_URL to your server)
+# …or the unmodified E2B SDK (set E2B_API_URL / E2B_SANDBOX_URL to your server)
 from e2b import Sandbox
 print(Sandbox.create().commands.run("echo hello from SandrPod").stdout)
 ```
+
+<details><summary>Other ways to run it</summary>
+
+- **Build from source** (contributors): `docker compose -f docker/docker-compose.local.yml up -d --build`
+- **From Go directly**: `go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db`, then add a worker with the `docker run …/poder` one-liner or `go run ./cmd/poder -api-url=http://localhost:8080`.
+- **No Docker at all** — turn any machine into a sandbox: `go run ./cmd/agent -api-url=http://localhost:8080 -name=my-machine`
+</details>
 
 ### 4. Govern it (employee-PC mode)
 
