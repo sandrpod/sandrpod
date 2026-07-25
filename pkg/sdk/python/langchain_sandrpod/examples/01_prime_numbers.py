@@ -41,7 +41,9 @@ result = agent.invoke({
     "messages": [{
         "role": "user",
         "content": (
-            "在沙箱里写一个 Python 脚本 primes.py，"
+            # 路径要写全：只说文件名的话，Agent 往往写到根目录 /，
+            # 下面的校验就读不到了。
+            "在沙箱里写一个 Python 脚本 /workspace/primes.py，"
             "找出 1 到 100 以内的所有质数并打印出来，然后运行它。"
         ),
     }]
