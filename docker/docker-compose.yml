@@ -20,9 +20,12 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
+      # Short interval so `docker compose up --wait` returns in a few seconds
+      # instead of idling out a 30s cycle — the server is up in well under 1s.
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 2s
 
   poder:
     image: ghcr.io/sandrpod/poder:latest
