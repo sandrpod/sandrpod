@@ -207,7 +207,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
 			"status":    "ok",
-			"version":   "0.3.0",
+			"version":   version,
 			"timestamp": time.Now().Unix(),
 			"mode":      "control-plane+tunnel",
 		})
