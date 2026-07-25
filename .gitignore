@@ -73,3 +73,6 @@ credentials.json
 # Claude Code local settings (contains device hostname, IP, private paths)
 .claude/settings.local.json
 .claude/worktrees/
+
+# Local media / marketing assets (video scripts, recordings, etc.)
+/media/
