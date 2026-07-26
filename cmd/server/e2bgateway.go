@@ -123,6 +123,9 @@ func newE2BGateway(domain string, d e2bDeps) http.Handler {
 		SandboxResolver: d.resolveSingleSandbox,
 		Forwarder:       d.forwardE2B,
 		PortProxy:       d.portProxy,
+		// Opt in to requiring an API key on get_host(port) URLs. Off by default
+		// so they behave like E2B's — see Config.PrivateSandboxPorts.
+		PrivateSandboxPorts: os.Getenv("SANDRPOD_E2B_PRIVATE_PORTS") != "",
 	})
 }
 

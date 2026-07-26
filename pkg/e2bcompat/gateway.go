@@ -74,6 +74,18 @@ type Config struct {
 	// 127.0.0.1:<port> inside the sandbox. Returns true when handled. Returning
 	// false (or leaving it nil) falls through to the control plane.
 	PortProxy func(w http.ResponseWriter, r *http.Request, sandbox string, port int) bool
+	// PrivateSandboxPorts requires an API key on the generic port proxy — the
+	// URLs get_host(port) hands out for services running inside a sandbox.
+	// Default (false) matches E2B, where possession of the unguessable
+	// <port>-<sandboxID>.<domain> hostname is the capability and the URL is
+	// simply fetchable. That default exists because a browser cannot attach a
+	// header: demanding one does not make the common case (open the dev server
+	// running in your sandbox, point a webhook at it) inconvenient, it makes it
+	// impossible. Set this when every consumer is a program that can carry the
+	// key and you would rather not rely on the hostname staying secret.
+	// It never affects envd RPCs or the code interpreter: those authenticate
+	// regardless.
+	PrivateSandboxPorts bool
 }
 
 // Handler builds the E2B-compatible gateway.
@@ -98,34 +110,10 @@ func Handler(cfg Config) http.Handler {
 	envdHost := envdHostRe(cfg.Domain)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Authenticate. The control plane uses X-API-KEY / Authorization; envd
-		// uses the X-Access-Token header (the sandbox's envd access token).
-		key := presentedKey(r.Header.Get("X-API-KEY"), r.Header.Get("Authorization"))
-		if key == "" {
-			key = r.Header.Get("X-Access-Token")
-		}
-		ident, ok := cfg.Auth(key)
-		if !ok {
-			// E2B's code-interpreter talks to the local Jupyter kernel
-			// unauthenticated under E2B_DEBUG=true — its /execute + /contexts
-			// calls carry no X-API-KEY/token at all. In path/debug mode (no
-			// vanity domain) tolerate that for those code paths so the debug
-			// port is usable against an auth-enabled server; the single-sandbox
-			// resolver still scopes execution. Domain (production) mode, where
-			// the SDK does send the envd token, stays strict.
-			codePath := r.URL.Path == "/execute" || strings.HasPrefix(r.URL.Path, "/contexts")
-			if cfg.Domain != "" || key != "" || !codePath {
-				writeErr(w, http.StatusUnauthorized, "unauthorized: missing or invalid API key")
-				return
-			}
-			ident = "" // anonymous; the resolver picks the sole sandbox
-		}
-		r = r.WithContext(context.WithValue(r.Context(), ctxIdent, ident))
-
-		// Resolve the target sandbox and whether this is a code-interpreter
-		// request. The SDK sends E2b-Sandbox-Id / E2b-Sandbox-Port headers; we
-		// also accept the Host (<port>-<id>.<domain>) and fall back to the
-		// single-sandbox resolver (fixed sandbox URL in HTTP debug mode).
+		// Resolve the target sandbox from the Host first: two E2B behaviours
+		// below have to be decided *before* authenticating, and both of them
+		// hinge on the sandbox being named by the (unguessable) hostname rather
+		// than by a caller-supplied header.
 		sandbox, isCode := "", false
 		hostPort := 0 // >0 when the Host matched <port>-<sandboxID>.<domain>
 		if envdHost != nil {
@@ -134,6 +122,66 @@ func Handler(cfg Config) http.Handler {
 				hostPort, _ = strconv.Atoi(m[1])
 			}
 		}
+
+		// (1) Sandbox.is_running() probes GET /health on the envd host and reads
+		// 502 as "not running", anything else as running. Every way of failing —
+		// killed, not ours, unreachable, or a credential that died with the
+		// sandbox — has to answer 502, or the SDK raises instead of returning
+		// False. Auth failure included: the SDK sends the *per-sandbox* envd
+		// token, which stops being valid the moment the sandbox is killed.
+		// Answering 502 leaks nothing — only an authenticated owner of a live
+		// sandbox ever sees 200.
+		healthProbe := hostPort > 0 && r.URL.Path == "/health"
+
+		// (2) The code-interpreter SDK is inconsistent about credentials:
+		// run_code POSTs /execute *with* X-Access-Token, but every /contexts
+		// call (create/list/restart/remove) sends only E2b-Sandbox-Id and the
+		// port header — no token at all. E2B's own topology accepts that,
+		// treating possession of the <port>-<sandboxID>.<domain> hostname as the
+		// capability, so rejecting it makes contexts unusable against the
+		// unmodified SDK. Scope the tolerance as tightly as the wire allows:
+		// the code-interpreter port only, /contexts only, and only when the
+		// sandbox came from the Host — never from the caller-supplied header.
+		codeCtxPath := strings.HasPrefix(r.URL.Path, "/contexts")
+		hostScopedCtx := sandbox != "" && isCode && codeCtxPath
+
+		// (3) The same capability model, for the generic port proxy: a plain
+		// fetch of get_host(port) carries no credential and — from a browser —
+		// never can. Scoped to in-sandbox services only; envd RPCs and the code
+		// interpreter are excluded here and stay authenticated below.
+		publicPort := !cfg.PrivateSandboxPorts && sandbox != "" && hostPort > 0 &&
+			!isCode && !isEnvdPath(r.URL.Path) && !codeCtxPath && r.URL.Path != "/execute"
+
+		// Authenticate. The control plane uses X-API-KEY / Authorization; envd
+		// uses the X-Access-Token header (the sandbox's envd access token).
+		key := presentedKey(r.Header.Get("X-API-KEY"), r.Header.Get("Authorization"))
+		if key == "" {
+			key = r.Header.Get("X-Access-Token")
+		}
+		ident, ok := cfg.Auth(key)
+		if !ok {
+			if healthProbe {
+				writeErr(w, http.StatusBadGateway, "sandbox is not running")
+				return
+			}
+			// E2B's code-interpreter also talks to the local Jupyter kernel
+			// unauthenticated under E2B_DEBUG=true — there /execute carries no
+			// credential either. In path/debug mode (no vanity domain) tolerate
+			// that too, so the debug port stays usable against an auth-enabled
+			// server; the single-sandbox resolver still scopes execution.
+			debugCodePath := cfg.Domain == "" && key == "" &&
+				(r.URL.Path == "/execute" || codeCtxPath)
+			anonAllowed := key == "" && (hostScopedCtx || publicPort)
+			if !debugCodePath && !anonAllowed {
+				writeErr(w, http.StatusUnauthorized, "unauthorized: missing or invalid API key")
+				return
+			}
+			ident = "" // anonymous; scoped by the resolver or by the Host
+		}
+		r = r.WithContext(context.WithValue(r.Context(), ctxIdent, ident))
+
+		// Fall back to the headers / single-sandbox resolver when the Host did
+		// not name a sandbox (e.g. the fixed E2B_SANDBOX_URL in debug mode).
 		if sandbox == "" {
 			if sid := r.Header.Get("E2b-Sandbox-Id"); sid != "" {
 				sandbox = sid
@@ -147,6 +195,36 @@ func Handler(cfg Config) http.Handler {
 		}
 		if p := r.Header.Get("E2b-Sandbox-Port"); p == strconv.Itoa(codePort) {
 			isCode = true
+		}
+
+		// The is_running() probe itself (flag computed above).
+		// /health is not an envd RPC path, so without this branch it falls
+		// through to the generic port proxy, which dials 127.0.0.1:49983 inside
+		// the container, finds nothing listening and returns 502 — reporting a
+		// perfectly healthy sandbox as not running. api.<domain>/health is
+		// unaffected: it is not an envd host, so it stays the control plane's.
+		if healthProbe {
+			if sandbox == "" && cfg.SandboxResolver != nil {
+				sandbox = cfg.SandboxResolver(ident)
+			}
+			// Gone, not ours, or not answering all collapse to the same 502 the
+			// SDK expects — and unlike the 404 used elsewhere it reveals nothing
+			// extra, since a 200 already distinguishes a reachable sandbox.
+			unreachable := sandbox == "" ||
+				(cfg.Authorize != nil && !cfg.Authorize(ident, sandbox))
+			if !unreachable && cfg.Forwarder != nil && cfg.Forwarder(w, r, sandbox) {
+				return // tunnel lives on a peer node; it answered
+			}
+			if !unreachable && cfg.Envd != nil {
+				_, err := cfg.Envd.Stat(sandbox, "/")
+				unreachable = err != nil
+			}
+			if unreachable {
+				writeErr(w, http.StatusBadGateway, "sandbox is not running")
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			return
 		}
 
 		isEnvd := isEnvdPath(r.URL.Path)

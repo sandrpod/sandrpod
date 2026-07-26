@@ -556,3 +556,159 @@ func TestDataPlane_OwnershipEnforced(t *testing.T) {
 		t.Errorf("owner port proxy wrongly denied: got %d, want 418", code)
 	}
 }
+
+// TestEnvdHealth locks in Sandbox.is_running(): the SDK probes GET /health on
+// the envd host and treats 502 as "not running", anything else as running.
+// The bug this guards against is subtle — /health is not an envd RPC path, so
+// it used to fall through to the generic port proxy, which dials
+// 127.0.0.1:49983 inside the container, finds nothing there and returns 502.
+// A perfectly healthy sandbox reported is_running() == False, and only in
+// domain mode: the debug/path-mode tests never route through that host.
+func TestEnvdHealth(t *testing.T) {
+	const domain = "example.com"
+	envd := newFakeEnvd()
+	envd.files["/"] = []byte{} // Stat("/") succeeds → sandbox reachable
+
+	newGW := func(authorize func(string, string) bool, e EnvdBackend) http.Handler {
+		return Handler(Config{
+			Domain:    domain,
+			Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+			Authorize: authorize,
+			Sandboxes: newFakeSandboxes(),
+			Envd:      e,
+			Code:      &fakeCode{},
+		})
+	}
+	get := func(h http.Handler, host string) int {
+		req := httptest.NewRequest("GET", "/health", nil)
+		req.Host = host
+		req.Header.Set("X-Access-Token", "e2b_"+strings.Repeat("a", 40))
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	envdHost := "49983-sb1." + domain
+	allow := func(string, string) bool { return true }
+	deny := func(string, string) bool { return false }
+
+	// Reachable sandbox → 200, so is_running() reports True.
+	if code := get(newGW(allow, envd), envdHost); code != http.StatusOK {
+		t.Errorf("healthy sandbox: want 200, got %d", code)
+	}
+	// Someone else's (or a killed) sandbox → 502, the SDK's "not running".
+	if code := get(newGW(deny, envd), envdHost); code != http.StatusBadGateway {
+		t.Errorf("unauthorized sandbox: want 502, got %d", code)
+	}
+	// Alive record but the tunnel is dead → also 502.
+	if code := get(newGW(allow, newFakeEnvd()), envdHost); code != http.StatusBadGateway {
+		t.Errorf("unreachable sandbox: want 502, got %d", code)
+	}
+	// Killed sandbox: its per-sandbox envd token dies with it, so the SDK's
+	// probe now fails auth. That must still read as 502, not 401 — a 401 makes
+	// is_running() raise instead of returning False.
+	req := httptest.NewRequest("GET", "/health", nil)
+	req.Host = envdHost // no X-Access-Token at all
+	rec := httptest.NewRecorder()
+	newGW(allow, envd).ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadGateway {
+		t.Errorf("dead credential: want 502, got %d", rec.Code)
+	}
+
+	// api.<domain>/health stays the control plane's own 200 probe, not envd's.
+	if code := get(newGW(deny, newFakeEnvd()), "api."+domain); code != http.StatusOK {
+		t.Errorf("control-plane health: want 200, got %d", code)
+	}
+}
+
+// TestCodeContextsHostScoped locks in the /contexts tolerance. The
+// code-interpreter SDK sends X-Access-Token on /execute but nothing at all on
+// /contexts, so a strict gate makes create/list/restart/remove unusable against
+// the unmodified SDK. The tolerance must stay pinned to what E2B itself relies
+// on — the unguessable <codePort>-<sandboxID>.<domain> hostname — and must not
+// widen into a way to reach a sandbox named by a caller-supplied header.
+func TestCodeContextsHostScoped(t *testing.T) {
+	const domain = "example.com"
+	gw := Handler(Config{
+		Domain:    domain,
+		Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+		Authorize: func(string, string) bool { return false }, // nobody "owns" it
+		Sandboxes: newFakeSandboxes(),
+		Envd:      newFakeEnvd(),
+		Code:      &fakeCode{},
+	})
+	get := func(host, path string, hdr map[string]string) int {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = host
+		for k, v := range hdr {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	codeHost := fmt.Sprintf("%d-sb1.%s", DefaultCodeInterpreterPort, domain)
+
+	// The exact shape the SDK sends: code port host, /contexts, no credential.
+	if code := get(codeHost, "/contexts", nil); code == http.StatusUnauthorized {
+		t.Errorf("/contexts on the code host: want non-401, got 401")
+	}
+	// Same path, but the sandbox named only by a header — that identifier is
+	// caller-controlled, so it must NOT buy anonymous access.
+	if code := get("api."+domain, "/contexts",
+		map[string]string{"E2b-Sandbox-Id": "sb1"}); code != http.StatusUnauthorized {
+		t.Errorf("/contexts via header only: want 401, got %d", code)
+	}
+	// The tolerance is for /contexts alone: envd RPCs on the same host stay shut.
+	if code := get(codeHost, "/files", nil); code != http.StatusUnauthorized {
+		t.Errorf("/files unauthenticated: want 401, got %d", code)
+	}
+	// And it does not extend to the non-code envd port.
+	if code := get("49983-sb1."+domain, "/contexts", nil); code != http.StatusUnauthorized {
+		t.Errorf("/contexts on the envd port: want 401, got %d", code)
+	}
+}
+
+// TestPublicSandboxPorts pins the get_host(port) capability model: an in-sandbox
+// service is fetchable with no credential (a browser cannot send one), while the
+// envd RPC surface on the same domain still is not. PrivateSandboxPorts turns
+// the first half off without touching the second.
+func TestPublicSandboxPorts(t *testing.T) {
+	const domain = "example.com"
+	newGW := func(private bool) http.Handler {
+		return Handler(Config{
+			Domain:              domain,
+			Auth:                func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+			Sandboxes:           newFakeSandboxes(),
+			Envd:                newFakeEnvd(),
+			Code:                &fakeCode{},
+			PrivateSandboxPorts: private,
+			PortProxy: func(w http.ResponseWriter, _ *http.Request, _ string, _ int) bool {
+				w.WriteHeader(http.StatusOK)
+				return true
+			},
+		})
+	}
+	get := func(h http.Handler, host, path string) int {
+		req := httptest.NewRequest("GET", path, nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	userPort := "8000-sb1." + domain
+
+	// Default: a plain fetch of the user's dev server works, like E2B.
+	if code := get(newGW(false), userPort, "/index.html"); code != http.StatusOK {
+		t.Errorf("public port, no key: want 200, got %d", code)
+	}
+	// The envd RPC surface is NOT part of that — it stays authenticated even
+	// though it lives on the same wildcard domain.
+	if code := get(newGW(false), "49983-sb1."+domain, "/files"); code != http.StatusUnauthorized {
+		t.Errorf("envd /files, no key: want 401, got %d", code)
+	}
+	// Opting in flips only the first case back to requiring a key.
+	if code := get(newGW(true), userPort, "/index.html"); code != http.StatusUnauthorized {
+		t.Errorf("private ports, no key: want 401, got %d", code)
+	}
+}

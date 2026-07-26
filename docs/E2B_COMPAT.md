@@ -124,6 +124,7 @@ not yet exercised by the real SDK.
 | code interpreter | `runCode` + contexts | ☑ | **stateful** kernel + create/list/restart/remove contexts; **matplotlib charts** captured as PNG → `Execution.results[].png`; verified live |
 | metadata | create/list `metadata` | ☑ | stored in labels, filterable |
 | env vars | `envVars` | ◐ | accepted on create; per-process injection via the process table's `envs` |
+| in-sandbox ports | `get_host(port)` | ☑ | fetchable with **no credential**, as on E2B — possession of the unguessable `<port>-<sandboxID>.<domain>` hostname is the capability, and a browser cannot send a header. Set `SANDRPOD_E2B_PRIVATE_PORTS=1` to require an API key instead; envd and the code interpreter authenticate either way |
 | MCP gateway | in-sandbox `mcp-gateway` on `:50005` | ☑ | E2B-style shim over the native bridge; reached via the generic port proxy; verified live over a real TLS vanity domain |
 | cross-node routing | any SDK call on a multi-instance cluster | ☑ | requests are forwarded to the node holding the sandbox's tunnel; verified live with a real cloud poder |
 
