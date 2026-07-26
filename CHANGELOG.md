@@ -10,6 +10,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 _Nothing yet._
 
+## [0.5.2] — 2026-07
+
+Three E2B-compatibility fixes, all of them only reachable in **domain mode**
+(`SANDRPOD_E2B_DOMAIN`). The earlier verification ran against the plain-HTTP
+debug listener, where requests never traverse the `<port>-<sandboxID>.<domain>`
+host router — so none of these could show up there.
+
+### Fixed
+- **`Sandbox.is_running()` always returned `False`.** The SDK probes `GET
+  /health` on the envd host and reads 502 as "not running". `/health` is not an
+  envd RPC path, so it fell through to the generic port proxy, which dialled
+  `127.0.0.1:49983` inside the container, found nothing listening and returned
+  502 — for a perfectly healthy sandbox. After `kill()` the probe now returns
+  502 rather than 401, so `is_running()` returns `False` instead of raising:
+  the per-sandbox envd token dies with the sandbox it names.
+- **Code-interpreter contexts were unusable** (`create_code_context`,
+  `list_code_contexts`, `restart_code_context`, `remove_code_context` all 401).
+  The SDK sends `X-Access-Token` on `/execute` but no credential at all on
+  `/contexts`. Accepted now on the code-interpreter port only, for `/contexts`
+  only, and only when the sandbox is named by the Host — never by the
+  caller-supplied `E2b-Sandbox-Id` header.
+
+### Changed
+- **`get_host(port)` URLs are fetchable without an API key**, matching E2B:
+  possession of the unguessable `<port>-<sandboxID>.<domain>` hostname is the
+  capability. Requiring a header made the common case — opening the dev server
+  running in your sandbox, pointing a webhook at it — impossible rather than
+  inconvenient, since a browser cannot attach one. `SANDRPOD_E2B_PRIVATE_PORTS=1`
+  restores the previous behaviour. The envd RPC surface (filesystem, process,
+  PTY) and the code interpreter authenticate either way.
+
 ## [0.5.1] — 2026-07
 
 ### Fixed
