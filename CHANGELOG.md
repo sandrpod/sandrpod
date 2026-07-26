@@ -14,10 +14,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   with `SANDRPOD_E2B_DOMAIN` set there was no hostname left for the native API —
   `sandrpod-cli`, the REST API and the SDKs 404'd everywhere under the domain
   and could only be reached over an SSH tunnel to the loopback port. The gateway
-  now claims exactly the two shapes the E2B SDK addresses, `api.<domain>` and
-  `<port>-<sandboxID>.<domain>`; every other name — `console.<domain>`, say,
-  already covered by the wildcard record — reaches the native API as before.
-  Compatibility for existing E2B users no longer costs you your own API.
+  now takes the sandbox hosts `<port>-<sandboxID>.<domain>` whole, and on
+  `api.<domain>` only its own paths (`/sandboxes`, `/templates`, `/snapshots`,
+  `/volumes`) — which do not overlap the native `/api/v1/*`, `/health`,
+  `/metrics` and `/ws/*`. Both surfaces therefore share the one hostname, and
+  `sandrpod-cli` and the SDKs keep working exactly as before. Compatibility for
+  existing E2B users no longer costs you your own API, or a second hostname.
 
 ## [0.5.2] — 2026-07
 

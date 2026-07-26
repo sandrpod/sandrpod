@@ -94,19 +94,20 @@ func (d e2bDeps) portProxy(w http.ResponseWriter, r *http.Request, sandbox strin
 	return true
 }
 
-// e2bHostRouter routes the two hostname shapes the E2B SDK actually uses to the
-// gateway, and everything else — including every other name under the same
-// domain — to next (the native API).
+// e2bHostRouter sends the E2B compatibility layer exactly what the E2B SDK
+// addresses, and everything else to next (the native API).
 //
-// The shapes are exhaustive: api.<domain> is the control plane, and
-// <port>-<sandboxID>.<domain> is envd, the code interpreter, and the generic
-// port proxy. Nothing else is ever addressed.
+//	<port>-<sandboxID>.<domain>   → gateway, whole host (envd, code, port proxy)
+//	api.<domain>, E2B paths       → gateway (/sandboxes, /templates, …)
+//	api.<domain>, anything else   → native API (/api/v1/*, /health, /metrics, /ws)
+//	any other host                → native API
 //
-// Matching the whole domain instead would hand the E2B compatibility layer
-// every subdomain the deployment has, leaving the native API — which is the
-// primary surface, and what sandrpod-cli and the SDKs talk to — with no
-// hostname at all. Enabling compatibility for existing E2B users must not cost
-// you your own API.
+// The point of the path split is that api.<domain> stays *the* API host for
+// both audiences. The E2B SDK hardcodes that name, but its control-plane
+// namespaces do not overlap the native ones, so there is no reason to exile
+// sandrpod-cli and the SDKs to a second hostname — the native API is the
+// primary surface, and switching on compatibility for existing E2B users
+// should cost nothing.
 func e2bHostRouter(domain string, gateway, next http.Handler) http.Handler {
 	apiHost := "api." + domain
 	sandboxHost := e2bcompat.EnvdHostPattern(domain)
@@ -115,7 +116,9 @@ func e2bHostRouter(domain string, gateway, next http.Handler) http.Handler {
 		if i := strings.IndexByte(host, ':'); i >= 0 {
 			host = host[:i]
 		}
-		if host == apiHost || sandboxHost.MatchString(host) {
+		toE2B := sandboxHost.MatchString(host) ||
+			(host == apiHost && e2bcompat.IsControlPlanePath(r.URL.Path))
+		if toE2B {
 			gateway.ServeHTTP(w, r)
 			return
 		}
