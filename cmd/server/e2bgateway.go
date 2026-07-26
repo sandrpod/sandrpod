@@ -94,16 +94,28 @@ func (d e2bDeps) portProxy(w http.ResponseWriter, r *http.Request, sandbox strin
 	return true
 }
 
-// e2bHostRouter routes E2B-hostname requests to the gateway and everything else
-// to next (the normal mux).
+// e2bHostRouter routes the two hostname shapes the E2B SDK actually uses to the
+// gateway, and everything else — including every other name under the same
+// domain — to next (the native API).
+//
+// The shapes are exhaustive: api.<domain> is the control plane, and
+// <port>-<sandboxID>.<domain> is envd, the code interpreter, and the generic
+// port proxy. Nothing else is ever addressed.
+//
+// Matching the whole domain instead would hand the E2B compatibility layer
+// every subdomain the deployment has, leaving the native API — which is the
+// primary surface, and what sandrpod-cli and the SDKs talk to — with no
+// hostname at all. Enabling compatibility for existing E2B users must not cost
+// you your own API.
 func e2bHostRouter(domain string, gateway, next http.Handler) http.Handler {
-	suffix := "." + domain
+	apiHost := "api." + domain
+	sandboxHost := e2bcompat.EnvdHostPattern(domain)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host := r.Host
 		if i := strings.IndexByte(host, ':'); i >= 0 {
 			host = host[:i]
 		}
-		if host == "api"+suffix || strings.HasSuffix(host, suffix) {
+		if host == apiHost || sandboxHost.MatchString(host) {
 			gateway.ServeHTTP(w, r)
 			return
 		}

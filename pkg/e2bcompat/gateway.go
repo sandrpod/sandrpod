@@ -288,6 +288,17 @@ func Handler(cfg Config) http.Handler {
 	})
 }
 
+// EnvdHostPattern matches the sandbox hostname shape <port>-<sandboxID>.<domain>.
+// Exported so the host router in front of the gateway can recognise exactly the
+// names the gateway serves, and leave every other name under the domain to the
+// native API. Never nil — an empty domain yields a pattern that matches nothing.
+func EnvdHostPattern(domain string) *regexp.Regexp {
+	if re := envdHostRe(domain); re != nil {
+		return re
+	}
+	return regexp.MustCompile(`$.^`) // matches nothing
+}
+
 // envdHostRe builds a regex matching <port>-<sandboxID>.<domain>, capturing
 // (port, sandboxID). Returns nil when domain is empty.
 func envdHostRe(domain string) *regexp.Regexp {

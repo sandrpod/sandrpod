@@ -43,10 +43,14 @@ services:
       SANDRPOD_E2B_DOMAIN: ${SANDRPOD_DOMAIN:?set SANDRPOD_DOMAIN}
       TZ: Asia/Shanghai
     ports:
-      # Loopback only. Once SANDRPOD_E2B_DOMAIN is set, every host under that
-      # domain belongs to the E2B gateway — the native admin API (/api/v1/*,
-      # token issuance) returns 404 there. Reach it over SSH:
-      #   ssh -L 8080:127.0.0.1:8080 root@<host>
+      # Loopback only, so the native API is reachable on the host but not from
+      # the internet — via SSH: ssh -L 8080:127.0.0.1:8080 root@<host>.
+      #
+      # It does NOT have to be this way: the E2B gateway only claims
+      # api.<domain> and <port>-<sandboxID>.<domain>, so any other name — say
+      # console.<domain>, already covered by the wildcard record — reaches the
+      # native API through the proxy. Drop this binding and use that instead if
+      # sandrpod-cli or the SDKs need to reach you from elsewhere.
       - "127.0.0.1:8080:8080"
     networks: [sandrpod]
     depends_on:
