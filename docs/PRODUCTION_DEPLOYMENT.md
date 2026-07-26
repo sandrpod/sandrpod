@@ -224,25 +224,36 @@ output and incremental `run_code` results arrive as one blob at the end.
 
 ---
 
-## 5. The admin API moves to loopback
+## 5. Two surfaces, one domain
 
-Once `SANDRPOD_E2B_DOMAIN` is set, **every** host under that domain belongs to
-the E2B gateway — including `api.<domain>`. The native API returns 404 there:
+The E2B gateway takes exactly the two hostname shapes the E2B SDK addresses:
 
+| Host | Serves |
+|---|---|
+| `api.<domain>` | the E2B control plane |
+| `<port>-<sandboxID>.<domain>` | envd, the code interpreter, the port proxy |
+
+**Every other name under the domain goes to the native API** — the primary
+surface, and what `sandrpod-cli`, the REST API and the SDKs talk to. Point a
+name at it and use it:
+
+```bash
+export SANDRPOD_API_URL=https://console.<domain>
+export SANDRPOD_API_TOKEN=<admin token>
+sandrpod-cli poder list
 ```
-$ curl -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $SANDRPOD_TOKEN" \
-    https://api.example.com/api/v1/poders
-404
-```
 
-So the production compose binds it to `127.0.0.1:8080` and you reach it from the
-host or over SSH:
+The wildcard record from §2 already covers that name, so there is nothing extra
+to create. Turning on E2B compatibility for existing users costs you nothing on
+your own API.
+
+The native API is token-gated, but it is now reachable from the internet. If you
+would rather keep it off the public network entirely, drop `ports:` from the
+server service in the Compose file and reach it over SSH:
 
 ```bash
 ssh -L 8080:127.0.0.1:8080 root@<host>
 ```
-
-The side effect is desirable: the admin surface is not on the internet at all.
 
 Issue an API key — the E2B SDK validates the shape client-side, so keys are
 `e2b_<hex>` and drop in as `E2B_API_KEY`. Only the hash is stored; the bare key

@@ -8,7 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+- **Enabling the E2B surface no longer takes the whole domain.** The host router
+  matched `*.<domain>` and handed all of it to the compatibility gateway, so
+  with `SANDRPOD_E2B_DOMAIN` set there was no hostname left for the native API —
+  `sandrpod-cli`, the REST API and the SDKs 404'd everywhere under the domain
+  and could only be reached over an SSH tunnel to the loopback port. The gateway
+  now claims exactly the two shapes the E2B SDK addresses, `api.<domain>` and
+  `<port>-<sandboxID>.<domain>`; every other name — `console.<domain>`, say,
+  already covered by the wildcard record — reaches the native API as before.
+  Compatibility for existing E2B users no longer costs you your own API.
 
 ## [0.5.2] — 2026-07
 

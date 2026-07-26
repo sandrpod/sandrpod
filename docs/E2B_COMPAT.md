@@ -66,7 +66,10 @@ E2B_DOMAIN (default e2b.app)
    [MULTI_INSTANCE_DEPLOYMENT.md](MULTI_INSTANCE_DEPLOYMENT.md) Part 4.
 2. Set `SANDRPOD_E2B_DOMAIN=<your-domain>` on the server. This activates the
    host router: `api.<domain>` → control plane,
-   `<port>-<sandboxID>.<domain>` → envd (tunnel → toolbox).
+   `<port>-<sandboxID>.<domain>` → envd (tunnel → toolbox). Those two shapes are
+   all the gateway claims — every other name under the domain still reaches the
+   native API, so `sandrpod-cli` and the SDKs keep working on, say,
+   `console.<domain>`.
 3. Issue an `e2b_<hex>`-shaped key: `sandrpod-cli token create <name>` (see
    [AUTH_AND_KEYS.md](AUTH_AND_KEYS.md)). Point the SDK at your deployment:
 
