@@ -15,6 +15,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   the real binary so what is tested is what a user types. Six commands are
   deliberately out of scope (interactive `shell`, `fs watch`, `snapshot`, `mcp`,
   `config`, `job get`) and the run says so rather than quietly omitting them.
+  The sandbox it creates is torn down in a `finally`, so an interrupted run —
+  Ctrl-C, or piping the output through `head` — does not leave one running.
 
 ### Fixed
 - **`sandrpod-cli fs ls` takes its path positionally**, like every other `fs`

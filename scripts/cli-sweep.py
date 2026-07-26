@@ -179,6 +179,8 @@ def main():
     # ---------- teardown ----------
     check("lifecycle", "stop")(lambda: cli("stop", SB, timeout=180) or "stopped")
     check("lifecycle", "start")(lambda: cli("start", SB, timeout=300) or "started")
+    # Also the teardown — cleanup() re-runs it in a finally, which is a no-op
+    # once the sandbox is gone.
     check("lifecycle", "delete")(lambda: cli("delete", SB, timeout=180) or "deleted")
 
     # ---------- deliberately not covered ----------
@@ -201,15 +203,30 @@ def report():
     print("=" * 92 + "\n")
 
 
+def cleanup():
+    """Delete the sweep's sandbox however the run ends.
+
+    This has to be a finally, not an except: the first version cleaned up only
+    on exception and left a sandbox running whenever the process was killed —
+    Ctrl-C, or just piping the output through `head`, which closes the pipe and
+    takes the script with it. A script that creates billable resources cannot
+    leave them behind on the paths it did not think of.
+    """
+    subprocess.run(["sandrpod-cli", "delete", SB], capture_output=True, timeout=120)
+
+
 if __name__ == "__main__":
+    failed = False
     try:
         main()
     except Exception:
         import traceback
         traceback.print_exc()
-        try:
-            subprocess.run(["sandrpod-cli", "delete", SB], capture_output=True, timeout=120)
-        except Exception:
-            pass
         report()
-        sys.exit(1)
+        failed = True
+    finally:
+        try:
+            cleanup()
+        except Exception as e:
+            print(f"\ncleanup failed, delete {SB} by hand: {e}", file=sys.stderr)
+    sys.exit(1 if failed else 0)
