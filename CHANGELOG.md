@@ -8,7 +8,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+- **`scripts/cli-sweep.py`** — an acceptance sweep for `sandrpod-cli` against a
+  live deployment: 32 checks across server, tokens, lifecycle, exec, the
+  stateful kernel, sessions, the filesystem and port previews, shelling out to
+  the real binary so what is tested is what a user types. Six commands are
+  deliberately out of scope (interactive `shell`, `fs watch`, `snapshot`, `mcp`,
+  `config`, `job get`) and the run says so rather than quietly omitting them.
+
 ### Fixed
+- **`sandrpod-cli fs ls` takes its path positionally**, like every other `fs`
+  subcommand (`fs cat NAME PATH`, `fs mkdir NAME PATH`, …). It was the one that
+  required `--path`, so the obvious `fs ls my-sandbox /workspace` failed with a
+  usage error. `--path` still works.
 - **Enabling the E2B surface no longer takes the whole domain.** The host router
   matched `*.<domain>` and handed all of it to the compatibility gateway, so
   with `SANDRPOD_E2B_DOMAIN` set there was no hostname left for the native API —
