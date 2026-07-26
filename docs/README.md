@@ -15,6 +15,7 @@ grouped below. Docs marked **(中文)** are written in Chinese.
 
 | Doc | What it covers |
 |---|---|
+| [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md) | **The reference production deployment**: one host, PostgreSQL, wildcard TLS, the E2B surface on — with the acceptance sweep that says it works |
 | [MULTI_INSTANCE_DEPLOYMENT.md](MULTI_INSTANCE_DEPLOYMENT.md) | N server instances behind a load balancer with shared PostgreSQL; cross-node tunnel routing |
 | [SCALING.md](SCALING.md) | Capacity model: what actually limits a deployment and when to go multi-instance |
 | [UPGRADING.md](UPGRADING.md) | In-place upgrades: compatibility policy, additive schema migration, rollback |

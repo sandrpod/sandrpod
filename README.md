@@ -210,7 +210,8 @@ print(Sandbox.create().commands.run("echo hello from SandrPod").stdout)
 
 <details><summary>Other ways to run it</summary>
 
-- **PostgreSQL** (production / multi-instance backend): `docker compose -f docker/docker-compose.pg.yml up -d` — see [docs/MULTI_INSTANCE_DEPLOYMENT.md](docs/MULTI_INSTANCE_DEPLOYMENT.md) to scale out.
+- **Production, with TLS and a real domain** — the reference deployment: PostgreSQL, a wildcard certificate, and the E2B surface on. `docker compose -f docker/docker-compose.prod.yml up -d --wait`, walked through end to end (DNS, certificate, renewal, acceptance sweep) in **[docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)**.
+- **PostgreSQL only** (no TLS termination): `docker compose -f docker/docker-compose.pg.yml up -d` — see [docs/MULTI_INSTANCE_DEPLOYMENT.md](docs/MULTI_INSTANCE_DEPLOYMENT.md) to scale out.
 - **Build from source** (contributors): `docker compose -f docker/docker-compose.local.yml up -d --build`
 - **From Go directly**: `go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db`, then add a worker with the `docker run …/poder` one-liner or `go run ./cmd/poder -api-url=http://localhost:8080`.
 - **No Docker at all** — turn any machine into a sandbox: `go run ./cmd/agent -api-url=http://localhost:8080 -name=my-machine`
