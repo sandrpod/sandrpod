@@ -288,6 +288,31 @@ func Handler(cfg Config) http.Handler {
 	})
 }
 
+// controlPlaneNamespaces are the top-level path segments the E2B SDK addresses
+// on api.<domain>. Taken from the SDK's generated client: sandboxes, templates,
+// snapshots and volumes, each optionally behind a /vN prefix.
+//
+// None of them collide with the native API, which lives under /api/v1 plus
+// /console, /health, /metrics and /ws — so both surfaces can share the one
+// hostname, and callers do not have to learn a second one just because E2B
+// compatibility is switched on. (/health looks like a collision but is not: the
+// SDK only ever probes it on the *envd* host, never here.)
+var controlPlaneNamespaces = []string{"/sandboxes", "/templates", "/snapshots", "/volumes"}
+
+var versionPrefix = regexp.MustCompile(`^/v\d+`)
+
+// IsControlPlanePath reports whether a request to api.<domain> belongs to the
+// E2B control plane rather than to the native API.
+func IsControlPlanePath(p string) bool {
+	p = versionPrefix.ReplaceAllString(p, "")
+	for _, ns := range controlPlaneNamespaces {
+		if p == ns || strings.HasPrefix(p, ns+"/") {
+			return true
+		}
+	}
+	return false
+}
+
 // EnvdHostPattern matches the sandbox hostname shape <port>-<sandboxID>.<domain>.
 // Exported so the host router in front of the gateway can recognise exactly the
 // names the gateway serves, and leave every other name under the domain to the

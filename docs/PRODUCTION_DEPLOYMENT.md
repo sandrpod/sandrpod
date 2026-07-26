@@ -224,32 +224,35 @@ output and incremental `run_code` results arrive as one blob at the end.
 
 ---
 
-## 5. Two surfaces, one domain
+## 5. Two surfaces, one hostname
 
-The E2B gateway takes exactly the two hostname shapes the E2B SDK addresses:
+`api.<domain>` serves both. The E2B SDK hardcodes that name, but its
+control-plane namespaces do not overlap the native API's, so the split is by
+path and nobody has to learn a second hostname:
 
-| Host | Serves |
+| On `api.<domain>` | Goes to |
 |---|---|
-| `api.<domain>` | the E2B control plane |
-| `<port>-<sandboxID>.<domain>` | envd, the code interpreter, the port proxy |
+| `/sandboxes`, `/templates`, `/snapshots`, `/volumes` (and `/vN` forms) | E2B control plane |
+| `/api/v1/*`, `/health`, `/metrics`, `/console`, `/ws/*` | native API |
 
-**Every other name under the domain goes to the native API** — the primary
-surface, and what `sandrpod-cli`, the REST API and the SDKs talk to. Point a
-name at it and use it:
+`<port>-<sandboxID>.<domain>` belongs to the gateway whole — envd, the code
+interpreter, and the generic port proxy.
+
+So `sandrpod-cli` and the SDKs keep working exactly as they did before
+compatibility was switched on:
 
 ```bash
-export SANDRPOD_API_URL=https://console.<domain>
+export SANDRPOD_API_URL=https://api.<domain>
 export SANDRPOD_API_TOKEN=<admin token>
 sandrpod-cli poder list
 ```
 
-The wildcard record from §2 already covers that name, so there is nothing extra
-to create. Turning on E2B compatibility for existing users costs you nothing on
-your own API.
+(`/health` looks like it should collide and does not: the E2B SDK only ever
+probes it on the envd host, never here — so `api.<domain>/health` stays the
+native version probe.)
 
-The native API is token-gated, but it is now reachable from the internet. If you
-would rather keep it off the public network entirely, drop `ports:` from the
-server service in the Compose file and reach it over SSH:
+The native API is token-gated but reachable from the internet. To keep it off
+the public network, drop `ports:` from the server service and reach it over SSH:
 
 ```bash
 ssh -L 8080:127.0.0.1:8080 root@<host>
