@@ -60,8 +60,10 @@ E2B_DOMAIN (default e2b.app)
 1. **Wildcard DNS + TLS** for `*.<your-domain>` pointing at the server (or a
    TLS-terminating proxy in front of it). A full walkthrough — including a
    Caddy config with wildcard certificates — is in
-   [MULTI_INSTANCE_DEPLOYMENT.md](MULTI_INSTANCE_DEPLOYMENT.md) Part 4; it
-   works the same on a single instance.
+   [PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md) — a single-host
+   deployment from an empty server, including the acceptance sweep. Multiple
+   instances behind a load balancer:
+   [MULTI_INSTANCE_DEPLOYMENT.md](MULTI_INSTANCE_DEPLOYMENT.md) Part 4.
 2. Set `SANDRPOD_E2B_DOMAIN=<your-domain>` on the server. This activates the
    host router: `api.<domain>` → control plane,
    `<port>-<sandboxID>.<domain>` → envd (tunnel → toolbox).

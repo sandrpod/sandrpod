@@ -1,0 +1,29 @@
+{
+	# lego owns the certificate. Let's Encrypt only issues wildcards through the
+	# DNS-01 challenge, which Caddy's built-in ACME (HTTP-01) cannot do.
+	auto_https off
+	admin off
+}
+
+# One site block serves every hostname: api.<domain> plus the
+# <port>-<sandboxID>.<domain> names that only exist once a sandbox does.
+# A wildcard certificate is valid for all of them, so there is nothing to
+# enumerate here.
+:443 {
+	tls /certs/{$SANDRPOD_DOMAIN}.crt /certs/{$SANDRPOD_DOMAIN}.key
+
+	reverse_proxy sandrpod-server:8080 {
+		# Caddy forwards the original Host header by default, and that header IS
+		# the routing mechanism — the backend decides control plane vs. which
+		# sandbox from it. On nginx you must write `proxy_set_header Host $host`
+		# explicitly or every sandbox URL silently stops resolving.
+
+		# Streamed command output and incremental run_code results must not be
+		# buffered on the way back.
+		flush_interval -1
+	}
+}
+
+:80 {
+	redir https://{host}{uri} permanent
+}

@@ -1,0 +1,110 @@
+# Copyright 2026 SandrPod Contributors
+# Reference production deployment: PostgreSQL + control plane + worker + a TLS
+# proxy terminating a wildcard certificate, with the E2B-compatible surface on.
+#
+#   export SANDRPOD_DOMAIN=example.com
+#   docker compose -f docker/docker-compose.prod.yml up -d --wait
+#
+# Full walkthrough — DNS records, the wildcard certificate, renewal, and the
+# verification sweep — in docs/PRODUCTION_DEPLOYMENT.md. Scaling past one host:
+# docs/MULTI_INSTANCE_DEPLOYMENT.md.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: sandrpod-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sandrpod
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: sandrpod
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [sandrpod]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandrpod -d sandrpod"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    image: ghcr.io/sandrpod/server:v0.5.2
+    container_name: sandrpod-server
+    restart: unless-stopped
+    command:
+      - "-port=8080"
+      - "-db=postgres://sandrpod:${POSTGRES_PASSWORD}@postgres:5432/sandrpod?sslmode=disable"
+    environment:
+      # Admin token. Empty means every request runs as an anonymous admin —
+      # survivable on a laptop, catastrophic on a public IP. `:?` refuses to boot.
+      SANDRPOD_TOKEN: ${SANDRPOD_TOKEN:?set SANDRPOD_TOKEN}
+      # Turns on the E2B host router:
+      #   api.<domain>                    -> control plane
+      #   <port>-<sandboxID>.<domain>     -> tunnel -> toolbox (envd) in the sandbox
+      SANDRPOD_E2B_DOMAIN: ${SANDRPOD_DOMAIN:?set SANDRPOD_DOMAIN}
+      TZ: Asia/Shanghai
+    ports:
+      # Loopback only. Once SANDRPOD_E2B_DOMAIN is set, every host under that
+      # domain belongs to the E2B gateway — the native admin API (/api/v1/*,
+      # token issuance) returns 404 there. Reach it over SSH:
+      #   ssh -L 8080:127.0.0.1:8080 root@<host>
+      - "127.0.0.1:8080:8080"
+    networks: [sandrpod]
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 3s
+
+  poder:
+    image: ghcr.io/sandrpod/poder:v0.5.2
+    container_name: sandrpod-poder
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      API_URL: http://server:8080
+      SANDRPOD_TOKEN: ${SANDRPOD_TOKEN:?set SANDRPOD_TOKEN}
+      # Must be `local`. The E2B gateway schedules the local substrate as
+      # provider=local / region=local; a worker registered under a datacentre
+      # name is filtered out and create() fails with "no available local poder".
+      # Set SANDRPOD_E2B_PROVIDER instead to provision real cloud VMs.
+      REGION: ${REGION:-local}
+      PROVIDER_TYPE: local
+      # Sandbox containers must land on the worker's network so it can reach
+      # their toolbox. This string goes straight to the Docker API, so it must
+      # be the network's REAL name — hence `name:` pinned below. Get it wrong
+      # and sandboxes are created fine but every exec hangs.
+      SANDRPOD_NETWORK: sandrpod
+      SANDRPOD_TOOLBOX_IMAGE: ${SANDRPOD_TOOLBOX_IMAGE:-ghcr.io/sandrpod/toolbox:v0.5.2}
+      TZ: Asia/Shanghai
+    networks: [sandrpod]
+    depends_on:
+      server: {condition: service_healthy}
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: sandrpod-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SANDRPOD_DOMAIN: ${SANDRPOD_DOMAIN:?set SANDRPOD_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - /etc/lego/certificates:/certs:ro   # the wildcard cert lego issued
+      - caddy-data:/data
+    networks: [sandrpod]
+    depends_on:
+      server: {condition: service_healthy}
+
+volumes:
+  pgdata:
+  caddy-data:
+
+networks:
+  sandrpod:
+    name: sandrpod     # pinned; see SANDRPOD_NETWORK above

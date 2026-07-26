@@ -198,7 +198,8 @@ print(Sandbox.create().commands.run("echo hello from SandrPod").stdout)
 
 <details><summary>其它启动方式</summary>
 
-- **PostgreSQL**（生产 / 多实例后端）：`docker compose -f docker/docker-compose.pg.yml up -d` —— 横向扩展见 [docs/MULTI_INSTANCE_DEPLOYMENT.md](docs/MULTI_INSTANCE_DEPLOYMENT.md)。
+- **生产部署（带 TLS 和真实域名）** —— 基准形态：PostgreSQL + 通配证书 + 打开 E2B 接口。`docker compose -f docker/docker-compose.prod.yml up -d --wait`，从空机器起步的完整过程（DNS、证书、续期、验收扫描）见 **[docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)**。
+- **仅 PostgreSQL**（不含 TLS 终结）：`docker compose -f docker/docker-compose.pg.yml up -d` —— 横向扩展见 [docs/MULTI_INSTANCE_DEPLOYMENT.md](docs/MULTI_INSTANCE_DEPLOYMENT.md)。
 - **从源码构建**（贡献者）：`docker compose -f docker/docker-compose.local.yml up -d --build`
 - **直接跑 Go**：`go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db`，再用上面的 `docker run …/poder` 一行命令或 `go run ./cmd/poder -api-url=http://localhost:8080` 加一个 worker。
 - **完全不用 Docker** —— 把任意机器变成沙箱：`go run ./cmd/agent -api-url=http://localhost:8080 -name=my-machine`
