@@ -26,7 +26,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 - **`sandrpod-cli fs ls` takes its path positionally**, like every other `fs`
   subcommand (`fs cat NAME PATH`, `fs mkdir NAME PATH`, …). It was the one that
   required `--path`, so the obvious `fs ls my-sandbox /workspace` failed with a
-  usage error. `--path` still works.
+  usage error. `--path` still works. Released to PyPI as `sandrpod-cli` 0.2.5.
 - **Enabling the E2B surface no longer takes the whole domain.** The host router
   matched `*.<domain>` and handed all of it to the compatibility gateway, so
   with `SANDRPOD_E2B_DOMAIN` set there was no hostname left for the native API —
