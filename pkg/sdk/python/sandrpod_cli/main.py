@@ -677,13 +677,19 @@ def fs_group(ctx):
 
 @fs_group.command(name="ls")
 @click.argument("name")
-@click.option("--path", default="", help="Directory path")
+# Positional, like every other fs subcommand — `fs cat NAME PATH`,
+# `fs mkdir NAME PATH`, and so on. ls used to be the one that demanded --path,
+# so `fs ls sb /workspace` (the obvious thing to type) failed with a usage
+# error. --path still works for anyone who scripted against it.
+@click.argument("path", required=False, default=None)
+@click.option("--path", "path_opt", default=None, help="Directory path (deprecated: pass it positionally)")
 @click.pass_context
-def fs_ls(ctx, name, path):
+def fs_ls(ctx, name, path, path_opt):
     """List directory contents"""
     client = ctx.parent.parent.obj["client"]
+    target = path if path is not None else (path_opt or "")
     try:
-        result = client.list_files(name, path if path else "")
+        result = client.list_files(name, target)
         files = result.get("files", [])
         if not files:
             click.echo("(empty)")
