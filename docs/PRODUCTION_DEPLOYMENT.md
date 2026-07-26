@@ -25,9 +25,12 @@ Capacity model: [SCALING.md](SCALING.md). Upgrades:
   credentials for yours.
 - Nothing else. Docker is step 1.
 
-Files referenced here live in the repo:
+The Compose file and reverse-proxy config live here:
 [`docker/docker-compose.prod.yml`](../docker/docker-compose.prod.yml) and
-[`docker/Caddyfile`](../docker/Caddyfile).
+[`docker/Caddyfile`](../docker/Caddyfile). The rest of what this walkthrough
+runs — the Docker install, the DNS client, the certificate and deploy scripts,
+the renewal units, and both acceptance sweeps — is in a
+[companion repo](https://github.com/ChangjunZhao/examples/tree/main/example/e2b-compatible) you can clone and run.
 
 ---
 
@@ -283,8 +286,15 @@ Protocol detail, config, and the debug (no-DNS, no-TLS) alternative:
 
 ## 7. Verify
 
-Two sweeps are the acceptance test for a deployment. Both are in the repo's
-companion material and take about a minute.
+Two sweeps are the acceptance test for a deployment. Both are in the
+[companion repo](https://github.com/ChangjunZhao/examples/tree/main/example/e2b-compatible) and take about a minute:
+
+```bash
+pip install e2b e2b-code-interpreter
+export E2B_DOMAIN=example.com E2B_API_KEY=e2b_…
+python e2b_sweep.py        # core surface
+python e2b_sweep_code.py   # code interpreter
+```
 
 | Group | Result |
 |---|---|
