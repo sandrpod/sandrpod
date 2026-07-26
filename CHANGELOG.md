@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 _Nothing yet._
 
+## [0.5.1] — 2026-07
+
+### Fixed
+- **The Poder now negotiates the Docker API version with the daemon**
+  instead of demanding whatever version its SDK was built against. Against
+  any daemon older than the SDK (Docker 25.x and earlier report a maximum
+  of API 1.45, while the vendored SDK speaks 1.51) every call failed with
+  `client version 1.51 is too new`, so the Poder connected and heartbeated
+  but could never list or create a sandbox. `DOCKER_API_VERSION` still
+  overrides the negotiated value when it is set.
+
 ## [0.5.0] — 2026-07
 
 ### Security

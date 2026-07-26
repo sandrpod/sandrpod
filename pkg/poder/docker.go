@@ -36,7 +36,12 @@ type DockerPoder struct {
 // it falls back to the SANDRPOD_NETWORK environment variable. If still empty,
 // no network is specified and containers use Docker's default bridge network.
 func NewDockerPoder(region, networkName string) (*DockerPoder, error) {
-	dockerClient, err := client.NewClientWithOpts(client.FromEnv)
+	// WithAPIVersionNegotiation pings the daemon and downgrades to the highest
+	// API version it actually supports. Without it the SDK sends whatever
+	// version it was compiled against, and any daemon older than that rejects
+	// every call with "client version X is too new". DOCKER_API_VERSION still
+	// wins if set — FromEnv marks it a manual override and skips negotiation.
+	dockerClient, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker client: %w", err)
 	}
