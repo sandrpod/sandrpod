@@ -24,6 +24,8 @@ RESULTS = []
 LABEL = "sandrpod-cli against a live deployment"
 _LAST_GROUP = [None]
 SB = "clisweep-" + uuid.uuid4().hex[:8]
+# Fixed, so repeated runs overwrite one image rather than piling them up.
+SNAPSHOT_TAG = "sandrpod-snapshot/cli-sweep:latest"
 
 
 def cli(*args, timeout=120, check=True):
@@ -176,20 +178,169 @@ def main():
         time.sleep(3)
         return cli("preview", SB, "8000", "index.html").strip()[:60]
 
+    # ---------- the awkward ones ----------
+    # None of these are untestable; they just need more than a subprocess call.
+
+    @check("async", "create --no-wait / job get")
+    def _job():
+        name = SB + "-async"
+        out = cli("create", name, "--provider", "local", "--no-wait", timeout=60)
+        m = re.search(r"(job-[\w-]+)", out)
+        if not m:
+            raise RuntimeError(f"no job id in output: {out.strip()[:80]}")
+        jid = m.group(1)
+        try:
+            state = ""
+            for _ in range(40):                       # the job is async by definition
+                state = cli("job", "get", jid)
+                if re.search(r"COMPLETED|SUCCEEDED|FAILED", state):
+                    break
+                time.sleep(3)
+            return f"{jid[:24]} → {' '.join(state.split()[:4])}"
+        finally:
+            subprocess.run(["sandrpod-cli", "delete", name], capture_output=True, timeout=180)
+
+    @check("interactive", "shell (PTY over WebSocket)")
+    def _shell():
+        """Drive the real PTY. `shell` needs a terminal, so give it one."""
+        try:
+            import websocket  # noqa: F401  — the [shell] extra
+        except ImportError:
+            raise RuntimeError("needs the [shell] extra: pip install 'sandrpod-cli[shell]'")
+        import pty
+        pid, fd = pty.fork()
+        if pid == 0:                                   # child: become the CLI
+            os.execvp("sandrpod-cli", ["sandrpod-cli", "shell", SB])
+        import select
+        seen, sent = b"", False
+        try:
+            deadline = time.time() + 30
+            while time.time() < deadline and b"shell-works-42" not in seen:
+                if select.select([fd], [], [], 0.5)[0]:
+                    try:
+                        seen += os.read(fd, 4096)
+                    except OSError:
+                        break
+                # Wait for the banner before typing: the websocket handshake is
+                # still in flight until then and anything sent early is dropped.
+                if not sent and b"Connected" in seen:
+                    time.sleep(1.5)
+                    os.write(fd, b"echo shell-works-$((6*7))\n")
+                    sent = True
+            os.write(fd, b"\x1d")                      # Ctrl-] quits
+            time.sleep(0.5)
+        finally:
+            os.close(fd)
+            try:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+        if b"shell-works-42" not in seen:
+            raise RuntimeError(f"no echo back in {len(seen)}B: {seen[-90:]!r}")
+        return f"interactive echo returned, {len(seen)}B of PTY traffic"
+
+    @check("interactive", "fs watch (streams until killed)")
+    def _watch():
+        """Runs forever by design — so read a few events, then stop it."""
+        p = subprocess.Popen(["sandrpod-cli", "fs", "watch", SB, "/workspace"],
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        try:
+            time.sleep(3)
+            cli("fs", "write", SB, "/workspace/watched.txt", "trigger")
+            time.sleep(4)
+            p.terminate()
+            out = p.communicate(timeout=15)[0]
+        finally:
+            if p.poll() is None:
+                p.kill()
+        if "watched.txt" not in out:
+            raise RuntimeError(f"event never arrived: {out.strip()[-90:]!r}")
+        return f"saw watched.txt in {len(out.splitlines())} lines of events"
+
+    @check("images", "snapshot")
+    def _snap():
+        """Commits an image on the *worker's* daemon, which this client cannot
+        reach — so there is nothing to delete from here.
+
+        A fixed tag keeps that bounded: every run overwrites the same image
+        instead of leaving one more behind. The teardown message says how to
+        drop it, because a check that quietly accumulates disk on someone
+        else's host is worse than one that is skipped.
+        """
+        out = cli("snapshot", SB, "--image", SNAPSHOT_TAG, timeout=300)
+        return f"{out.strip().splitlines()[-1][:56]} (on the worker)"
+
+    @check("config", "set-url / set-token / view / unset-token")
+    def _config():
+        """Point HOME at a scratch dir so the real config is never touched.
+
+        The config path is Path.home()-derived with no override, so HOME is the
+        only lever. Carry the user site-packages across on PYTHONPATH — moving
+        HOME also moves that, and without it the CLI cannot even import its own
+        dependencies, which would make this a test of the environment rather
+        than of the command.
+        """
+        import site
+        import tempfile
+        user_site = site.getusersitepackages()
+        with tempfile.TemporaryDirectory() as home:
+            env = {**os.environ, "HOME": home,
+                   "PYTHONPATH": os.pathsep.join(
+                       filter(None, [user_site, os.environ.get("PYTHONPATH", "")]))}
+            # The env vars win over the stored config — correctly — so drop them
+            # here or `view` reports them and the file is never exercised.
+            env.pop("SANDRPOD_API_URL", None)
+            env.pop("SANDRPOD_API_TOKEN", None)
+            def c(*a):
+                r = subprocess.run(["sandrpod-cli", "config", *a],
+                                   capture_output=True, text=True, env=env, timeout=60)
+                if r.returncode:
+                    raise RuntimeError(f"config {a[0]}: {(r.stderr or r.stdout).strip()[:80]}")
+                return r.stdout
+            c("set-url", "https://config-probe.example.com")
+            c("set-token", "e2b_" + "a" * 40)
+            view = c("view")
+            if "config-probe.example.com" not in view:
+                raise RuntimeError(f"url not persisted: {view.strip()[:80]}")
+            leaked = "a" * 40 in view          # a stored token must not print in full
+            c("unset-token")
+            after = c("view")
+            return f"url persisted, token shown in full={leaked}, cleared={'a'*40 not in after}"
+
+    @check("mcp", "add / ls / tools / url / rm")
+    def _mcp():
+        """Register a real stdio MCP server inside the sandbox and query it."""
+        server = (
+            "import json,sys\n"
+            "def send(o): sys.stdout.write(json.dumps(o)+chr(10)); sys.stdout.flush()\n"
+            "for line in sys.stdin:\n"
+            "    r = json.loads(line)\n"
+            "    m, i = r.get('method'), r.get('id')\n"
+            "    if m == 'initialize':\n"
+            "        send({'jsonrpc':'2.0','id':i,'result':{'protocolVersion':'2024-11-05',"
+            "'capabilities':{'tools':{}},'serverInfo':{'name':'probe','version':'0'}}})\n"
+            "    elif m == 'tools/list':\n"
+            "        send({'jsonrpc':'2.0','id':i,'result':{'tools':[{'name':'ping',"
+            "'description':'probe','inputSchema':{'type':'object'}}]}})\n"
+            "    elif i is not None:\n"
+            "        send({'jsonrpc':'2.0','id':i,'result':{}})\n")
+        cli("fs", "write", SB, "/workspace/probe_mcp.py", server)
+        cli("mcp", "add", SB, "probe", "python3 /workspace/probe_mcp.py", timeout=180)
+        listed = "probe" in cli("mcp", "ls", SB)
+        url = cli("mcp", "url", SB).strip().splitlines()[0][:44]
+        tools = cli("mcp", "tools", SB, timeout=180)
+        cli("mcp", "rm", SB, "probe")
+        gone = "probe" not in cli("mcp", "ls", SB)
+        saw_tool = "ping" in tools or "probe" in tools
+        return f"listed={listed}, tools reported={saw_tool}, removed={gone}"
+
     # ---------- teardown ----------
     check("lifecycle", "stop")(lambda: cli("stop", SB, timeout=180) or "stopped")
     check("lifecycle", "start")(lambda: cli("start", SB, timeout=300) or "started")
     # Also the teardown — cleanup() re-runs it in a finally, which is a no-op
     # once the sandbox is gone.
     check("lifecycle", "delete")(lambda: cli("delete", SB, timeout=180) or "deleted")
-
-    # ---------- deliberately not covered ----------
-    skip("skipped", "shell", "interactive PTY; needs a terminal")
-    skip("skipped", "fs watch", "runs until Ctrl-C by design")
-    skip("skipped", "snapshot", "commits a docker image; leaves state behind")
-    skip("skipped", "mcp (5 cmds)", "needs an MCP server configured")
-    skip("skipped", "config (4 cmds)", "mutates ~/.sandrpod config on this machine")
-    skip("skipped", "job get", "only meaningful for --no-wait creates")
 
     report()
 
@@ -200,7 +351,11 @@ def report():
     skipped = sum(1 for r in RESULTS if r[2] is None)
     print("\n" + "=" * 92)
     print(f"  {LABEL} — {ok}/{ran} passed, {skipped} skipped")
-    print("=" * 92 + "\n")
+    print("=" * 92)
+    if any(r[0] == "images" and r[2] for r in RESULTS):
+        print(f"\n  the snapshot check left an image on the worker; to drop it:\n"
+              f"    docker rmi {SNAPSHOT_TAG}")
+    print()
 
 
 def cleanup():

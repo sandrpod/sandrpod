@@ -10,13 +10,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 - **`scripts/cli-sweep.py`** — an acceptance sweep for `sandrpod-cli` against a
-  live deployment: 32 checks across server, tokens, lifecycle, exec, the
-  stateful kernel, sessions, the filesystem and port previews, shelling out to
-  the real binary so what is tested is what a user types. Six commands are
-  deliberately out of scope (interactive `shell`, `fs watch`, `snapshot`, `mcp`,
-  `config`, `job get`) and the run says so rather than quietly omitting them.
-  The sandbox it creates is torn down in a `finally`, so an interrupted run —
-  Ctrl-C, or piping the output through `head` — does not leave one running.
+  live deployment, shelling out to the real binary so what is tested is what a
+  user types. Six commands are
+  38 checks over server, tokens, lifecycle, exec, the stateful kernel,
+  sessions, the filesystem, port previews, async jobs, the interactive PTY,
+  directory watching, snapshots, MCP and local config — the whole command
+  surface bar nothing. The sandbox it creates is torn down in a `finally`, so
+  an interrupted run — Ctrl-C, or piping the output through `head` — does not
+  leave one running, and `snapshot` writes a fixed tag so repeated runs
+  overwrite one image instead of accumulating them on the worker.
 
 ### Fixed
 - **`sandrpod-cli fs ls` takes its path positionally**, like every other `fs`
