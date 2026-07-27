@@ -23,6 +23,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   overwrite one image instead of accumulating them on the worker.
 
 ### Fixed
+- **The sandbox image carries GNU grep and findutils**, not just BusyBox's.
+  Agent frameworks build GNU-flavoured commands: deepagents' default sandbox
+  backend greps with `grep -rHnFZ`, BusyBox rejects `-Z`, and the command is
+  wrapped in `2>/dev/null || true` — so the failure was silent and the agent was
+  told the file contained nothing rather than that grep had broken. A wrong
+  answer delivered confidently is worse than an error.
+- **A missing working directory says so.** `os/exec` reports an absent `Dir` as
+  ENOENT against the *binary*, so starting a process with a `cwd` that does not
+  exist failed with `fork/exec /bin/bash: no such file or directory` — sending
+  you to look for a shell that was right there. Now: `working directory
+  "/home/user" is not usable: …`. Reached easily: an agent framework whose
+  default workdir is `/home/user` hits it on its first call.
 - **`sandrpod-cli fs ls` takes its path positionally**, like every other `fs`
   subcommand (`fs cat NAME PATH`, `fs mkdir NAME PATH`, …). It was the one that
   required `--path`, so the obvious `fs ls my-sandbox /workspace` failed with a

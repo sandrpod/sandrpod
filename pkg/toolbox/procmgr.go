@@ -12,6 +12,7 @@
 package toolbox
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -125,6 +126,17 @@ func (m *ProcManager) Start(cfg ProcStartConfig) (uint32, error) {
 	cwd := cfg.Cwd
 	if cwd == "" {
 		cwd = defaultWorkDir()
+	}
+	// Check the working directory before handing it to os/exec. A missing Dir
+	// makes exec fail with ENOENT naming the *binary*, so the caller is told
+	// "fork/exec /bin/bash: no such file or directory" and goes looking for a
+	// shell that is right there — the directory is what is missing. Common
+	// enough to be worth the stat: an agent framework whose default workdir
+	// (/home/user) does not exist in this image hits it on its first call.
+	if fi, err := os.Stat(cwd); err != nil {
+		return 0, fmt.Errorf("working directory %q is not usable: %w", cwd, err)
+	} else if !fi.IsDir() {
+		return 0, fmt.Errorf("working directory %q is not a directory", cwd)
 	}
 	cmd := exec.Command(cfg.Cmd, cfg.Args...)
 	cmd.Dir = cwd
