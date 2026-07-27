@@ -8,6 +8,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.5.3] — 2026-07
+
+Everything here was found by running real clients against a real deployment —
+the unmodified E2B SDK over wildcard TLS, `sandrpod-cli` end to end, and
+deepagents through both of its integration paths. None of it showed up in unit
+tests, and three of the four failed *silently*, returning something that looked
+like an answer.
+
 ### Added
 - **`scripts/cli-sweep.py`** — an acceptance sweep for `sandrpod-cli` against a
   live deployment, shelling out to the real binary so what is tested is what a
