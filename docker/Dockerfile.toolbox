@@ -26,7 +26,12 @@ FROM alpine:3.24
 # npx-based MCP servers (and the `mcp-remote` shim for remote HTTP servers).
 # jq lets in-sandbox agents safely read-modify-write mcp.json (see the
 # register-mcp skill). python3/bash/git/curl support code execution.
-RUN apk add --no-cache ca-certificates tzdata python3 nodejs npm bash git curl jq
+# GNU grep, not BusyBox's. Agent frameworks build grep commands with GNU flags
+# — deepagents' default backend runs `grep -rHnFZ`, and BusyBox rejects -Z. The
+# command is wrapped in `2>/dev/null || true`, so the failure is silent: the
+# agent is told the file contains nothing rather than that grep broke.
+# findutils for the same reason (`find -printf`).
+RUN apk add --no-cache ca-certificates tzdata python3 nodejs npm bash git curl jq grep findutils
 
 # Data-science stack for `run_code` (chart output + DataFrames). Installed as
 # three separate layers (numpy → matplotlib → pandas) rather than one, so each
