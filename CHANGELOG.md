@@ -10,6 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 _Nothing yet._
 
+## [0.5.4] — 2026-07
+
+### Fixed
+- **The tray leaked a file descriptor pair every ten seconds.** Its MCP admin
+  client built a fresh `http.Transport` per call, and a discarded Transport does
+  not close the idle connections left in its pool — the garbage collector will
+  not do it for you. The menu refreshes on a ten-second ticker, so this cost
+  ~8,600 descriptors a day on each side. Observed in the wild after 6 days 19
+  hours: 34,315 descriptors held by the tray and 34,314 by the agent, 57% of the
+  machine's file table between them, which starved unrelated software — Docker
+  could no longer open files for bind mounts, and containers reported imports as
+  missing rather than as failures. The client is now a single instance for the
+  process, with a bounded idle pool. The agent side was never at fault: it
+  releases its half as soon as the peer goes away.
+
 ## [0.5.3] — 2026-07
 
 Everything here was found by running real clients against a real deployment —
