@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+_Nothing yet._
+
+## [0.5.5] — 2026-08
+
+The second half of the leak 0.5.4 started on: same mistake, different resource,
+and this one shows up in none of the places that caught the first.
+
 ### Fixed
 - **The tunnel leaked a yamux stream per completed streaming request.**
   `StreamClient()` built a fresh `http.Transport` on every call and both call
@@ -19,6 +26,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   `lsof`, so the signals that caught the tray bug would never have shown this
   one. Watch goroutine count and RSS on a long-uptime server instead. Reported
   in #28.
+
+### Changed
+- CI checks `gofmt`. Four files had been unformatted for an unknown length of
+  time — `vet`, `build` and `test` have no opinion about formatting, so nothing
+  was going to report it.
 
 ## [0.5.4] — 2026-07
 
