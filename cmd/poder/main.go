@@ -854,20 +854,28 @@ func getKernelVersion() string {
 	return line
 }
 
-func getHostUsage() (cpuUsage, memUsage float64) {
-	client := &http.Client{
-		Timeout: 5 * time.Second,
-		Transport: &http.Transport{
-			Dial: func(proto, addr string) (net.Conn, error) {
-				return net.Dial("unix", "/var/run/docker.sock")
-			},
+// dockerSockClient talks to the local Docker socket. One for the process: an
+// http.Transport owns a connection pool, and building one per call is the shape
+// that leaked a descriptor every ten seconds in the tray and a yamux stream per
+// request in the tunnel. This particular caller happened to escape that — it
+// never reads the response body, so Go closes the connection instead of pooling
+// it — but that is a property of the caller, not of the pattern, and it stops
+// being true the moment someone decodes the payload.
+var dockerSockClient = &http.Client{
+	Timeout: 5 * time.Second,
+	Transport: &http.Transport{
+		Dial: func(_, _ string) (net.Conn, error) {
+			return net.Dial("unix", "/var/run/docker.sock")
 		},
-	}
+	},
+}
+
+func getHostUsage() (cpuUsage, memUsage float64) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/v1.24/info", nil)
 	if err != nil {
 		return 0.5, 0.5
 	}
-	resp, err := client.Do(req)
+	resp, err := dockerSockClient.Do(req)
 	if err != nil {
 		return 0.5, 0.5
 	}
