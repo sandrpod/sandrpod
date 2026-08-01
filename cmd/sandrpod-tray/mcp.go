@@ -42,20 +42,41 @@ type mcpAdminClient struct {
 	hc       *http.Client
 }
 
+// One client for the process. An http.Transport owns a connection pool, and a
+// discarded Transport does not close the idle connections still in it — the
+// garbage collector will not do it for you. Building one per call therefore
+// leaks a socket per call at both ends, and the menu refreshes on a ten-second
+// ticker: ~8,600 descriptors a day on each side, which is enough to exhaust the
+// system file table in under a week and take unrelated software down with it.
+var (
+	mcpAdminOnce sync.Once
+	mcpAdminCli  *mcpAdminClient
+)
+
 func newMCPAdminClient() *mcpAdminClient {
-	sock := mcpAdminSocketPath()
-	return &mcpAdminClient{
-		sockPath: sock,
-		hc: &http.Client{
-			Timeout: 5 * time.Second,
-			Transport: &http.Transport{
-				DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-					var d net.Dialer
-					return d.DialContext(ctx, "unix", sock)
+	mcpAdminOnce.Do(func() {
+		sock := mcpAdminSocketPath()
+		mcpAdminCli = &mcpAdminClient{
+			sockPath: sock,
+			hc: &http.Client{
+				Timeout: 5 * time.Second,
+				Transport: &http.Transport{
+					DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+						var d net.Dialer
+						return d.DialContext(ctx, "unix", sock)
+					},
+					// Bound the pool anyway: one idle connection is all a
+					// single-socket admin channel ever needs, and an idle
+					// timeout means a restarted agent does not leave this side
+					// holding a dead one.
+					MaxIdleConns:        2,
+					MaxIdleConnsPerHost: 1,
+					IdleConnTimeout:     60 * time.Second,
 				},
 			},
-		},
-	}
+		}
+	})
+	return mcpAdminCli
 }
 
 func (c *mcpAdminClient) get(path string, out any) error {
@@ -186,7 +207,11 @@ func initMCPMenu() *mcpMenu {
 	}
 
 	go func() {
-		for range time.Tick(10 * time.Second) {
+		// NewTicker, not time.Tick: the latter can never be stopped and its
+		// underlying ticker is unreachable for the life of the process.
+		t := time.NewTicker(10 * time.Second)
+		defer t.Stop()
+		for range t.C {
 			m.refresh()
 		}
 	}()
