@@ -29,17 +29,17 @@ import (
 //
 // Why not notify-send?
 //
-//   notify-send is fire-and-forget — it can't return the user's choice.
-//   We need a modal that blocks until the human picks an option, which
-//   is exactly what zenity --question is for.
+//	notify-send is fire-and-forget — it can't return the user's choice.
+//	We need a modal that blocks until the human picks an option, which
+//	is exactly what zenity --question is for.
 //
 // Why not GTK / Qt bindings?
 //
-//   Adding a real GUI library to the sandrpod-tray binary would explode
-//   build complexity (CGO + native deps) for a feature that needs to
-//   show three buttons. Spawning the desktop's own dialog binary is the
-//   pragmatic choice — same approach the broader ecosystem uses
-//   (BurntToast on Win, osascript on Mac, zenity on Linux).
+//	Adding a real GUI library to the sandrpod-tray binary would explode
+//	build complexity (CGO + native deps) for a feature that needs to
+//	show three buttons. Spawning the desktop's own dialog binary is the
+//	pragmatic choice — same approach the broader ecosystem uses
+//	(BurntToast on Win, osascript on Mac, zenity on Linux).
 type LinuxPrompter struct {
 	AppTitle string
 }

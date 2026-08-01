@@ -39,17 +39,17 @@ func newPlatformPrompter() permission.Notifier { return NewMacPrompter() }
 // Buttons depend on the request mode:
 //
 //   - Mode != ModeExec (path access)
-//       [拒绝] [允许本次] [永久允许]
-//       — third button persists a permanent rule
+//     [拒绝] [允许本次] [永久允许]
+//     — third button persists a permanent rule
 //
 //   - Mode == ModeExec (PTY shell consent)
-//       [拒绝] [允许本次] [本会话允许]
-//       — third button persists a session-scoped grant; opening a new
-//         AI conversation will re-prompt. We deliberately do NOT offer
-//         "永久允许" for PTY because a shell session can do anything
-//         the path rules already permit, and giving forever-silent-PTY
-//         crosses the threshold from "consent UI" into "set-and-forget
-//         remote control" — out of scope for this feature.
+//     [拒绝] [允许本次] [本会话允许]
+//     — third button persists a session-scoped grant; opening a new
+//     AI conversation will re-prompt. We deliberately do NOT offer
+//     "永久允许" for PTY because a shell session can do anything
+//     the path rules already permit, and giving forever-silent-PTY
+//     crosses the threshold from "consent UI" into "set-and-forget
+//     remote control" — out of scope for this feature.
 //
 // macOS `display dialog` enforces a hard maximum of 3 buttons (osascript
 // error -50: "最多允许使用三个按钮").

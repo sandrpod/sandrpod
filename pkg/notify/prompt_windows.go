@@ -21,8 +21,8 @@ import (
 //
 // Strategy:
 //
-//   We shell out to powershell.exe and run a tiny script that calls the
-//   .NET WinForms MessageBox with YesNoCancel buttons.
+//	We shell out to powershell.exe and run a tiny script that calls the
+//	.NET WinForms MessageBox with YesNoCancel buttons.
 //
 // Why MessageBox and not toast / WPF?
 //
@@ -40,11 +40,11 @@ import (
 //
 // Trade-off:
 //
-//   MessageBox cannot relabel the Yes/No/Cancel buttons. We embed a
-//   "[Yes = 永久允许] [No = 允许本次] [Cancel = 拒绝]" legend at the
-//   top of the body so users see the mapping at a glance. The native
-//   buttons stay in the OS language, which is acceptable because the
-//   legend disambiguates and the dialog body itself is in Chinese.
+//	MessageBox cannot relabel the Yes/No/Cancel buttons. We embed a
+//	"[Yes = 永久允许] [No = 允许本次] [Cancel = 拒绝]" legend at the
+//	top of the body so users see the mapping at a glance. The native
+//	buttons stay in the OS language, which is acceptable because the
+//	legend disambiguates and the dialog body itself is in Chinese.
 //
 // PowerShell startup overhead is ~200-400ms. Acceptable: prompts are
 // not hot-path; the human takes seconds to read the body anyway.

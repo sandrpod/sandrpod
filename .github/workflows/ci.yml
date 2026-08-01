@@ -29,6 +29,21 @@ jobs:
       - name: Verify dependencies
         run: go mod verify
 
+      # Before vet, because a formatting failure is cheap to produce and cheap
+      # to fix, and there is no reason to spend a build on it. Four files sat
+      # unformatted in the tree until someone noticed by hand — vet and the
+      # tests never had an opinion about it.
+      - name: Format
+        run: |
+          unformatted=$(gofmt -l ./cmd ./pkg)
+          if [ -n "$unformatted" ]; then
+            echo "Not gofmt'd:"
+            echo "$unformatted"
+            echo
+            gofmt -d ./cmd ./pkg
+            exit 1
+          fi
+
       - name: Vet
         run: go vet ./...
 
