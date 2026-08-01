@@ -76,6 +76,12 @@ type PoderTunnel struct {
 	session  *yamux.Session
 	Client   *http.Client      // routes HTTP through yamux streams
 	WSDialer *websocket.Dialer // routes WebSocket through yamux streams (PTY)
+
+	// Built on first use rather than in the constructor: most tunnels never
+	// carry a streaming request, and this keeps one client per tunnel instead
+	// of one per request. See StreamClient.
+	streamOnce sync.Once
+	streamCli  *http.Client
 }
 
 // NewPoderTunnel creates a tunnel from an already-upgraded WebSocket connection.
@@ -165,8 +171,22 @@ func (t *PoderTunnel) Wait() {
 }
 
 // Close shuts down the yamux session and underlying WebSocket.
+// Close tears down the tunnel. Closing the yamux session already takes every
+// stream with it; dropping the idle pools first is belt and braces, and keeps
+// the intent legible next to StreamClient's comment about what pooling costs.
 func (t *PoderTunnel) Close() error {
+	closeIdle(t.Client)
+	closeIdle(t.streamCli)
 	return t.session.Close()
+}
+
+func closeIdle(c *http.Client) {
+	if c == nil {
+		return
+	}
+	if tr, ok := c.Transport.(*http.Transport); ok {
+		tr.CloseIdleConnections()
+	}
 }
 
 // TunnelStore is a thread-safe map of active tunnels keyed by an arbitrary string.
@@ -226,17 +246,33 @@ func (s *TunnelStore) Remove(id string) {
 	delete(s.tunnels, id)
 }
 
-// StreamClient returns an HTTP client with no timeout, suitable for
-// Server-Sent Events and other long-lived streaming responses.
+// StreamClient returns the tunnel's streaming HTTP client: no overall timeout,
+// so SSE and other long-lived responses are not cut off mid-flight.
+//
+// One client per tunnel, not one per call. An http.Transport owns a connection
+// pool, and a discarded Transport does not close the idle connections left in
+// it — the connection's read/write goroutines keep it reachable, so the garbage
+// collector never gets there. A response that finishes cleanly is read to EOF,
+// which returns its stream to that pool rather than closing it; build the
+// Transport per request and every successful streaming request strands a yamux
+// stream at both ends for the life of the tunnel. Invisible to lsof, unlike the
+// same mistake in the tray.
 func (t *PoderTunnel) StreamClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
-				return t.session.Open()
+	t.streamOnce.Do(func() {
+		t.streamCli = &http.Client{
+			Transport: &http.Transport{
+				DialContext: func(_ context.Context, _, _ string) (net.Conn, error) {
+					return t.session.Open()
+				},
+				// Bound the pool and expire idle streams, so a poder that goes
+				// away does not leave this side holding dead ones.
+				MaxIdleConnsPerHost: 4,
+				IdleConnTimeout:     90 * time.Second,
 			},
-		},
-		Timeout: 0,
-	}
+			Timeout: 0, // streaming: no overall deadline
+		}
+	})
+	return t.streamCli
 }
 
 // NewWSConn exposes the wsConn constructor for use by Poder (cmd/poder).

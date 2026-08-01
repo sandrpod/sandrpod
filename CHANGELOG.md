@@ -8,7 +8,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+- **The tunnel leaked a yamux stream per completed streaming request.**
+  `StreamClient()` built a fresh `http.Transport` on every call and both call
+  sites discarded it — the same mistake as the tray's in 0.5.4, on a different
+  resource. A response that finishes cleanly is read to EOF, which returns its
+  stream to the discarded Transport's idle pool instead of closing it, and
+  nothing ever collects it. One stream stranded at each end per successful
+  `/stream` or MCP proxy request, for the life of the tunnel — invisible to
+  `lsof`, so the signals that caught the tray bug would never have shown this
+  one. Watch goroutine count and RSS on a long-uptime server instead. Reported
+  in #28.
 
 ## [0.5.4] — 2026-07
 
