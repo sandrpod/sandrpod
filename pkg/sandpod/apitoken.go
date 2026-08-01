@@ -11,10 +11,10 @@ import "time"
 // e2b_<hex> shape so they work as a drop-in E2B_API_KEY with no extra client
 // config.
 type APIToken struct {
-	Name      string    `json:"name"`       // owner identity / label
-	Prefix    string    `json:"prefix"`     // e.g. "e2b_1a2b3c4d5e6f" (display only)
-	Hash      string    `json:"-"`          // sha256(raw key) hex; never serialized
-	Role      string    `json:"role"`       // "admin" | "user"
+	Name      string    `json:"name"`   // owner identity / label
+	Prefix    string    `json:"prefix"` // e.g. "e2b_1a2b3c4d5e6f" (display only)
+	Hash      string    `json:"-"`      // sha256(raw key) hex; never serialized
+	Role      string    `json:"role"`   // "admin" | "user"
 	CreatedAt time.Time `json:"created_at"`
 }
 
