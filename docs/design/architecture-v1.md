@@ -9,7 +9,7 @@
 # SandrPod 技术架构设计 v1.0
 
 > ⚠️ **历史文档**：本文档为 v1.0 初期设计规划（2024-03），描述的是**目标架构蓝图**，部分内容尚未实现或已在实现过程中调整。  
-> 当前实际运行架构请参阅 [`../ARCHITECTURE.md`](../ARCHITECTURE.md)。  
+> 当前实际运行架构请参阅 [`../ARCHITECTURE.zh.md`](../ARCHITECTURE.zh.md)。  
 > 横向扩展（多实例 + PostgreSQL）方案请参阅 [`horizontal-scaling.md`](horizontal-scaling.md)。
 
 ---

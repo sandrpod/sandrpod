@@ -8,7 +8,7 @@ grouped below. Docs marked **(中文)** are written in Chinese.
 
 | Doc | What it covers |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) **(中文)** | The implemented architecture: API Server, Poder workers, Toolbox, reverse tunnel, state machine, request flows |
+| [ARCHITECTURE.md](ARCHITECTURE.md) ([中文](ARCHITECTURE.zh.md)) | The implemented architecture: API Server, Poder workers, Toolbox, reverse tunnel, E2B gateway, permission gate, MCP bridge, state machine, request flows |
 | [ROADMAP.md](ROADMAP.md) | Product-gap analysis vs E2B/Modal/Daytona and the prioritized plan |
 
 ## Deployment & operations
