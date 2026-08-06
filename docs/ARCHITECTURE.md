@@ -1,241 +1,403 @@
-# SandrPod 架构文档
+# SandrPod Architecture
 
-> **版本**: v0.4  
-> **更新日期**: 2026-07  
-> 本文档描述当前**已实现并正常运行**的架构。历史设计规划见 [`design/architecture-v1.md`](design/architecture-v1.md)，多实例部署见 [`MULTI_INSTANCE_DEPLOYMENT.md`](MULTI_INSTANCE_DEPLOYMENT.md)。
+> **Version**: v0.5.5
+> **Updated**: 2026-08
+> 中文版：[ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)
+>
+> This document describes the architecture as **implemented and running**.
+> Historical design notes live in [`design/architecture-v1.md`](design/architecture-v1.md);
+> multi-instance deployment in [`MULTI_INSTANCE_DEPLOYMENT.md`](MULTI_INSTANCE_DEPLOYMENT.md).
 
 ---
 
-## 一、系统概述
+## 1. Overview
 
-SandrPod 是面向 AI Agent 的代码执行沙箱平台。核心理念：
+SandrPod is self-hosted execution infrastructure for AI agents. The design rests
+on four ideas:
 
-- **API Server** 是唯一的控制平面 + 请求代理，客户端只与它通信
-- **Poder**（Worker 节点）主动拨出 WebSocket 反向隧道，API Server 通过隧道下发请求，无需 Worker 暴露任何端口
-- **sandrpod-agent** 让任意本地机器直接注册为沙箱，绕过 Poder/Docker 层（toC 场景）
-- **Toolbox** 运行在每个沙箱容器内，提供代码执行 HTTP API
+- **The API Server is the only control plane and the only request proxy.**
+  Clients talk to it and nothing else.
+- **Workers dial out.** A Poder opens a WebSocket reverse tunnel to the API
+  Server; the server pushes requests down it. No worker exposes an inbound port.
+- **sandrpod-agent turns any machine into a sandbox** without Poder or Docker —
+  it registers itself directly and embeds the Toolbox.
+- **Toolbox runs inside each sandbox** and provides the code-execution HTTP API.
 
 ```
-Client / SDK / CLI
-        │  HTTP
-        ▼
-┌────────────────────────────────────────────────────┐
-│              API Server  :8080                     │
-│  ┌─────────────────┐   ┌───────────────────────┐   │
-│  │  Control Plane  │   │  Tunnel Proxy        │   │
-│  │  - Sandbox CRUD │   │  - 反代到 Poder 隧道  │   │
-│  │  - Job 管理     │   │  - 反代到 Agent 隧道  │   │
-│  │  - Poder 注册   │   │  - 路由 execute/stream│   │
-│  └──────────────────┘   └──────────────────────┘   │
-│                                                     │
-│  ┌──────────────────┐   ┌──────────────────────┐   │
-│  │  tunnelStore    │   │  directStore         │   │
-│  │  poderID→tunnel │   │  sandboxName→tunnel  │   │
-│  └─────────────────┘   └──────────────────────┘   │
-│                                                     │
-│  ┌─────────────────────────────────────────────┐   │
-│  │  Store (SQLite / 内存)                       │   │
-│  │  SandboxRepository  PoderRepository          │   │
-│  │  JobRepository                               │   │
-│  └─────────────────────────────────────────────┘   │
-└──────────────┬──────────────────┬──────────────────┘
-               │ WebSocket 反向隧道│ WebSocket 反向隧道
-               ▼                  ▼
-   ┌────────────────┐    ┌──────────────────────┐
-   │   Poder        │    │   sandrpod-agent     │
-   │ (Docker Worker)│    │  (本机直连沙箱)       │
-   │                │    │  嵌入 Toolbox         │
-   │ ┌────────────┐ │    └──────────────────────┘
-   │ │  Toolbox   │ │
-   │ │ (容器内)    │ │
-   │ └────────────┘ │
-   └────────────────┘
+Client / SDK / CLI                    E2B SDK (unmodified)
+        │  HTTP                              │  HTTPS
+        ▼                                    ▼
+┌──────────────────────────────────────────────────────────┐
+│                     API Server  :8080                    │
+│                                                          │
+│  ┌────────────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │ Control Plane  │  │ Tunnel Proxy │  │ E2B Gateway  │  │
+│  │ sandbox CRUD   │  │ execute      │  │ api.<domain> │  │
+│  │ jobs, poders   │  │ stream, PTY  │  │ <port>-<id>. │  │
+│  │ tokens         │  │ files        │  │   <domain>   │  │
+│  └────────────────┘  └──────────────┘  └──────────────┘  │
+│                                                          │
+│  ┌─────────────────┐  ┌────────────────────┐             │
+│  │  tunnelStore    │  │  directStore       │             │
+│  │  poderID→tunnel │  │  sandboxName→tunnel│             │
+│  └─────────────────┘  └────────────────────┘             │
+│                                                          │
+│  ┌────────────────────────────────────────────────────┐  │
+│  │  Store — memory / SQLite / PostgreSQL              │  │
+│  │  Sandbox · Poder · Job · Token · TunnelOwner       │  │
+│  └────────────────────────────────────────────────────┘  │
+└────────────┬──────────────────────────┬──────────────────┘
+             │ WebSocket + yamux        │ WebSocket + yamux
+             ▼                          ▼
+   ┌──────────────────┐      ┌───────────────────────────┐
+   │  Poder           │      │  sandrpod-agent           │
+   │  (Docker worker) │      │  (the machine IS the box) │
+   │                  │      │  embedded Toolbox         │
+   │  ┌────────────┐  │      │  permission gate + audit  │
+   │  │  Toolbox   │  │      └─────────────┬─────────────┘
+   │  │ (container)│  │                    │ unix socket
+   │  └────────────┘  │      ┌─────────────▼─────────────┐
+   └──────────────────┘      │  sandrpod-tray            │
+                             │  (user-session GUI)       │
+                             └───────────────────────────┘
 ```
 
 ---
 
-## 二、组件详解
+## 2. Components
 
-### 2.1 API Server（`cmd/server`）
+### 2.1 API Server (`cmd/server`)
 
-**职责**：
-- 控制平面：Sandbox / Poder / Job 的 CRUD
-- 隧道管理：接收 Poder 和 Agent 的 WebSocket 连接，维护 yamux 多路复用隧道
-- 请求代理：所有代码执行、文件操作、PTY 等请求通过隧道转发
+**Responsibilities**
 
-**启动参数**：
+- Control plane: CRUD for sandboxes, poders, jobs, and API tokens
+- Tunnel management: accept WebSocket connections from Poders and Agents,
+  maintain the yamux multiplexed sessions
+- Request proxying: every execute / file / PTY request travels through a tunnel
+- E2B-compatible gateway (optional, host-routed — see §2.6)
 
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `-port` | `8080` | 监听端口 |
-| `-token` | `""` | API 认证 token（空=不鉴权，**匿名 admin**，勿对外暴露） |
-| `-tokens-file` | `""` | 命名 token JSON 文件（热加载，见 AUTH_AND_KEYS.md） |
-| `-db` | `""` | 存储后端：空=内存；`sqlite:<path>`；`postgres://…` |
-| `-public-url` | `""` | 云 VM 引导时回连的公网地址（云 provider 必填） |
-| `-node-url` | `""` | 多实例模式下本实例的内部地址（见 MULTI_INSTANCE_DEPLOYMENT.md） |
-| `-tls-cert` / `-tls-key` | `""` | 内建 TLS（直接 HTTPS 监听） |
-| `-rate-limit` | `0` | 每 user-token 请求限速（req/s，0=不限） |
-| `-max-sandboxes-per-owner` | `0` | 每 owner 并发沙箱上限（0=不限） |
-| `-offline-timeout` | `30s` | Poder 心跳超时后标记 OFFLINE |
-| `-reap-timeout` | `10m` | OFFLINE poder 回收（终止云 VM）超时 |
+**Flags**
 
-（闲置回收 `SANDRPOD_SANDBOX_IDLE_TIMEOUT` / `SANDRPOD_PODER_IDLE_TIMEOUT`、
-E2B 网关 `SANDRPOD_E2B_DOMAIN` 等经环境变量配置，完整清单见 `.env.example`。）
+| Flag | Default | What it does |
+|---|---|---|
+| `-port` | `8080` | Listen port |
+| `-token` | `""` | API token. Empty = **no auth, anonymous admin** — never expose that |
+| `-tokens-file` | `""` | Named-token JSON, hot-reloaded (see `AUTH_AND_KEYS.md`) |
+| `-db` | `""` | Storage: empty = memory; `sqlite:<path>`; `postgres://…` |
+| `-public-url` | `""` | Public address cloud VMs call back to (required for cloud providers) |
+| `-node-url` | `""` | This instance's internal address in multi-instance mode |
+| `-tls-cert` / `-tls-key` | `""` | Built-in TLS (listen HTTPS directly) |
+| `-rate-limit` | `0` | Requests/second per user token (0 = unlimited) |
+| `-max-sandboxes-per-owner` | `0` | Concurrent sandbox cap per owner (0 = unlimited) |
+| `-offline-timeout` | `30s` | Mark a Poder OFFLINE after this heartbeat gap |
+| `-reap-timeout` | `10m` | Reclaim an OFFLINE poder (terminates the cloud VM) |
+| `-sandbox-idle-timeout` | `0` | Reap sandboxes idle longer than this (0 = disabled) |
+| `-poder-idle-timeout` | `0` | Reclaim cloud poders with no sandboxes (0 = disabled) |
 
-**WebSocket 端点**：
+Every flag also reads an env var (`SANDRPOD_RATE_LIMIT`,
+`SANDRPOD_SANDBOX_IDLE_TIMEOUT`, …) as its default. The E2B gateway is
+configured purely by env (`SANDRPOD_E2B_DOMAIN` et al). Full list in
+`.env.example`.
 
-| 端点 | 用途 |
-|------|------|
-| `GET /ws/poder/connect` | Poder 拨入，注册并建立 yamux 反向隧道 |
-| `GET /ws/sandbox/connect` | sandrpod-agent 拨入，直接注册为 Sandbox |
+**WebSocket endpoints**
 
-**HTTP API**：
+| Endpoint | Purpose |
+|---|---|
+| `GET /ws/poder/connect` | Poder dials in, registers, establishes the yamux tunnel |
+| `GET /ws/sandbox/connect` | sandrpod-agent dials in, registers itself as a Sandbox |
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/health` | 健康检查 |
-| `GET` | `/api/v1/poders` | 列出所有 Poder |
-| `POST` | `/api/v1/sandboxes` | 创建沙箱（下发 Job） |
-| `GET` | `/api/v1/sandboxes` | 列出所有沙箱 |
-| `GET/DELETE/PATCH` | `/api/v1/sandboxes/{name}` | 获取/删除/更新沙箱 |
-| `POST` | `/api/v1/sandboxes/execute` | 执行代码（代理到 Toolbox） |
-| `GET/POST` | `/api/v1/sandboxes/stream` | 流式执行（SSE，代理到 Toolbox） |
-| `GET` | `/api/v1/sandboxes/{name}/toolbox/*` | 直接代理到 Toolbox（文件/PTY/Session） |
-| `GET` | `/api/v1/jobs/poll` | Poder Agent 轮询待处理 Job |
-| `PATCH` | `/api/v1/jobs/{id}` | Poder Agent 更新 Job 状态 |
+**HTTP API**
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Health check (also reports version) |
+| `GET` | `/metrics` | Prometheus metrics (admin) |
+| `GET` | `/api/v1/poders` | List Poders |
+| `GET/DELETE` | `/api/v1/poders/{id}` | Get / delete a Poder |
+| `POST` | `/api/v1/sandboxes` | Create a sandbox (enqueues a Job) |
+| `GET` | `/api/v1/sandboxes` | List sandboxes |
+| `GET/DELETE/PATCH` | `/api/v1/sandboxes/{name}` | Get / delete / update |
+| `POST` | `/api/v1/sandboxes/{name}/start\|stop` | Lifecycle |
+| `POST` | `/api/v1/sandboxes/execute` | Execute code (proxied to Toolbox) |
+| `GET/POST` | `/api/v1/sandboxes/stream` | Streaming execution (SSE) |
+| `GET` | `/api/v1/sandboxes/{name}/toolbox/*` | Generic Toolbox proxy (files, PTY, sessions, watch) |
+| `GET` | `/api/v1/jobs/poll` | Poder polls for pending Jobs |
+| `PATCH` | `/api/v1/jobs/{id}` | Poder reports Job outcome |
+| `GET/POST/DELETE` | `/api/v1/tokens…` | API token issuance and revocation (admin) |
 
 ---
 
-### 2.2 Poder（`cmd/poder`）
+### 2.2 Poder (`cmd/poder`)
 
-**职责**：
-- 启动后主动连接 API Server WebSocket，建立 yamux 反向隧道
-- 通过隧道暴露 HTTP 服务：接收 execute / file / PTY 请求，转发给容器内 Toolbox
-- 轮询 `/api/v1/jobs/poll`，执行 CREATE / DELETE / START / STOP sandbox 任务
-- 定时心跳上报容器使用量
+**Responsibilities**
 
-**启动参数**：
+- Dial the API Server over WebSocket and establish the yamux reverse tunnel
+- Serve HTTP over that tunnel: forward execute / file / PTY requests to the
+  Toolbox inside the target container
+- Poll `/api/v1/jobs/poll` and run CREATE / DELETE / START / STOP jobs
+- Heartbeat host and container usage
 
-| 参数 | 环境变量 | 默认值 | 说明 |
-|------|----------|--------|------|
-| `-api-url` | `API_URL` | `http://localhost:8080` | API Server 地址 |
-| `-region` | `REGION` | `local` | 区域标识 |
-| `-provider-type` | `PROVIDER_TYPE` | `local` | `docker` / `aws` / `aliyun` / `local` |
-| `-poder-id` | `PODER_ID` | 自动生成 | Poder 唯一 ID（`poder-<容器ID前12位>`） |
-| `-heartbeat-interval` | — | `10s` | 心跳间隔 |
+**Flags**
 
-**注意**：Poder 本身**不监听任何端口**，所有通信通过拨出的 WebSocket 隧道完成。
+| Flag | Env | Default | What it does |
+|---|---|---|---|
+| `-api-url` | `API_URL` | `http://localhost:8080` | API Server address |
+| `-region` | `REGION` | `local` | Region label used by the scheduler |
+| `-provider-type` | `PROVIDER_TYPE` | `local` | `local` / `docker` / a cloud name |
+| `-poder-id` | `PODER_ID` | auto | Unique ID (`poder-<container-id-prefix>`) |
+| `-network` | `SANDRPOD_NETWORK` | `""` | Docker network to attach sandboxes to |
+| `-token` | `SANDRPOD_TOKEN` | `""` | API token |
+| `-vm-instance-id` | `VM_INSTANCE_ID` | `""` | Cloud instance ID, for VM reclamation |
+| `-heartbeat-interval` | — | `10s` | Heartbeat period |
 
-**Docker 启动示例**：
+**A Poder listens on no port at all.** Everything goes through the tunnel it
+dialed out.
 
 ```bash
 docker run -d --name sandrpod-poder \
-  -v /var/run/docker.sock:/var/run/docker.sock \   # 或 ~/.docker/run/docker.sock
+  -v /var/run/docker.sock:/var/run/docker.sock \
   --add-host host.docker.internal:host-gateway \
   ghcr.io/sandrpod/poder:latest \
-  -api-url=http://host.docker.internal:8080 \
-  -region=local
+  -api-url=http://host.docker.internal:8080 -region=local
 ```
 
 ---
 
-### 2.3 sandrpod-agent（`cmd/agent`）
+### 2.3 sandrpod-agent (`cmd/agent`)
 
-**职责**：
-- 将**本地机器**直接注册为 SandrPod Sandbox，无需 Poder 或 Docker
-- 内嵌 Toolbox，通过 WebSocket 反向隧道暴露给 API Server
-- 适合 toC 场景：用户本机参与 AI 任务执行
+Registers **the local machine** as a sandbox — no Poder, no Docker. It embeds
+the Toolbox and exposes it through a reverse tunnel. This is the employee-PC
+path, so it also carries the permission gate and the audit pipeline (§2.7).
 
-**启动参数**：
+**Flags**
 
-| 参数 | 环境变量 | 说明 |
-|------|----------|------|
-| `-api-url` | `SANDRPOD_API_URL` | API Server 地址 |
-| `-name` | `SANDRPOD_SANDBOX_NAME` | 沙箱名称（必须全局唯一） |
-| `-work-dir` | `SANDRPOD_WORK_DIR` | 代码执行工作目录（默认当前目录） |
-| `-token` | `SANDRPOD_TOKEN` | API 认证 token |
-| `-reconnect` | — | 断线重连间隔（默认 5s） |
+| Flag | Env | Default | What it does |
+|---|---|---|---|
+| `-api-url` | `SANDRPOD_API_URL` | `http://localhost:8080` | API Server address |
+| `-name` | `SANDRPOD_SANDBOX_NAME` | — | Sandbox name (globally unique) |
+| `-work-dir` | `SANDRPOD_WORK_DIR` | cwd | Execution working directory |
+| `-token` | `SANDRPOD_TOKEN` | `""` | API token |
+| `-reconnect` | — | `5s` | Reconnect delay |
+| `-permission-mode` | `SANDRPOD_PERMISSION_MODE` | `off` | `off` / `prompt` / `strict` |
+| `-permission-file` | `SANDRPOD_PERMISSION_FILE` | `~/.sandrpod/permissions.json` | Rule store path |
+| `-audit-dir` | `SANDRPOD_AUDIT_DIR` | `""` | Local NDJSON audit log dir (empty = disabled) |
+| `-audit-upload-url` | `SANDRPOD_AUDIT_UPLOAD_URL` | `""` | Batch upload endpoint |
+| `-audit-upload-token` | `SANDRPOD_AUDIT_UPLOAD_TOKEN` | falls back to `-token` | Bearer token for upload |
+| `-mcp-enabled` | `SANDRPOD_MCP_ENABLED` | `false` | Enable the MCP bridge (§2.8) |
+| `-mcp-config` | `SANDRPOD_MCP_CONFIG` | `~/.sandrpod/mcp.json` | MCP server config |
+| `-mcp-listen` | `SANDRPOD_MCP_LISTEN` | `127.0.0.1:7090` | MCP bridge listen address |
+| `-mcp-token` | `SANDRPOD_MCP_TOKEN` | `""` | Bearer token for the MCP endpoint |
+| `-mcp-only` | — | `false` | Run only the MCP bridge, skip sandbox registration |
+| `-mcp-oauth` | — | `false` | Enable OAuth for MCP servers that require it |
+| `-mcp-oauth-callback` | `SANDRPOD_MCP_OAUTH_CALLBACK` | `127.0.0.1:7099` | OAuth redirect listener |
+| `-mcp-oauth-token-dir` | `SANDRPOD_MCP_OAUTH_TOKEN_DIR` | `~/.sandrpod/mcp-tokens` | Token storage |
+| `-mcp-grant-scope` | `SANDRPOD_MCP_GRANT_SCOPE` | `server` | Consent granularity: `server` / `tool` |
+| `-mcp-guard-manifest` | — | `false` | Reject tool-definition drift after approval |
+| `-mcp-hot-reload` | — | `false` | Watch the MCP config and reload on change |
 
-**注册后的沙箱特征**：
+**The registered sandbox**
 
-| 字段 | 值 |
-|------|----|
+| Field | Value |
+|---|---|
 | `provider_type` | `local-agent` |
 | `proxy_url` | `direct://<sandbox-name>` |
-| `state` | `RUNNING`（连接时）/ `ERROR`（断线时） |
-| stop / start | **不支持**（生命周期由 agent 进程控制） |
-
-**启动示例**：
-
-```bash
-sandrpod-agent \
-  -api-url=https://api.example.com \
-  -name=my-laptop \
-  -work-dir=/home/user/projects
-```
+| `state` | `RUNNING` while connected, `ERROR` when disconnected |
+| start / stop | **unsupported** — lifecycle belongs to the agent process |
 
 ---
 
-### 2.4 Toolbox（`cmd/toolbox`）
+### 2.4 Toolbox (`cmd/toolbox`)
 
-**职责**：运行在每个沙箱容器内，提供代码执行 HTTP API。
+Runs inside every sandbox and provides the execution API. Written in Go.
+Clients never reach it directly — Poder or Agent proxies to it.
 
-**实现语言**：Go（早期版本为 Flask/Python，当前版本为 Go）
+| Group | Paths |
+|---|---|
+| Execute | `POST /process` · `GET/POST /stream` |
+| Stateful sessions | `POST /process/session` · `/process/session/{id}` |
+| Code interpreter | `/code-interpreter/execute` · `/code-interpreter/contexts` · `/code-interpreter/contexts/{id}` |
+| Process manager | `/procmgr/start` · `/stream` · `/input` · `/stdin-close` · `/signal` · `/resize` · `/list` |
+| PTY | `GET /pty/` (WebSocket) · `POST /pty/create` |
+| Files | `/files` · `/upload` · `/download` · `/bulk-upload` · `/delete` · `/move` · `/folder` · `/info` · `/find` · `/search` · `/replace` · `/permissions` · `/work-dir` · `/project-dir` · `/user-home-dir` |
+| Directory watch | `/watch/create` · `/watch/events` · `/watch/remove` |
+| Port proxy | `/proxy/<port>/*` → `127.0.0.1:<port>` inside the sandbox |
+| MCP | `/mcp` · `/mcp/*` |
+| Introspection | `/health` · `/status` · `/info` · `/metrics` |
 
-**Toolbox HTTP API**（由 Poder 或 Agent 代理，客户端不直接访问）：
-
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/process` | 执行代码（python / bash / node） |
-| `GET/POST` | `/stream` | 流式执行（SSE） |
-| `GET` | `/pty/` | PTY 终端（WebSocket） |
-| `POST` | `/process/session` | 创建有状态 session |
-| `GET/POST/DELETE` | `/process/session/{id}` | 管理 session |
-| `GET/POST/DELETE` | `/files/*` | 文件系统操作 |
-| `GET` | `/health` | 健康检查 |
-| `GET` | `/info` | 沙箱 OS/arch 信息 |
+The **code interpreter** is the Jupyter-style surface: a context is a persistent
+kernel namespace, so variables survive across calls. The **port proxy** is what
+makes a dev server inside a sandbox reachable from outside.
 
 ---
 
-### 2.5 存储层（`pkg/store`）
+### 2.5 Storage (`pkg/store`)
 
-采用 **Repository 模式**，接口定义在 `pkg/sandpod/repo.go`：
+Repository pattern; interfaces in `pkg/sandpod/repo.go`:
 
 ```
 sandpod.SandboxRepository
 sandpod.PoderRepository
 sandpod.JobRepository
-sandpod.Stores          ← 三个 Repository 的聚合，注入到所有 handler
+sandpod.TokenRepository
+sandpod.TunnelOwnerRepository
+sandpod.Stores            ← the aggregate injected into every handler
 ```
 
-**实现**：
+| Package | Backend | Use for |
+|---|---|---|
+| `pkg/store/memory.go` | in-process maps under an RWMutex | dev / test; lost on restart |
+| `pkg/store/sqldb/` | dialect-parameterised SQL: SQLite (WAL, `modernc.org/sqlite`) **or** PostgreSQL (pgx pool, `FOR UPDATE SKIP LOCKED` job claim) | production |
 
-| 包 | 后端 | 适用场景 |
-|----|------|----------|
-| `pkg/store/memory.go` | 进程内 map（加读写锁） | 开发 / 测试，重启即丢失 |
-| `pkg/store/sqldb/` | 方言参数化 SQL：SQLite（WAL，modernc.org/sqlite）**或** PostgreSQL（pgx 连接池 + `FOR UPDATE SKIP LOCKED` 并发抢 job） | 生产；单实例用 SQLite，多实例用 PostgreSQL |
-
-同一套 `sqldb` 代码按 `-db` DSN scheme 在启动时选定其一：
+One codebase targets both. `sqldb/dialect.go` handles placeholder rebinding,
+DDL types, and the concurrent job claim; a server instance picks exactly one
+backend at startup from the `-db` DSN scheme.
 
 ```bash
-# 内存模式（默认）
-go run ./cmd/server
-
-# SQLite 持久化（单实例）
-go run ./cmd/server -db sqlite:./data/sandrpod.db
-
-# PostgreSQL（多实例 / 生产）
-go run ./cmd/server -db "postgres://user:pass@host:5432/sandrpod?sslmode=require"
+go run ./cmd/server                                    # memory
+go run ./cmd/server -db sqlite:./data/sandrpod.db      # SQLite, single instance
+go run ./cmd/server -db "postgres://…?sslmode=require" # PostgreSQL, multi-instance
 ```
 
-多实例部署（N 个实例 + 共享 PostgreSQL + 跨节点隧道路由）见
-[`MULTI_INSTANCE_DEPLOYMENT.md`](MULTI_INSTANCE_DEPLOYMENT.md)。
+`TunnelOwnerRepository` is what makes multi-instance work: it records which node
+holds each sandbox's tunnel, so a request landing anywhere can be forwarded to
+the right node. See [`MULTI_INSTANCE_DEPLOYMENT.md`](MULTI_INSTANCE_DEPLOYMENT.md).
 
 ---
 
-## 三、关键流程
+### 2.6 E2B-compatible gateway (`pkg/e2bcompat`)
 
-### 3.1 Poder 注册与隧道建立
+Lets an **unmodified E2B SDK** run against SandrPod: point `E2B_DOMAIN` at your
+deployment and `Sandbox.create()` works. Off unless `SANDRPOD_E2B_DOMAIN` is set.
+
+Routing is by Host, decided in `cmd/server/e2bgateway.go`:
+
+| Host | Handled by |
+|---|---|
+| `api.<domain>` + an E2B control-plane path (`/sandboxes`, `/templates`, `/snapshots`, `/volumes`) | E2B control plane |
+| `api.<domain>`, anything else | SandrPod's own REST API |
+| `<port>-<sandboxID>.<domain>` | E2B data plane |
+
+That split matters: `api.<domain>` is **shared**. Only the four E2B namespaces
+are diverted, so `sandrpod-cli` and the native SDKs keep working on the same
+hostname with the E2B surface enabled.
+
+Three data-plane surfaces sit behind `<port>-<sandboxID>.<domain>`. Which one
+serves a request is decided by **path first, port second**:
+
+- **envd** — filesystem and process RPCs (Connect/gRPC over protobuf), matched
+  on the path prefix: `/filesystem.*`, `/process.*`, `/files`. The port in the
+  hostname is not consulted; E2B's SDK puts `49983` there, but nothing listens
+  on that port inside the sandbox.
+- **code interpreter** — `run_code`, matched on `/execute` and `/contexts*`, or
+  on the hostname port equal to `CodePort` (default `49999`). Backed by Toolbox
+  contexts.
+- **generic port proxy** — anything else with a port in the hostname:
+  reverse-proxied through the tunnel to Toolbox `/proxy/<port>/`, which dials
+  `127.0.0.1:<port>` inside the sandbox. This is how in-sandbox services are
+  reached — the MCP gateway on `50005`, a user's dev server, a webhook target.
+
+Two authorization details worth knowing:
+
+- `Config.Authorize` gates the **data plane only**. The control plane reads the
+  shared store and is filtered by owner; the data plane derives its target
+  sandbox from a caller-supplied Host or header, so without this check any
+  authenticated caller could reach another tenant's sandbox by ID.
+- `Config.PrivateSandboxPorts` defaults to **false**, matching E2B: possession
+  of the unguessable `<port>-<sandboxID>.<domain>` hostname *is* the capability.
+  A browser cannot attach an Authorization header, so requiring one would not
+  make the common case inconvenient — it would make it impossible. Set it when
+  every consumer is a program that can carry the key.
+
+Details and the verified feature matrix: [`E2B_COMPAT.md`](E2B_COMPAT.md).
+
+---
+
+### 2.7 Permission gate and audit (`pkg/permission`, `pkg/notify`, `pkg/audit`)
+
+Opt-in, for the employee-PC deployment where the sandbox *is* someone's laptop.
+Enabled with `-permission-mode`; `off` by default, so nothing changes for server
+deployments.
+
+**Five-branch decision** (`pkg/permission/manager.go`), first match wins:
+
+1. **work_dir** — inside the agent's working directory, allow silently
+2. **hardlock** — deny. Checked *before* any allow-rule lookup, so an
+   accidentally-permanent rule on `~/.ssh` can never take effect
+3. **permanent rule** — a standing grant the user added
+4. **session grant** — a time-limited grant with a TTL
+5. **ask the human** — native dialog, and persist the answer if the user chose
+   "always"
+
+`pkg/notify` renders that dialog per platform — macOS `osascript`, Linux
+`zenity`/`kdialog`, Windows PowerShell `MessageBox` — and **fails closed**:
+timeout or error means deny.
+
+`pkg/audit` writes every decision to a local NDJSON log (auto-rotating at 8 MiB)
+and, when an upload URL is configured, ships batches to a central endpoint with
+at-least-once delivery. It is decoupled from `pkg/permission` through the
+`AuditSink` interface.
+
+**sandrpod-tray** (`cmd/sandrpod-tray`) is the user-session companion: tray
+icon, the consent dialogs, and a local settings page. It talks to the agent over
+`~/.sandrpod/authz.sock`.
+
+```bash
+sandrpod-tray serve                                # tray + IPC + settings HTTP
+sandrpod-tray rules ls                             # permanent rules and hardlocks
+sandrpod-tray rules add ~/Documents --mode rw
+sandrpod-tray policy ls                            # command deny/warn lists
+sandrpod-tray unlock ~/.ssh --i-understand-the-risk  # CLI only, never from the GUI
+sandrpod-tray seed                                 # install default hardlocks
+```
+
+Full treatment: [`PERMISSION_AND_AUDIT.md`](PERMISSION_AND_AUDIT.md).
+
+---
+
+### 2.8 MCP bridge (`pkg/mcpbridge`, `cmd/mcp-gateway`)
+
+Aggregates several MCP servers behind one Streamable-HTTP endpoint, so an agent
+gets a single tool namespace instead of N connections. `pkg/mcpbridge` supervises
+the child servers (spawn, backoff, restart) and merges their tool lists with
+`SplitFQName`-style prefixing.
+
+Two deployment shapes:
+
+- **In the agent** — `sandrpod-agent -mcp-enabled`, serving on `127.0.0.1:7090`.
+  Child servers run on the user's machine with their credentials, and the
+  permission gate applies through `PermissionGate`.
+- **In a sandbox** — `cmd/mcp-gateway` runs inside the container on port
+  `50005`, reached through the E2B port proxy. Accepts both the E2B `mcp` map
+  shape and the sandrpod `{mcpServers:{…}}` shape.
+
+`-mcp-oauth` handles servers requiring OAuth (Notion, etc.): the authorization
+URL is only ever surfaced over the admin socket, never to a remote caller.
+`-mcp-guard-manifest` pins tool definitions after approval, so a server that
+silently changes a tool's schema is rejected rather than trusted.
+
+See [`MCP_BRIDGE.md`](MCP_BRIDGE.md) and [`MCP_AUTH.md`](MCP_AUTH.md).
+
+---
+
+## 3. State machine
+
+```
+PENDING → STARTING → RUNNING → STOPPING → STOPPED
+                        │                    │
+                        └──────► ERROR ◄─────┘
+                                   │
+                                   ▼
+                              TERMINATED
+```
+
+Defined in `pkg/sandpod/interface.go`. `TERMINATED` is permanent. An
+agent-registered sandbox only ever occupies `RUNNING` and `ERROR`.
+
+---
+
+## 4. Key flows
+
+### 4.1 Poder registration and tunnel setup
 
 ```
 Poder                                    API Server
@@ -246,24 +408,23 @@ Poder                                    API Server
   │                                           │
   │◀─────────── 101 Switching Protocols ──────│
   │                                           │
-  │◀══════════ yamux Session (双向) ══════════▶│
+  │◀══════════ yamux session (bidi) ═════════▶│
   │                                           │
-  │  Poder 作为 yamux Server，                │  API Server 将 tunnel 存入
-  │  在 session 上 Serve HTTP                 │  tunnelStore[poderID]
+  │  Poder is the yamux *server*,             │  server stores the tunnel in
+  │  serving HTTP over the session            │  tunnelStore[poderID]
   │                                           │
-  ├── 心跳 PUT /api/v1/poders/{id}/heartbeat ─▶│  更新 last_heartbeat + usage
-  │   (每 10s，独立 HTTP 请求)                │
+  ├── PUT /api/v1/poders/{id}/heartbeat ─────▶│  update last_heartbeat + usage
+  │   (every 10s, its own HTTP request)       │
   │                                           │
-  ├── 轮询 GET /api/v1/jobs/poll ─────────────▶│
+  ├── GET /api/v1/jobs/poll ─────────────────▶│
   │◀────────────── [{job}, {job}] ────────────│
   │                                           │
-  │  执行 Job (CREATE/DELETE/START/STOP)      │
-  │  操作 Docker 完成后：                     │
+  │  run the job (CREATE/DELETE/START/STOP)   │
   │                                           │
-  ├── PATCH /api/v1/jobs/{id} ───────────────▶│  更新 Job 状态 + Sandbox 状态
+  ├── PATCH /api/v1/jobs/{id} ───────────────▶│  update job + sandbox state
 ```
 
-### 3.2 创建 Sandbox（Poder 模式）
+### 4.2 Creating a sandbox (Poder path)
 
 ```
 Client          API Server          Poder           Docker
@@ -271,7 +432,7 @@ Client          API Server          Poder           Docker
   │ POST /sandboxes │                 │               │
   ├────────────────▶│                 │               │
   │                 │ SelectBest()    │               │
-  │                 │ 写 Job(PENDING) │               │
+  │                 │ write Job(PENDING)              │
   │◀── 202 job_id ──│                 │               │
   │                 │                 │               │
   │                 │◀── PollJobs ────│               │
@@ -281,30 +442,30 @@ Client          API Server          Poder           Docker
   │                 │                 │◀── container ─│
   │                 │ PATCH job       │               │
   │                 │◀────────────────│               │
-  │                 │ sandbox.State=RUNNING           │
+  │                 │ sandbox.State = RUNNING         │
   │ GET /sandboxes/{name}             │               │
   ├────────────────▶│                 │               │
   │◀── {state:RUNNING, ip:…} ─────────│               │
 ```
 
-### 3.3 sandrpod-agent 注册（直连模式）
+### 4.3 sandrpod-agent registration (direct path)
 
 ```
 sandrpod-agent                       API Server
        │                                  │
        │── WS GET /ws/sandbox/connect ───▶│
        │   Header: X-Sandbox-Name,        │
-       │           X-Sandbox-Arch/OS       │
+       │           X-Sandbox-Arch/OS      │
        │                                  │
        │◀──────── 101 Switching ──────────│
        │                                  │
-       │◀═══ yamux Session ══════════════▶│ directStore[name] = tunnel
-       │  Agent 作为 yamux Server          │ sandboxStore.Add({name, state:RUNNING,
-       │  Serve toolbox HTTP              │   provider_type:"local-agent",
+       │◀═══ yamux session ══════════════▶│ directStore[name] = tunnel
+       │  agent is the yamux server,      │ store.Add({name, state:RUNNING,
+       │  serving the toolbox HTTP API    │   provider_type:"local-agent",
        │                                  │   proxy_url:"direct://name"})
 ```
 
-### 3.4 执行代码（通用代理路径）
+### 4.4 Executing code (the common proxy path)
 
 ```
 Client          API Server                  Poder/Agent    Toolbox
@@ -312,153 +473,151 @@ Client          API Server                  Poder/Agent    Toolbox
   │ POST /execute   │                           │             │
   │ ?sandbox=foo    │                           │             │
   ├────────────────▶│ sandboxTunnel("foo")      │             │
-  │                 │ → 查 sandboxStore         │             │
-  │                 │ → 判断 proxy_url          │             │
+  │                 │ → look up sandbox         │             │
+  │                 │ → switch on proxy_url     │             │
   │                 │   tunnel:// → tunnelStore │             │
   │                 │   direct:// → directStore │             │
   │                 │                           │             │
   │                 │── yamux.Open() ──────────▶│             │
-  │                 │── HTTP POST /execute ─────▶│             │
+  │                 │── HTTP POST /execute ────▶│             │
   │                 │                           │ POST /process
   │                 │                           ├────────────▶│
   │                 │                           │◀── output ──│
-  │◀────── output ──│◀─────────────────────────│             │
+  │◀────── output ──│◀──────────────────────────│             │
+```
+
+### 4.5 An E2B SDK request
+
+```
+e2b.Sandbox                    API Server                  Toolbox
+  │                                │                          │
+  │ POST api.<domain>/sandboxes    │                          │
+  ├───────────────────────────────▶│ host==api && E2B path    │
+  │                                │ → E2B control plane      │
+  │◀── {sandboxID, …} ─────────────│ → create via scheduler   │
+  │                                │                          │
+  │ POST 49999-<id>.<domain>/execute                          │
+  ├───────────────────────────────▶│ host matches envd pattern│
+  │                                │ → resolve sandbox from   │
+  │                                │   Host, Authorize()      │
+  │                                │ → tunnel                 │
+  │                                ├─────────────────────────▶│
+  │                                │   /code-interpreter/execute
+  │◀────── streamed results ───────│◀─────────────────────────│
 ```
 
 ---
 
-## 四、目录结构
+## 5. Repository layout
 
 ```
 sandrpod/
 ├── cmd/
-│   ├── server/          # API Server（控制平面 + 隧道代理）
-│   ├── poder/           # Worker 节点（Docker 容器管理 + 轮询 Job）
-│   ├── agent/           # 单机直连 Agent（toC 本地沙箱）
-│   └── toolbox/         # 沙箱内代码执行服务
+│   ├── server/          # API Server: control plane, tunnel proxy, E2B gateway
+│   ├── poder/           # Worker: Docker lifecycle + job polling
+│   ├── agent/           # Direct-registration agent (the machine is the sandbox)
+│   ├── toolbox/         # In-sandbox execution service
+│   ├── sandrpod-tray/   # User-session GUI companion (CGO: Cocoa/GTK/win32)
+│   └── mcp-gateway/     # In-sandbox MCP aggregator (port 50005)
 │
 ├── pkg/
-│   ├── sandpod/         # 核心领域模型
-│   │   ├── interface.go     # SandboxInfo, PoderInfo, Job 等数据结构
-│   │   ├── repo.go          # Repository 接口 + Stores 聚合
-│   │   ├── scheduler.go     # Poder 调度（SelectBest）
-│   │   ├── sandbox_store.go # 内存 SandboxStore（遗留，被 store 层取代）
-│   │   ├── poder_store.go   # 内存 PoderStore（遗留）
-│   │   └── job_store.go     # 内存 JobStore（遗留）
+│   ├── sandpod/         # Core domain
+│   │   ├── interface.go     # SandboxInfo, PoderInfo, Job, State
+│   │   ├── repo.go          # Repository interfaces + Stores aggregate
+│   │   ├── scheduler.go     # Poder selection (SelectBest)
+│   │   └── *_store.go       # In-memory stores (legacy; wrapped by pkg/store)
 │   │
-│   ├── store/           # Repository 实现层
-│   │   ├── interfaces.go    # sandpod.XxxRepository 的类型别名（向后兼容）
-│   │   ├── memory.go        # 内存实现（包装 sandpod.*Store）
-│   │   └── sqlite/          # SQLite 实现
-│   │       ├── db.go            # Open()：WAL、pragma、启动恢复
+│   ├── store/           # Repository implementations
+│   │   ├── memory.go        # In-memory adapter
+│   │   └── sqldb/           # SQLite *or* PostgreSQL from one codebase
+│   │       ├── dialect.go       # Placeholder rebinding, DDL types, job claim
+│   │       ├── db.go            # Open(), pragmas, startup recovery
 │   │       ├── schema.go        # DDL + Migrate()
-│   │       ├── sandbox_repo.go
-│   │       ├── poder_repo.go    # SelectBest SQL 评分
-│   │       └── job_repo.go      # PollJobs 原子事务
+│   │       ├── sandbox_repo.go  poder_repo.go  job_repo.go
+│   │       ├── token_repo.go    # API tokens (hash at rest)
+│   │       └── tunnelowner_repo.go  # Which node holds which tunnel
 │   │
-│   ├── poder/           # Poder 执行器接口 + Docker 实现
-│   │   ├── interface.go     # PodExecutor 接口
-│   │   ├── base.go
-│   │   └── docker.go        # Docker SDK 实现
+│   ├── e2bcompat/       # E2B wire-protocol gateway
+│   │   ├── gateway.go       # Config, Handler, host routing, authorization
+│   │   ├── controlplane.go  # /sandboxes, /templates, /snapshots, /volumes
+│   │   ├── envd.go          # Filesystem + process RPCs (Connect/gRPC)
+│   │   ├── process.go  protobuf.go  protobuf_process.go
+│   │   ├── codeinterp.go    # run_code surface
+│   │   ├── watch.go         # Directory watch streaming
+│   │   └── apikey.go        # e2b_<hex> key generation and lookup
 │   │
-│   ├── provider/        # 云厂商抽象层
-│   │   ├── interface.go     # Provider 接口（CreateVM / DeleteVM 等）
-│   │   ├── factory.go       # 工厂模式注册
-│   │   ├── aws/  aliyun/  azure/  gcp/          # 托管 run-command 后端
-│   │   ├── tencent/  oracle/                    # 托管 run-command 后端
-│   │   ├── digitalocean/  hetzner/              # SSH 后端
-│   │   └── sshexec/         # 共享 SSH 执行器（DO/Hetzner）
+│   ├── permission/      # Employee-PC decision engine (5-branch policy)
+│   ├── notify/          # Native consent dialogs; fail-closed
+│   │   └── prompt_{darwin,linux,windows}.go
+│   ├── audit/           # NDJSON recorder + background batch uploader
+│   ├── mcpbridge/       # MCP child supervision, tool aggregation, OAuth
 │   │
-│   ├── toolbox/         # Toolbox HTTP 服务（Go）
-│   │   ├── api.go           # HTTP handler
-│   │   ├── executor.go      # 代码执行（python / bash / node）
-│   │   ├── session.go       # 有状态 session（跨调用保持进程）
-│   │   ├── session_api.go
-│   │   ├── session_manager.go
-│   │   ├── files.go         # 文件操作
-│   │   └── pty_unix.go      # PTY 终端
+│   ├── poder/           # Pod executor interface + Docker implementation
+│   ├── provider/        # Cloud abstraction
+│   │   ├── interface.go  factory.go
+│   │   ├── aws/ aliyun/ azure/ tencent/ oracle/   # managed run-command
+│   │   ├── gcp/ digitalocean/ hetzner/            # SSH
+│   │   └── sshexec/         # Shared SSH executor (DO/Hetzner)
 │   │
-│   └── tunnel/          # WebSocket + yamux 反向隧道
-│       └── tunnel.go        # PoderTunnel, TunnelStore, wsConn
+│   ├── toolbox/         # In-sandbox HTTP service
+│   │   ├── api.go  executor.go  files.go  pty_unix.go
+│   │   ├── procmgr.go       # Process manager
+│   │   ├── session*.go      # Stateful sessions
+│   │   └── watch.go         # Directory watch
+│   │
+│   ├── tunnel/          # WebSocket + yamux reverse tunnel
+│   ├── logging/  brand/  homedir/                 # Shared infrastructure
+│   └── sdk/python/      # Python SDK + sandrpod-cli + langchain-sandrpod
 │
-├── pkg/sdk/python/      # Python SDK + CLI（sandrpod-cli）
-│
-├── docker/
-│   ├── Dockerfile.poder
-│   └── Dockerfile.toolbox
-│
-├── docs/
-│   ├── ARCHITECTURE.md          # 本文档（当前实现）
-│   ├── …                        # 完整文档索引见 docs/README.md
-│   └── design/                  # 历史设计存档（带指向现状的横幅）
-│
-├── go.mod
-├── go.sum
-└── CLAUDE.md
+├── docker/              # Dockerfiles + reference compose
+└── docs/                # This document; index in docs/README.md
 ```
 
 ---
 
-## 五、部署快速参考
+## 6. Ports and environment
 
-### 5.1 本地开发（内存模式）
+| Component | Port | Notes |
+|---|---|---|
+| API Server | `:8080` | The only port exposed to clients |
+| Poder | none | Dials out; listens on nothing |
+| sandrpod-agent | none | Same |
+| Toolbox | `:8080` in-container | Reached only through a tunnel (`:18080` in tests) |
+| MCP bridge (agent) | `127.0.0.1:7090` | Loopback only |
+| mcp-gateway (sandbox) | `:50005` | Reached through the E2B port proxy |
+
+| Component | Env | Purpose |
+|---|---|---|
+| API Server | `SANDRPOD_TOKEN` | API token |
+| API Server | `SANDRPOD_E2B_DOMAIN` | Enables the E2B gateway; the base domain |
+| Poder | `API_URL` / `REGION` / `PROVIDER_TYPE` | Server address, region, provider |
+| Poder | `SANDRPOD_TOOLBOX_IMAGE` | Sandbox image to run |
+| sandrpod-agent | `SANDRPOD_API_URL` / `SANDRPOD_SANDBOX_NAME` / `SANDRPOD_WORK_DIR` | Address, name, workdir |
+| sandrpod-agent | `SANDRPOD_PERMISSION_MODE` / `SANDRPOD_AUDIT_*` | Permission gate and audit |
+
+Complete list with defaults: `.env.example`.
+
+---
+
+## 7. Deployment quick reference
 
 ```bash
-# 启动 API Server
+# Local development (memory store)
 go run ./cmd/server -port 8080
-
-# 启动 Poder（需要 Docker）
 docker run -d --name sandrpod-poder \
   -v ~/.docker/run/docker.sock:/var/run/docker.sock \
   --add-host host.docker.internal:host-gateway \
   ghcr.io/sandrpod/poder:latest \
   -api-url=http://host.docker.internal:8080 -region=local
 
-# 验证
-sandrpod-cli --api-url http://localhost:8080 health
-sandrpod-cli --api-url http://localhost:8080 create my-sb
-```
-
-### 5.2 持久化模式（SQLite）
-
-```bash
+# Persistent, single instance
 go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db
-```
 
-### 5.3 单机 Agent 模式（无 Docker）
-
-```bash
-# 将本机注册为沙箱
+# Agent mode — no Docker, this machine is the sandbox
 sandrpod-agent -api-url=http://localhost:8080 -name=my-laptop -work-dir=/tmp/work
-
-# 然后直接在本机执行代码
-sandrpod-cli --api-url http://localhost:8080 execute my-laptop "print('hello')" -l python
+sandrpod-cli execute my-laptop "print('hello')" -l python
 ```
 
-### 5.4 构建 Docker 镜像
-
-```bash
-docker build -f docker/Dockerfile.poder   -t ghcr.io/sandrpod/poder:latest .
-docker build -f docker/Dockerfile.toolbox -t ghcr.io/sandrpod/toolbox:latest .
-```
-
----
-
-## 六、端口与环境变量汇总
-
-| 组件 | 默认端口 | 说明 |
-|------|----------|------|
-| API Server | `:8080` | 唯一对外暴露的端口 |
-| Poder | 无 | 不监听端口，通过拨出隧道通信 |
-| sandrpod-agent | 无 | 同上 |
-| Toolbox | `:8080`（容器内） | 仅容器内访问，测试时映射到 `:18080` |
-
-| 组件 | 环境变量 | 说明 |
-|------|----------|------|
-| API Server | `SANDRPOD_TOKEN` | 认证 token（可选；完整清单见 `.env.example`） |
-| Poder | `API_URL` | API Server 地址 |
-| Poder | `REGION` | 区域标识 |
-| Poder | `PROVIDER_TYPE` | `local` / `docker` / `aws` / `aliyun` / `azure` / `gcp` / `tencent` / `digitalocean` / `hetzner` / `oracle` |
-| sandrpod-agent | `SANDRPOD_API_URL` | API Server 地址 |
-| sandrpod-agent | `SANDRPOD_SANDBOX_NAME` | 沙箱名称 |
-| sandrpod-agent | `SANDRPOD_WORK_DIR` | 工作目录 |
+For a real deployment — PostgreSQL, wildcard TLS, the E2B surface on, and the
+acceptance sweep that proves it works — follow
+[`PRODUCTION_DEPLOYMENT.md`](PRODUCTION_DEPLOYMENT.md).
