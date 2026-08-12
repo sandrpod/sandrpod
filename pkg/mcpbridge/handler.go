@@ -98,10 +98,11 @@ func writeJSON(w http.ResponseWriter, v any) {
 
 // Manifest is the JSON payload returned by /mcp/manifest.
 type Manifest struct {
-	SchemaVersion int             `json:"schema_version"`
-	LoadedAt      time.Time       `json:"loaded_at"`
-	Servers       []ChildSnapshot `json:"servers"`
-	TotalTools    int             `json:"total_tools"`
+	SchemaVersion  int             `json:"schema_version"`
+	LoadedAt       time.Time       `json:"loaded_at"`
+	Servers        []ChildSnapshot `json:"servers"`
+	TotalTools     int             `json:"total_tools"`
+	TotalResources int             `json:"total_resources"`
 	// ConfigPath is the mcp.json this bridge reads, so a caller (e.g. the CLI)
 	// knows which file to read/modify to add/remove servers.
 	ConfigPath string `json:"config_path,omitempty"`
@@ -119,21 +120,23 @@ func manifestHandler(mgr *ChildManager, includeAuthURL bool) http.HandlerFunc {
 			return
 		}
 		snap := mgr.Snapshot()
-		total := 0
+		total, totalRes := 0, 0
 		for i, s := range snap {
 			if s.State == string(StateReady) {
 				total += s.ToolCount
+				totalRes += s.ResourceCount
 			}
 			if !includeAuthURL {
 				snap[i].AuthURL = ""
 			}
 		}
 		m := Manifest{
-			SchemaVersion: 1,
-			LoadedAt:      time.Now().UTC(),
-			Servers:       snap,
-			TotalTools:    total,
-			ConfigPath:    mgr.ConfigPath(),
+			SchemaVersion:  1,
+			LoadedAt:       time.Now().UTC(),
+			Servers:        snap,
+			TotalTools:     total,
+			TotalResources: totalRes,
+			ConfigPath:     mgr.ConfigPath(),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(m)

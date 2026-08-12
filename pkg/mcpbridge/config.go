@@ -110,6 +110,11 @@ type SandrpodOpts struct {
 	StartupTimeoutSec int      `json:"startup_timeout_sec,omitempty"`
 	ToolAllowlist     []string `json:"tool_allowlist,omitempty"`
 	ToolDenylist      []string `json:"tool_denylist,omitempty"`
+	// Resource lists are keyed on URI and are deliberately separate from the
+	// tool lists: those hold names, so reusing them would match no resource
+	// and an allowlist meant for tools would silently hide every resource.
+	ResourceAllowlist []string `json:"resource_allowlist,omitempty"`
+	ResourceDenylist  []string `json:"resource_denylist,omitempty"`
 }
 
 // IsEnabled reports whether the server should be spawned. Defaults to true

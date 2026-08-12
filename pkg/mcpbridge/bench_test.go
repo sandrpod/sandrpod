@@ -42,6 +42,12 @@ func (f *fastTransport) ListTools(context.Context, mcp.ListToolsRequest) (*mcp.L
 func (f *fastTransport) CallTool(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return &mcp.CallToolResult{Content: []mcp.Content{mcp.TextContent{Type: "text", Text: "ok"}}}, nil
 }
+func (f *fastTransport) ListResources(context.Context, mcp.ListResourcesRequest) (*mcp.ListResourcesResult, error) {
+	return &mcp.ListResourcesResult{}, nil
+}
+func (f *fastTransport) ReadResource(context.Context, mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	return &mcp.ReadResourceResult{}, nil
+}
 func (f *fastTransport) Ping(context.Context) error { return nil }
 func (f *fastTransport) Close() error               { return nil }
 

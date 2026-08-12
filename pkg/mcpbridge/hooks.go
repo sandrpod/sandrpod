@@ -12,12 +12,24 @@ const (
 
 // PermissionEvent describes a sandboxed action the bridge wants to take.
 type PermissionEvent struct {
-	// Source is one of: mcp.install, mcp.spawn, mcp.call, mcp.restart.
+	// Source is one of: mcp.install, mcp.spawn, mcp.call, mcp.resource,
+	// mcp.restart.
+	//
+	// mcp.resource is a read of an upstream resource (resources/read). It is
+	// read-only and, for MCP Apps, usually fetches a static interface
+	// template — so a gate that prompts per event will want to treat it
+	// differently from mcp.call rather than asking every time a UI opens.
+	// The bridge does not decide that: it asks on every read and lets the
+	// host key off this field.
 	Source string
 	// Server is the mcp.json key (e.g. "github").
 	Server string
 	// Tool is the un-prefixed tool name for Source=mcp.call; empty otherwise.
 	Tool string
+	// Resource is the un-prefixed resource URI for Source=mcp.resource;
+	// empty otherwise. Kept separate from Tool so an audit trail can tell a
+	// tool invocation from a resource read.
+	Resource string
 	// Command + Args identify the subprocess for spawn / install.
 	Command string
 	Args    []string
@@ -44,6 +56,7 @@ type AuditEvent struct {
 	Decision     Decision
 	Server       string
 	Tool         string
+	Resource     string
 	ArgsSummary  string
 	ResultStatus string
 	DurationMs   int64

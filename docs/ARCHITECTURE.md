@@ -375,6 +375,16 @@ URL is only ever surfaced over the admin socket, never to a remote caller.
 `-mcp-guard-manifest` pins tool definitions after approval, so a server that
 silently changes a tool's schema is rejected rather than trusted.
 
+**Resources** are proxied alongside tools, which is what lets an
+[MCP Apps](https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp)
+host fetch a server's interface HTML: that is only reachable through
+`resources/read`, and the CSP and permission declarations governing the iframe
+ride on the resource's `_meta`, so the bridge returns upstream contents
+untouched. URIs are namespaced into the authority (`ui://form` →
+`ui://<alias>/form`) because two servers exposing `ui://form` would otherwise
+collide, and each tool's `_meta.ui.resourceUri` is rewritten to match. Servers
+that expose no resources are never asked.
+
 See [`MCP_BRIDGE.md`](MCP_BRIDGE.md) and [`MCP_AUTH.md`](MCP_AUTH.md).
 
 ---

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -66,6 +67,7 @@ type ChildManager struct {
 	mu       sync.RWMutex
 	children map[string]*Child
 	fqIndex  map[string]fqEntry
+	uriIndex map[string]uriEntry
 
 	onChange []func()
 
@@ -82,6 +84,14 @@ type ChildManager struct {
 type fqEntry struct {
 	childName    string
 	originalName string
+}
+
+// uriEntry is fqEntry's counterpart for resources: it maps a bridged,
+// alias-namespaced URI back to the child that owns it and the URI that
+// child actually knows.
+type uriEntry struct {
+	childName   string
+	originalURI string
 }
 
 // NewManager constructs a manager but does not start it.
@@ -102,6 +112,7 @@ func NewManager(opts ManagerOptions) *ChildManager {
 		opts:     opts,
 		children: map[string]*Child{},
 		fqIndex:  map[string]fqEntry{},
+		uriIndex: map[string]uriEntry{},
 	}
 }
 
@@ -201,6 +212,7 @@ func (m *ChildManager) Stop(ctx context.Context) error {
 	}
 	m.children = map[string]*Child{}
 	m.fqIndex = map[string]fqEntry{}
+	m.uriIndex = map[string]uriEntry{}
 	return firstErr
 }
 
@@ -248,6 +260,7 @@ func (m *ChildManager) Shutdown(ctx context.Context, drainTimeout time.Duration)
 	}
 	m.children = map[string]*Child{}
 	m.fqIndex = map[string]fqEntry{}
+	m.uriIndex = map[string]uriEntry{}
 	m.mu.Unlock()
 
 	if len(notDrained) > 0 {
@@ -419,6 +432,75 @@ func (m *ChildManager) AggregatedTools() []mcp.Tool {
 			} else {
 				cloned.Description = "[" + c.Alias + "]"
 			}
+			cloned.Meta = rewriteUIResourceURI(t.Meta, c.Alias)
+			out = append(out, cloned)
+		}
+	}
+	return out
+}
+
+// rewriteUIResourceURI points an MCP Apps tool at the bridged URI.
+//
+// A tool declares its interface with _meta.ui.resourceUri; the host reads that
+// from tools/list and fetches it with resources/read. Left alone it still says
+// ui://form — the upstream URI — which the bridge's resource index does not
+// know, so the read 404s, or worse, silently lands on whichever other server
+// also exposes ui://form. That second failure needs two UI-bearing servers to
+// appear at all, which is exactly why it survives single-server testing.
+//
+// The copy is deliberate and has to go two levels deep. AggregatedTools clones
+// the Tool by assignment, which copies the *Meta pointer, not the Meta — and
+// AdditionalFields under it is a map, another reference. Writing through
+// either reaches the child's own c.tools and corrupts the upstream record for
+// every later caller.
+func rewriteUIResourceURI(meta *mcp.Meta, alias string) *mcp.Meta {
+	if meta == nil || meta.AdditionalFields == nil {
+		return meta
+	}
+	ui, ok := meta.AdditionalFields["ui"].(map[string]any)
+	if !ok {
+		return meta
+	}
+	uri, ok := ui["resourceUri"].(string)
+	if !ok || uri == "" {
+		return meta
+	}
+
+	fields := make(map[string]any, len(meta.AdditionalFields))
+	maps.Copy(fields, meta.AdditionalFields)
+	uiCopy := make(map[string]any, len(ui))
+	maps.Copy(uiCopy, ui)
+	uiCopy["resourceUri"] = fullyQualifiedURI(alias, uri)
+	fields["ui"] = uiCopy
+
+	return &mcp.Meta{ProgressToken: meta.ProgressToken, AdditionalFields: fields}
+}
+
+// AggregatedResources returns every ready child's resources under their
+// bridged URIs, mirroring AggregatedTools.
+func (m *ChildManager) AggregatedResources() []mcp.Resource {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]mcp.Resource, 0)
+	names := make([]string, 0, len(m.children))
+	for k := range m.children {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		c := m.children[name]
+		if c.State() != StateReady {
+			continue
+		}
+		for _, r := range c.Resources() {
+			cloned := r
+			cloned.URI = fullyQualifiedURI(c.Alias, r.URI)
+			if cloned.Description != "" {
+				cloned.Description = "[" + c.Alias + "] " + cloned.Description
+			} else {
+				cloned.Description = "[" + c.Alias + "]"
+			}
 			out = append(out, cloned)
 		}
 	}
@@ -474,6 +556,57 @@ func (m *ChildManager) Dispatch(ctx context.Context, fqName string, args any) (*
 	return res, err
 }
 
+// DispatchResource resolves a bridged URI to its child and proxies the read.
+// It runs the same gate-then-audit sequence as Dispatch: a resource read is
+// read-only, but it still reaches an upstream server on the user's machine, so
+// it is not exempt from the permission gate — hosts that want UI templates to
+// load without a prompt key off PermissionEvent.Source == "mcp.resource".
+func (m *ChildManager) DispatchResource(ctx context.Context, fqURI string) (*mcp.ReadResourceResult, error) {
+	m.mu.RLock()
+	entry, ok := m.uriIndex[fqURI]
+	c := m.children[entry.childName]
+	m.mu.RUnlock()
+	if !ok || c == nil {
+		return nil, fmt.Errorf("unknown resource %q", fqURI)
+	}
+
+	dec, gateErr := m.opts.Permission.Check(ctx, PermissionEvent{
+		Source:   "mcp.resource",
+		Server:   c.Name,
+		Resource: entry.originalURI,
+	})
+	if gateErr != nil || dec != DecisionAllow {
+		reason := "permission denied"
+		if gateErr != nil {
+			reason = gateErr.Error()
+		}
+		m.opts.Audit.Record(AuditEvent{
+			Source:   "mcp.resource",
+			Decision: DecisionDeny,
+			Server:   c.Name,
+			Resource: entry.originalURI,
+			Reason:   reason,
+		})
+		return nil, fmt.Errorf("resource %q denied: %s", fqURI, reason)
+	}
+
+	started := time.Now()
+	res, err := c.ReadResource(ctx, entry.originalURI)
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	m.opts.Audit.Record(AuditEvent{
+		Source:       "mcp.resource",
+		Decision:     DecisionAllow,
+		Server:       c.Name,
+		Resource:     entry.originalURI,
+		ResultStatus: status,
+		DurationMs:   time.Since(started).Milliseconds(),
+	})
+	return res, err
+}
+
 // Snapshot returns a read-only view of children for /mcp/manifest.
 func (m *ChildManager) Snapshot() []ChildSnapshot {
 	m.mu.RLock()
@@ -482,15 +615,16 @@ func (m *ChildManager) Snapshot() []ChildSnapshot {
 	for _, c := range m.children {
 		c.mu.RLock()
 		out = append(out, ChildSnapshot{
-			Name:      c.Name,
-			Alias:     c.Alias,
-			State:     string(c.state),
-			Command:   c.Cfg.Target(),
-			ToolCount: len(c.tools),
-			StartedAt: c.startedAt,
-			Restarts:  c.restarts,
-			LastError: c.lastError,
-			AuthURL:   c.authURL,
+			Name:          c.Name,
+			Alias:         c.Alias,
+			State:         string(c.state),
+			Command:       c.Cfg.Target(),
+			ToolCount:     len(c.tools),
+			ResourceCount: len(c.resources),
+			StartedAt:     c.startedAt,
+			Restarts:      c.restarts,
+			LastError:     c.lastError,
+			AuthURL:       c.authURL,
 		})
 		c.mu.RUnlock()
 	}
@@ -506,14 +640,17 @@ func (m *ChildManager) ConfigPath() string { return m.opts.ConfigPath }
 
 // ChildSnapshot is a read-only view of a Child for /mcp/manifest.
 type ChildSnapshot struct {
-	Name      string    `json:"name"`
-	Alias     string    `json:"alias"`
-	State     string    `json:"state"`
-	Command   string    `json:"command"`
-	ToolCount int       `json:"tool_count"`
-	StartedAt time.Time `json:"started_at,omitzero"`
-	Restarts  int       `json:"restart_count"`
-	LastError string    `json:"last_error,omitempty"`
+	Name      string `json:"name"`
+	Alias     string `json:"alias"`
+	State     string `json:"state"`
+	Command   string `json:"command"`
+	ToolCount int    `json:"tool_count"`
+	// ResourceCount is how the desktop host tells "this server ships an
+	// interface" from "this server is tools only" without a resources/list.
+	ResourceCount int       `json:"resource_count"`
+	StartedAt     time.Time `json:"started_at,omitzero"`
+	Restarts      int       `json:"restart_count"`
+	LastError     string    `json:"last_error,omitempty"`
 	// AuthURL is the pending OAuth authorization URL while state ==
 	// waiting_auth. Redacted from the public /mcp/manifest — only the
 	// local-only admin surface exposes it (the browser handoff is a
@@ -540,6 +677,7 @@ func (m *ChildManager) notifyChange() {
 
 func (m *ChildManager) rebuildIndexLocked() {
 	idx := map[string]fqEntry{}
+	uris := map[string]uriEntry{}
 	names := make([]string, 0, len(m.children))
 	for k := range m.children {
 		names = append(names, k)
@@ -560,8 +698,16 @@ func (m *ChildManager) rebuildIndexLocked() {
 			}
 			idx[fq] = fqEntry{childName: c.Name, originalName: t.Name}
 		}
+		for _, r := range c.Resources() {
+			fq := fullyQualifiedURI(c.Alias, r.URI)
+			if _, exists := uris[fq]; exists {
+				fq = fq + "__from_" + c.Name
+			}
+			uris[fq] = uriEntry{childName: c.Name, originalURI: r.URI}
+		}
 	}
 	m.fqIndex = idx
+	m.uriIndex = uris
 	// Notify outside the lock to avoid deadlock if a callback re-enters.
 	go m.notifyChange()
 }
@@ -875,6 +1021,35 @@ func fullyQualifiedName(alias, tool string) string {
 		a = a[:aliasMaxLen-7] + "_" + shortHash(alias)
 	}
 	return a + "__" + tool
+}
+
+// fullyQualifiedURI namespaces a resource URI under the child's alias. Tool
+// names take an alias__ prefix, but a URI cannot: ui://form from two servers
+// would collide, and prefixing the whole string destroys the scheme that MCP
+// Apps hosts check for. So the alias goes in the authority instead, leaving
+// the scheme where it was:
+//
+//	ui://form        →  ui://<alias>/form
+//	file:///etc/hosts →  file://<alias>//etc/hosts
+//	urn:x:thing      →  urn://<alias>/x:thing
+//
+// The result is an opaque identifier, not something a host dereferences — it
+// comes back to the bridge on resources/read and uriIndex maps it home. Only
+// injectivity matters, and prefixing a distinct alias gives that.
+func fullyQualifiedURI(alias, uri string) string {
+	a := alias
+	if len(a) > aliasMaxLen {
+		a = a[:aliasMaxLen-7] + "_" + shortHash(alias)
+	}
+	if scheme, rest, ok := strings.Cut(uri, "://"); ok {
+		return scheme + "://" + a + "/" + rest
+	}
+	if scheme, rest, ok := strings.Cut(uri, ":"); ok {
+		return scheme + "://" + a + "/" + rest
+	}
+	// No scheme at all — not a legal MCP resource URI, but never drop it on
+	// the floor: give it one so the round trip still works.
+	return "sandrpod://" + a + "/" + uri
 }
 
 func shortHash(s string) string {

@@ -38,6 +38,11 @@ type childTransport interface {
 	Initialize(ctx context.Context, req mcp.InitializeRequest) (*mcp.InitializeResult, error)
 	ListTools(ctx context.Context, req mcp.ListToolsRequest) (*mcp.ListToolsResult, error)
 	CallTool(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	// ListResources / ReadResource back the resources surface. Most MCP
+	// servers do not implement them and answer -32601; the child only calls
+	// them after initialize reports the resources capability.
+	ListResources(ctx context.Context, req mcp.ListResourcesRequest) (*mcp.ListResourcesResult, error)
+	ReadResource(ctx context.Context, req mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error)
 	// Ping is used by the supervisor goroutine to detect dead children
 	// (stdio child has crashed or hung). MCP defines ping as a no-op
 	// JSON-RPC method; if the child can't answer, it's gone.
@@ -57,6 +62,12 @@ func (r *realChildTransport) ListTools(ctx context.Context, req mcp.ListToolsReq
 }
 func (r *realChildTransport) CallTool(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return r.c.CallTool(ctx, req)
+}
+func (r *realChildTransport) ListResources(ctx context.Context, req mcp.ListResourcesRequest) (*mcp.ListResourcesResult, error) {
+	return r.c.ListResources(ctx, req)
+}
+func (r *realChildTransport) ReadResource(ctx context.Context, req mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	return r.c.ReadResource(ctx, req)
 }
 func (r *realChildTransport) Ping(ctx context.Context) error { return r.c.Ping(ctx) }
 func (r *realChildTransport) Close() error                   { return r.c.Close() }
@@ -145,6 +156,7 @@ type Child struct {
 	mu           sync.RWMutex
 	transport    childTransport
 	tools        []mcp.Tool
+	resources    []mcp.Resource
 	state        ChildState
 	lastError    string
 	authURL      string // set while state == StateWaitingAuth
@@ -207,7 +219,8 @@ func (c *Child) Start(ctx context.Context) error {
 		Name:    "sandrpod-mcp-bridge",
 		Version: "0.1.0",
 	}
-	if _, err := t.Initialize(hsCtx, initReq); err != nil {
+	initResp, err := t.Initialize(hsCtx, initReq)
+	if err != nil {
 		_ = t.Close()
 		if c.awaitAuthorization(err) {
 			return err
@@ -225,9 +238,22 @@ func (c *Child) Start(ctx context.Context) error {
 
 	tools := filterTools(listResp.Tools, c.Cfg.Sandrpod)
 
+	// Resources are optional. Ask only when initialize advertised the
+	// capability — most servers do not, and calling anyway earns a -32601
+	// on every start. A server that advertises it but then fails the list
+	// is degraded to "no resources", never to StateFailed: its tools still
+	// work, and MCP Apps is the only thing that misses out.
+	var resources []mcp.Resource
+	if initResp != nil && initResp.Capabilities.Resources != nil {
+		if rr, rerr := t.ListResources(hsCtx, mcp.ListResourcesRequest{}); rerr == nil && rr != nil {
+			resources = filterResources(rr.Resources, c.Cfg.Sandrpod)
+		}
+	}
+
 	c.mu.Lock()
 	c.transport = t
 	c.tools = tools
+	c.resources = resources
 	c.state = StateReady
 	c.startedAt = time.Now()
 	c.mu.Unlock()
@@ -242,6 +268,7 @@ func (c *Child) Stop(_ context.Context) error {
 	t := c.transport
 	c.transport = nil
 	c.tools = nil
+	c.resources = nil
 	c.state = StateStopped
 	c.mu.Unlock()
 	if t == nil {
@@ -256,6 +283,16 @@ func (c *Child) Tools() []mcp.Tool {
 	defer c.mu.RUnlock()
 	out := make([]mcp.Tool, len(c.tools))
 	copy(out, c.tools)
+	return out
+}
+
+// Resources returns a copy of the cached resource slice. Empty for the
+// majority of servers, which expose no resources at all.
+func (c *Child) Resources() []mcp.Resource {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]mcp.Resource, len(c.resources))
+	copy(out, c.resources)
 	return out
 }
 
@@ -299,6 +336,32 @@ func (c *Child) CallTool(ctx context.Context, name string, args any) (*mcp.CallT
 	req.Params.Name = name
 	req.Params.Arguments = args
 	return t.CallTool(ctx, req)
+}
+
+// ReadResource proxies a resources/read to the child, with the same readiness
+// check and in-flight accounting as CallTool — a read outstanding when Stop
+// arrives must be drained too, or the caller hangs on an EOF after the
+// subprocess dies.
+func (c *Child) ReadResource(ctx context.Context, uri string) (*mcp.ReadResourceResult, error) {
+	c.mu.RLock()
+	t := c.transport
+	state := c.state
+	resources := c.resources
+	c.mu.RUnlock()
+
+	if state != StateReady || t == nil {
+		return nil, fmt.Errorf("child %s not ready (state=%s)", c.Name, state)
+	}
+	if !resourceKnown(resources, uri) {
+		return nil, fmt.Errorf("resource %s not exposed by child %s", uri, c.Name)
+	}
+
+	c.inFlight.Add(1)
+	defer c.inFlight.Done()
+
+	req := mcp.ReadResourceRequest{}
+	req.Params.URI = uri
+	return t.ReadResource(ctx, req)
 }
 
 // WaitDrain blocks until all in-flight CallTool invocations on this child
@@ -439,6 +502,40 @@ func toolKnown(tools []mcp.Tool, name string) bool {
 		}
 	}
 	return false
+}
+
+func resourceKnown(resources []mcp.Resource, uri string) bool {
+	for _, r := range resources {
+		if r.URI == uri {
+			return true
+		}
+	}
+	return false
+}
+
+// filterResources applies the same allow/deny discipline as filterTools, but
+// against its own pair of lists — see the note on SandrpodOpts for why they
+// cannot be shared with the tool lists.
+func filterResources(in []mcp.Resource, opts *SandrpodOpts) []mcp.Resource {
+	if opts == nil {
+		return in
+	}
+	allow := opts.ResourceAllowlist
+	deny := opts.ResourceDenylist
+	if len(allow) == 0 && len(deny) == 0 {
+		return in
+	}
+	out := make([]mcp.Resource, 0, len(in))
+	for _, r := range in {
+		if len(allow) > 0 && !slices.Contains(allow, r.URI) {
+			continue
+		}
+		if slices.Contains(deny, r.URI) {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out
 }
 
 func filterTools(in []mcp.Tool, opts *SandrpodOpts) []mcp.Tool {

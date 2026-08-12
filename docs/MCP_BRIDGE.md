@@ -120,6 +120,12 @@ Standard Claude Desktop layout, with optional sandrpod extensions:
 | `startup_timeout_sec` | `30` | Time allowed for spawn + initialize handshake. |
 | `tool_allowlist` | (all) | If set, only these tools are exposed. |
 | `tool_denylist` | (none) | These tools are removed even if allowlisted. |
+| `resource_allowlist` | (all) | Same idea for resources, keyed on URI. |
+| `resource_denylist` | (none) | Removed even if allowlisted. |
+
+The resource lists are separate from the tool lists on purpose: the tool lists
+hold names, so reusing them would match no resource at all and a `tool_allowlist`
+would silently hide every resource a server exposes.
 
 Other tools (Claude Desktop, Cursor) ignore the `sandrpod` sub-object, so the
 same file works everywhere.
@@ -211,6 +217,59 @@ Long aliases (>16 chars) are truncated with a deterministic hash suffix
 so distinct long aliases never collide. Name collisions across servers
 (rare) are broken by appending `__from_<server-name>` to the second
 arrival, in alphabetical server order.
+
+## Resources, and MCP Apps
+
+Most MCP servers expose tools and nothing else, and for them nothing here
+changes. Servers that also expose **resources** — notably any server shipping an
+[MCP Apps](https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp)
+interface — are proxied too.
+
+An MCP Apps host loads an interface in four steps, and step 2 is mandatory:
+
+```
+1. tools/list      → read the tool's _meta.ui.resourceUri  ("ui://…")
+2. resources/read  → fetch the HTML, mimeType text/html;profile=mcp-app
+3. ui/initialize   → handshake with the View inside the iframe
+4. tool call       → push data over ui/notifications/*
+```
+
+The spec requires the fetch rather than inlining the HTML in a `tools/call`
+result for two reasons, and both survive the bridge: the template is cacheable
+independently of the data, and the security declaration — `_meta.ui.csp`,
+`_meta.ui.permissions`, `_meta.ui.domain` — lives on the *resource*. The bridge
+returns upstream `ResourceContents` untouched, so that declaration arrives with
+the HTML it governs.
+
+### URI namespacing
+
+Tool names take an `alias__` prefix. URIs cannot: two servers both exposing
+`ui://form` would collide, and prefixing the whole string destroys the scheme an
+MCP Apps host checks for. The alias goes in the authority instead:
+
+```
+upstream:  ui://form
+bridged:   ui://<alias>/form
+```
+
+`_meta.ui.resourceUri` on the tool is rewritten to match, so the URI a host reads
+out of `tools/list` is the one that works on `resources/read`. Collisions after
+namespacing fall back to the same `__from_<server-name>` suffix used for tools.
+
+### What is not proxied
+
+- **`resources/subscribe`** and `notifications/resources/updated`. MCP Apps does
+  not need them, and forwarding notifications means a second, bidirectional
+  child→bridge→host channel.
+- **`resources/templates/list`**. MCP Apps references a concrete URI, not a
+  template.
+- **`_meta.ui.visibility` enforcement** — keeping an app-only tool away from the
+  model, blocking cross-server app calls. The spec assigns that to the *host*.
+  The bridge's job is not to strip `_meta`, which it does not.
+
+A server that declares no `resources` capability is never asked for them, and a
+server that declares the capability but then fails `resources/list` is degraded
+to "no resources" rather than marked failed — its tools still work.
 
 ## Hot reload
 

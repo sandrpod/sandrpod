@@ -20,17 +20,48 @@ type fakeTransport struct {
 	lastArgs any
 	callResp *mcp.CallToolResult
 	callErr  error
+
+	// Resource support is opt-in per fake, mirroring reality: a transport
+	// only advertises the capability when it has resources, so the default
+	// zero value behaves like the overwhelming majority of MCP servers.
+	resources   []mcp.Resource
+	readResp    *mcp.ReadResourceResult
+	readErr     error
+	listResErr  error
+	lastReadURI string
 }
 
 func (f *fakeTransport) Start(context.Context) error { return nil }
 func (f *fakeTransport) Initialize(context.Context, mcp.InitializeRequest) (*mcp.InitializeResult, error) {
-	return &mcp.InitializeResult{
+	res := &mcp.InitializeResult{
 		ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
 		ServerInfo:      mcp.Implementation{Name: "fake", Version: "1"},
-	}, nil
+	}
+	if f.resources != nil || f.listResErr != nil {
+		res.Capabilities.Resources = &struct {
+			Subscribe   bool `json:"subscribe,omitempty"`
+			ListChanged bool `json:"listChanged,omitempty"`
+		}{}
+	}
+	return res, nil
 }
 func (f *fakeTransport) ListTools(context.Context, mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
 	return &mcp.ListToolsResult{Tools: f.tools}, nil
+}
+func (f *fakeTransport) ListResources(context.Context, mcp.ListResourcesRequest) (*mcp.ListResourcesResult, error) {
+	if f.listResErr != nil {
+		return nil, f.listResErr
+	}
+	return &mcp.ListResourcesResult{Resources: f.resources}, nil
+}
+func (f *fakeTransport) ReadResource(_ context.Context, req mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	f.mu.Lock()
+	f.lastReadURI = req.Params.URI
+	f.mu.Unlock()
+	if f.readErr != nil {
+		return nil, f.readErr
+	}
+	return f.readResp, nil
 }
 func (f *fakeTransport) CallTool(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	f.mu.Lock()

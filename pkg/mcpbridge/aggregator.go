@@ -16,6 +16,14 @@ func NewAggregatorServer(mgr *ChildManager) *server.MCPServer {
 		"sandrpod-mcp-bridge",
 		"0.1.0",
 		server.WithToolCapabilities(true),
+		// Base protocol: a server offering resources MUST declare the
+		// capability, so without this a conforming client never sends
+		// resources/read no matter what the bridge routes. subscribe=false
+		// because MCP Apps does not need it and forwarding a child's
+		// notifications/resources/updated would mean a second, bidirectional
+		// channel; listChanged=true because the set really does change as
+		// children come and go, same as tools.
+		server.WithResourceCapabilities(false, true),
 		server.WithRecovery(),
 	)
 
@@ -30,6 +38,19 @@ func NewAggregatorServer(mgr *ChildManager) *server.MCPServer {
 			})
 		}
 		s.SetTools(tools...)
+
+		// Likewise for resources — the majority of deployments will have
+		// none, and SetResources with an empty set is how a child that had
+		// them stops advertising them.
+		res := mgr.AggregatedResources()
+		srv := make([]server.ServerResource, 0, len(res))
+		for _, r := range res {
+			srv = append(srv, server.ServerResource{
+				Resource: r,
+				Handler:  makeResourceProxyHandler(mgr, r.URI),
+			})
+		}
+		s.SetResources(srv...)
 	}
 
 	sync()
@@ -46,5 +67,23 @@ func makeProxyHandler(mgr *ChildManager, fqName string) server.ToolHandlerFunc {
 			return nil, fmt.Errorf("mcp dispatch: %w", err)
 		}
 		return res, nil
+	}
+}
+
+func makeResourceProxyHandler(mgr *ChildManager, fqURI string) server.ResourceHandlerFunc {
+	return func(ctx context.Context, _ mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+		res, err := mgr.DispatchResource(ctx, fqURI)
+		if err != nil {
+			return nil, fmt.Errorf("mcp resource dispatch: %w", err)
+		}
+		if res == nil {
+			return nil, fmt.Errorf("mcp resource dispatch: %s returned no contents", fqURI)
+		}
+		// Hand the upstream contents back untouched. _meta rides along on
+		// each one, and for MCP Apps that _meta is the whole security
+		// declaration — ui.csp, ui.permissions, ui.domain. Rewriting or
+		// rebuilding these would strip the sandbox policy off the HTML it
+		// applies to.
+		return res.Contents, nil
 	}
 }
