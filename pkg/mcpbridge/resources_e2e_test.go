@@ -524,6 +524,22 @@ func TestPromptsEndToEnd(t *testing.T) {
 		}
 	}
 
+	// Argument metadata must survive intact. A host renders a form from it
+	// and a model decides what to supply; losing `required` turns a
+	// mandatory field into an optional one, and the failure only shows up
+	// as an upstream rejection much later.
+	for _, p := range lp.Prompts {
+		if len(p.Arguments) != 1 {
+			t.Fatalf("%s: %d arguments, want 1", p.Name, len(p.Arguments))
+		}
+		if p.Arguments[0].Name != "topic" {
+			t.Errorf("%s: argument name = %q", p.Name, p.Arguments[0].Name)
+		}
+		if !p.Arguments[0].Required {
+			t.Errorf("%s: required flag lost crossing the bridge", p.Name)
+		}
+	}
+
 	req := mcp.GetPromptRequest{}
 	req.Params.Name = "beta__summarise"
 	req.Params.Arguments = map[string]string{"topic": "pagination"}
