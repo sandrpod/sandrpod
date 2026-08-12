@@ -3,6 +3,7 @@ package mcpbridge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"maps"
 	"net/http/httptest"
 	"os"
@@ -41,10 +42,32 @@ func TestMain(m *testing.M) {
 // contents survive. name distinguishes the two instances the collision test
 // spawns.
 func runFixtureServer(name string) {
-	s := server.NewMCPServer("fixture-"+name, "1.0",
+	opts := []server.ServerOption{
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(false, true),
-	)
+	}
+	// The "paged" instance hands back small pages with a nextCursor, which is
+	// how a real server with many resources behaves and what the bridge has
+	// to keep following.
+	if name == "paged" {
+		opts = append(opts, server.WithPaginationLimit(10))
+	}
+	s := server.NewMCPServer("fixture-"+name, "1.0", opts...)
+
+	if name == "paged" {
+		for i := range pagedResourceCount {
+			uri := fmt.Sprintf("doc://page/%03d", i)
+			s.AddResource(
+				mcp.Resource{URI: uri, Name: fmt.Sprintf("doc-%03d", i), MIMEType: "text/plain"},
+				func(context.Context, mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+					return []mcp.ResourceContents{mcp.TextResourceContents{
+						URI: uri, MIMEType: "text/plain", Text: uri,
+					}}, nil
+				})
+		}
+		_ = server.ServeStdio(s)
+		return
+	}
 
 	tool := mcp.Tool{
 		Name:        "open_form",
@@ -385,4 +408,62 @@ func uriSet(rs []mcp.Resource) map[string]bool {
 func jsonStr(s string) string {
 	b, _ := json.Marshal(s)
 	return string(b)
+}
+
+// pagedResourceCount exceeds the fixture's 10-per-page limit several times
+// over, so a bridge that reads only the first page is off by 115.
+const pagedResourceCount = 125
+
+// Pagination is part of the base protocol: a server MAY return a nextCursor
+// and the caller MUST follow it. This asserts the bridge collects every page
+// from an upstream that really paginates, and re-serves the whole set.
+func TestUpstreamPaginationIsFollowed(t *testing.T) {
+	m := startReal(t, fixtureConfig(t, "paged"))
+
+	got := m.AggregatedResources()
+	if len(got) != pagedResourceCount {
+		t.Fatalf("aggregated %d resources, want %d — a page was dropped",
+			len(got), pagedResourceCount)
+	}
+
+	// First, last and one in the middle must all resolve, so this is not
+	// passing on a count alone.
+	for _, i := range []int{0, pagedResourceCount / 2, pagedResourceCount - 1} {
+		uri := fmt.Sprintf("doc://paged/page/%03d", i)
+		res, err := m.DispatchResource(context.Background(), uri)
+		if err != nil {
+			t.Fatalf("read %s: %v", uri, err)
+		}
+		tc := res.Contents[0].(mcp.TextResourceContents)
+		if want := fmt.Sprintf("doc://page/%03d", i); tc.Text != want {
+			t.Errorf("%s returned %q, want %q", uri, tc.Text, want)
+		}
+	}
+
+	// And the host sees all of them through the real transport.
+	srv := httptest.NewServer(NewHTTPHandler(m))
+	t.Cleanup(srv.Close)
+	c, err := client.NewStreamableHttpClient(srv.URL + "/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := c.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	req := mcp.InitializeRequest{}
+	req.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	req.Params.ClientInfo = mcp.Implementation{Name: "host", Version: "1"}
+	if _, err := c.Initialize(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	lr, err := c.ListResources(ctx, mcp.ListResourcesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lr.Resources) != pagedResourceCount {
+		t.Errorf("host saw %d resources, want %d", len(lr.Resources), pagedResourceCount)
+	}
 }
