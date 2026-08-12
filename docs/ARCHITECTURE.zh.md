@@ -351,6 +351,14 @@ sandrpod-tray seed                                 # 安装默认硬锁
 呈现，绝不发给远端调用方。`-mcp-guard-manifest` 在授权后钉住工具定义，
 某个 server 偷偷改了工具 schema 会被拒绝而不是被信任。
 
+**资源**与工具一同被代理，这是
+[MCP Apps](https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp)
+宿主能取到界面 HTML 的前提：那份 HTML 只能经 `resources/read` 拿到，而约束
+iframe 的 CSP 与权限声明挂在资源的 `_meta` 上，所以桥把上游内容原样返回。
+URI 的命名空间做在 authority 段（`ui://form` → `ui://<alias>/form`）——否则两个
+都提供 `ui://form` 的 server 会直接撞车——同时把各工具的 `_meta.ui.resourceUri`
+改写成一致的值。不提供资源的 server 根本不会被问。
+
 见 [`MCP_BRIDGE.md`](MCP_BRIDGE.md) 与 [`MCP_AUTH.md`](MCP_AUTH.md)。
 
 ---

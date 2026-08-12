@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"os"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/yosida95/uritemplate/v3"
 )
 
 // RestartPolicy values mirror systemd / Docker conventions.
@@ -63,9 +65,11 @@ type ManagerOptions struct {
 type ChildManager struct {
 	opts ManagerOptions
 
-	mu       sync.RWMutex
-	children map[string]*Child
-	fqIndex  map[string]fqEntry
+	mu          sync.RWMutex
+	children    map[string]*Child
+	fqIndex     map[string]fqEntry
+	uriIndex    map[string]uriEntry
+	promptIndex map[string]fqEntry
 
 	onChange []func()
 
@@ -84,6 +88,14 @@ type fqEntry struct {
 	originalName string
 }
 
+// uriEntry is fqEntry's counterpart for resources: it maps a bridged,
+// alias-namespaced URI back to the child that owns it and the URI that
+// child actually knows.
+type uriEntry struct {
+	childName   string
+	originalURI string
+}
+
 // NewManager constructs a manager but does not start it.
 func NewManager(opts ManagerOptions) *ChildManager {
 	if opts.Permission == nil {
@@ -99,9 +111,11 @@ func NewManager(opts ManagerOptions) *ChildManager {
 		opts.SupervisorInterval = defaultPingInterval
 	}
 	return &ChildManager{
-		opts:     opts,
-		children: map[string]*Child{},
-		fqIndex:  map[string]fqEntry{},
+		opts:        opts,
+		children:    map[string]*Child{},
+		fqIndex:     map[string]fqEntry{},
+		uriIndex:    map[string]uriEntry{},
+		promptIndex: map[string]fqEntry{},
 	}
 }
 
@@ -201,6 +215,8 @@ func (m *ChildManager) Stop(ctx context.Context) error {
 	}
 	m.children = map[string]*Child{}
 	m.fqIndex = map[string]fqEntry{}
+	m.uriIndex = map[string]uriEntry{}
+	m.promptIndex = map[string]fqEntry{}
 	return firstErr
 }
 
@@ -248,6 +264,8 @@ func (m *ChildManager) Shutdown(ctx context.Context, drainTimeout time.Duration)
 	}
 	m.children = map[string]*Child{}
 	m.fqIndex = map[string]fqEntry{}
+	m.uriIndex = map[string]uriEntry{}
+	m.promptIndex = map[string]fqEntry{}
 	m.mu.Unlock()
 
 	if len(notDrained) > 0 {
@@ -419,6 +437,148 @@ func (m *ChildManager) AggregatedTools() []mcp.Tool {
 			} else {
 				cloned.Description = "[" + c.Alias + "]"
 			}
+			cloned.Meta = rewriteUIResourceURI(t.Meta, c.Alias)
+			out = append(out, cloned)
+		}
+	}
+	return out
+}
+
+// rewriteUIResourceURI points an MCP Apps tool at the bridged URI.
+//
+// A tool declares its interface with _meta.ui.resourceUri; the host reads that
+// from tools/list and fetches it with resources/read. Left alone it still says
+// ui://form — the upstream URI — which the bridge's resource index does not
+// know, so the read 404s, or worse, silently lands on whichever other server
+// also exposes ui://form. That second failure needs two UI-bearing servers to
+// appear at all, which is exactly why it survives single-server testing.
+//
+// The copy is deliberate and has to go two levels deep. AggregatedTools clones
+// the Tool by assignment, which copies the *Meta pointer, not the Meta — and
+// AdditionalFields under it is a map, another reference. Writing through
+// either reaches the child's own c.tools and corrupts the upstream record for
+// every later caller.
+func rewriteUIResourceURI(meta *mcp.Meta, alias string) *mcp.Meta {
+	if meta == nil || meta.AdditionalFields == nil {
+		return meta
+	}
+	ui, ok := meta.AdditionalFields["ui"].(map[string]any)
+	if !ok {
+		return meta
+	}
+	uri, ok := ui["resourceUri"].(string)
+	if !ok || uri == "" {
+		return meta
+	}
+
+	fields := make(map[string]any, len(meta.AdditionalFields))
+	maps.Copy(fields, meta.AdditionalFields)
+	uiCopy := make(map[string]any, len(ui))
+	maps.Copy(uiCopy, ui)
+	uiCopy["resourceUri"] = fullyQualifiedURI(alias, uri)
+	fields["ui"] = uiCopy
+
+	return &mcp.Meta{ProgressToken: meta.ProgressToken, AdditionalFields: fields}
+}
+
+// AggregatedPrompts returns every ready child's prompts under alias__name,
+// the same namespace scheme tools use — a prompt is identified by name, so
+// unlike resources it needs no URI surgery.
+func (m *ChildManager) AggregatedPrompts() []mcp.Prompt {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]mcp.Prompt, 0)
+	for _, name := range m.sortedChildNamesLocked() {
+		c := m.children[name]
+		if c.State() != StateReady {
+			continue
+		}
+		for _, p := range c.Prompts() {
+			cloned := p
+			cloned.Name = fullyQualifiedName(c.Alias, p.Name)
+			if cloned.Description != "" {
+				cloned.Description = "[" + c.Alias + "] " + cloned.Description
+			} else {
+				cloned.Description = "[" + c.Alias + "]"
+			}
+			out = append(out, cloned)
+		}
+	}
+	return out
+}
+
+// AggregatedResourceTemplates namespaces templates the same way concrete
+// resources are namespaced. A template URI carries RFC 6570 expressions
+// (db://{table}/rows); injecting the alias into the authority leaves those
+// untouched, and DispatchResource recovers the child by reversing the
+// rewrite rather than matching the pattern.
+func (m *ChildManager) AggregatedResourceTemplates() []mcp.ResourceTemplate {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]mcp.ResourceTemplate, 0)
+	for _, name := range m.sortedChildNamesLocked() {
+		c := m.children[name]
+		if c.State() != StateReady {
+			continue
+		}
+		for _, tpl := range c.ResourceTemplates() {
+			if tpl.URITemplate == nil || tpl.URITemplate.Template == nil {
+				continue // malformed upstream entry; nothing to namespace
+			}
+			rewritten, err := uritemplate.New(fullyQualifiedURI(c.Alias, tpl.URITemplate.Raw()))
+			if err != nil {
+				// The alias only ever adds a literal path segment, so this
+				// means the upstream template was already invalid. Drop it
+				// rather than serve one that cannot expand.
+				continue
+			}
+			cloned := tpl
+			cloned.URITemplate = &mcp.URITemplate{Template: rewritten}
+			if cloned.Description != "" {
+				cloned.Description = "[" + c.Alias + "] " + cloned.Description
+			} else {
+				cloned.Description = "[" + c.Alias + "]"
+			}
+			out = append(out, cloned)
+		}
+	}
+	return out
+}
+
+func (m *ChildManager) sortedChildNamesLocked() []string {
+	names := make([]string, 0, len(m.children))
+	for k := range m.children {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// AggregatedResources returns every ready child's resources under their
+// bridged URIs, mirroring AggregatedTools.
+func (m *ChildManager) AggregatedResources() []mcp.Resource {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]mcp.Resource, 0)
+	names := make([]string, 0, len(m.children))
+	for k := range m.children {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		c := m.children[name]
+		if c.State() != StateReady {
+			continue
+		}
+		for _, r := range c.Resources() {
+			cloned := r
+			cloned.URI = fullyQualifiedURI(c.Alias, r.URI)
+			if cloned.Description != "" {
+				cloned.Description = "[" + c.Alias + "] " + cloned.Description
+			} else {
+				cloned.Description = "[" + c.Alias + "]"
+			}
 			out = append(out, cloned)
 		}
 	}
@@ -474,6 +634,121 @@ func (m *ChildManager) Dispatch(ctx context.Context, fqName string, args any) (*
 	return res, err
 }
 
+// DispatchPrompt resolves a bridged prompt name and proxies prompts/get,
+// with the same gate-then-audit sequence as Dispatch.
+func (m *ChildManager) DispatchPrompt(ctx context.Context, fqName string, args map[string]string) (*mcp.GetPromptResult, error) {
+	m.mu.RLock()
+	entry, ok := m.promptIndex[fqName]
+	c := m.children[entry.childName]
+	m.mu.RUnlock()
+	if !ok || c == nil {
+		return nil, fmt.Errorf("unknown prompt %q", fqName)
+	}
+
+	dec, gateErr := m.opts.Permission.Check(ctx, PermissionEvent{
+		Source: "mcp.prompt",
+		Server: c.Name,
+		Prompt: entry.originalName,
+	})
+	if gateErr != nil || dec != DecisionAllow {
+		reason := "permission denied"
+		if gateErr != nil {
+			reason = gateErr.Error()
+		}
+		m.opts.Audit.Record(AuditEvent{
+			Source:   "mcp.prompt",
+			Decision: DecisionDeny,
+			Server:   c.Name,
+			Prompt:   entry.originalName,
+			Reason:   reason,
+		})
+		return nil, fmt.Errorf("prompt %q denied: %s", fqName, reason)
+	}
+
+	started := time.Now()
+	res, err := c.GetPrompt(ctx, entry.originalName, args)
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	m.opts.Audit.Record(AuditEvent{
+		Source:       "mcp.prompt",
+		Decision:     DecisionAllow,
+		Server:       c.Name,
+		Prompt:       entry.originalName,
+		ResultStatus: status,
+		DurationMs:   time.Since(started).Milliseconds(),
+	})
+	return res, err
+}
+
+// DispatchResource resolves a bridged URI to its child and proxies the read.
+// It runs the same gate-then-audit sequence as Dispatch: a resource read is
+// read-only, but it still reaches an upstream server on the user's machine, so
+// it is not exempt from the permission gate — hosts that want UI templates to
+// load without a prompt key off PermissionEvent.Source == "mcp.resource".
+func (m *ChildManager) DispatchResource(ctx context.Context, fqURI string) (*mcp.ReadResourceResult, error) {
+	m.mu.RLock()
+	entry, ok := m.uriIndex[fqURI]
+	c := m.children[entry.childName]
+	if !ok {
+		// Not a concrete resource. It may be a template expansion — the host
+		// turned db://alias/{table}/rows into db://alias/users/rows, a string
+		// no index ever held. The alias is the first authority segment by
+		// construction, so reverse the rewrite instead of matching patterns.
+		if alias, original, split := splitQualifiedURI(fqURI); split {
+			for _, name := range m.sortedChildNamesLocked() {
+				ch := m.children[name]
+				if ch.State() != StateReady || ch.Alias != alias || len(ch.ResourceTemplates()) == 0 {
+					continue
+				}
+				entry, c, ok = uriEntry{childName: ch.Name, originalURI: original}, ch, true
+				break
+			}
+		}
+	}
+	m.mu.RUnlock()
+	if !ok || c == nil {
+		return nil, fmt.Errorf("unknown resource %q", fqURI)
+	}
+
+	dec, gateErr := m.opts.Permission.Check(ctx, PermissionEvent{
+		Source:   "mcp.resource",
+		Server:   c.Name,
+		Resource: entry.originalURI,
+	})
+	if gateErr != nil || dec != DecisionAllow {
+		reason := "permission denied"
+		if gateErr != nil {
+			reason = gateErr.Error()
+		}
+		m.opts.Audit.Record(AuditEvent{
+			Source:   "mcp.resource",
+			Decision: DecisionDeny,
+			Server:   c.Name,
+			Resource: entry.originalURI,
+			Reason:   reason,
+		})
+		return nil, fmt.Errorf("resource %q denied: %s", fqURI, reason)
+	}
+
+	started := time.Now()
+	res, err := c.ReadResource(ctx, entry.originalURI)
+	status := "ok"
+	if err != nil {
+		status = "error"
+	}
+	m.opts.Audit.Record(AuditEvent{
+		Source:       "mcp.resource",
+		Decision:     DecisionAllow,
+		Server:       c.Name,
+		Resource:     entry.originalURI,
+		ResultStatus: status,
+		DurationMs:   time.Since(started).Milliseconds(),
+	})
+	return res, err
+}
+
 // Snapshot returns a read-only view of children for /mcp/manifest.
 func (m *ChildManager) Snapshot() []ChildSnapshot {
 	m.mu.RLock()
@@ -482,15 +757,17 @@ func (m *ChildManager) Snapshot() []ChildSnapshot {
 	for _, c := range m.children {
 		c.mu.RLock()
 		out = append(out, ChildSnapshot{
-			Name:      c.Name,
-			Alias:     c.Alias,
-			State:     string(c.state),
-			Command:   c.Cfg.Target(),
-			ToolCount: len(c.tools),
-			StartedAt: c.startedAt,
-			Restarts:  c.restarts,
-			LastError: c.lastError,
-			AuthURL:   c.authURL,
+			Name:          c.Name,
+			Alias:         c.Alias,
+			State:         string(c.state),
+			Command:       c.Cfg.Target(),
+			ToolCount:     len(c.tools),
+			ResourceCount: len(c.resources),
+			PromptCount:   len(c.prompts),
+			StartedAt:     c.startedAt,
+			Restarts:      c.restarts,
+			LastError:     c.lastError,
+			AuthURL:       c.authURL,
 		})
 		c.mu.RUnlock()
 	}
@@ -506,14 +783,18 @@ func (m *ChildManager) ConfigPath() string { return m.opts.ConfigPath }
 
 // ChildSnapshot is a read-only view of a Child for /mcp/manifest.
 type ChildSnapshot struct {
-	Name      string    `json:"name"`
-	Alias     string    `json:"alias"`
-	State     string    `json:"state"`
-	Command   string    `json:"command"`
-	ToolCount int       `json:"tool_count"`
-	StartedAt time.Time `json:"started_at,omitzero"`
-	Restarts  int       `json:"restart_count"`
-	LastError string    `json:"last_error,omitempty"`
+	Name      string `json:"name"`
+	Alias     string `json:"alias"`
+	State     string `json:"state"`
+	Command   string `json:"command"`
+	ToolCount int    `json:"tool_count"`
+	// ResourceCount is how the desktop host tells "this server ships an
+	// interface" from "this server is tools only" without a resources/list.
+	ResourceCount int       `json:"resource_count"`
+	PromptCount   int       `json:"prompt_count"`
+	StartedAt     time.Time `json:"started_at,omitzero"`
+	Restarts      int       `json:"restart_count"`
+	LastError     string    `json:"last_error,omitempty"`
 	// AuthURL is the pending OAuth authorization URL while state ==
 	// waiting_auth. Redacted from the public /mcp/manifest — only the
 	// local-only admin surface exposes it (the browser handoff is a
@@ -540,6 +821,8 @@ func (m *ChildManager) notifyChange() {
 
 func (m *ChildManager) rebuildIndexLocked() {
 	idx := map[string]fqEntry{}
+	uris := map[string]uriEntry{}
+	prompts := map[string]fqEntry{}
 	names := make([]string, 0, len(m.children))
 	for k := range m.children {
 		names = append(names, k)
@@ -560,8 +843,24 @@ func (m *ChildManager) rebuildIndexLocked() {
 			}
 			idx[fq] = fqEntry{childName: c.Name, originalName: t.Name}
 		}
+		for _, r := range c.Resources() {
+			fq := fullyQualifiedURI(c.Alias, r.URI)
+			if _, exists := uris[fq]; exists {
+				fq = fq + "__from_" + c.Name
+			}
+			uris[fq] = uriEntry{childName: c.Name, originalURI: r.URI}
+		}
+		for _, pr := range c.Prompts() {
+			fq := fullyQualifiedName(c.Alias, pr.Name)
+			if _, exists := prompts[fq]; exists {
+				fq = fq + "__from_" + c.Name
+			}
+			prompts[fq] = fqEntry{childName: c.Name, originalName: pr.Name}
+		}
 	}
 	m.fqIndex = idx
+	m.uriIndex = uris
+	m.promptIndex = prompts
 	// Notify outside the lock to avoid deadlock if a callback re-enters.
 	go m.notifyChange()
 }
@@ -875,6 +1174,66 @@ func fullyQualifiedName(alias, tool string) string {
 		a = a[:aliasMaxLen-7] + "_" + shortHash(alias)
 	}
 	return a + "__" + tool
+}
+
+// fullyQualifiedURI namespaces a resource URI under the child's alias. Tool
+// names take an alias__ prefix, but a URI cannot: ui://form from two servers
+// would collide, and prefixing the whole string destroys the scheme that MCP
+// Apps hosts check for. So the alias goes in the authority instead, leaving
+// the scheme where it was:
+//
+//	ui://form         →  ui://<alias>/form
+//	file:///etc/hosts →  file://<alias>//etc/hosts
+//	urn:x:thing       →  sandrpod://<alias>/urn:x:thing
+//
+// The result is an opaque identifier, not something a host dereferences — it
+// comes back to the bridge on resources/read and splitQualifiedURI maps it
+// home. Only injectivity and reversibility matter.
+//
+// Hierarchical URIs keep their scheme, because an MCP Apps host looks for
+// ui://. Opaque ones (urn:, mailto:, no scheme at all) are wrapped in the
+// synthetic sandrpod:// instead of being given a "://" they never had —
+// rewriting urn:x as urn://alias/x reads back as urn://x, quietly changing
+// the URI. Wrapping keeps the original verbatim after the alias, so the
+// reverse is exact.
+func fullyQualifiedURI(alias, uri string) string {
+	a := alias
+	if len(a) > aliasMaxLen {
+		a = a[:aliasMaxLen-7] + "_" + shortHash(alias)
+	}
+	if scheme, rest, ok := strings.Cut(uri, "://"); ok && scheme != "sandrpod" {
+		return scheme + "://" + a + "/" + rest
+	}
+	return "sandrpod://" + a + "/" + uri
+}
+
+// splitQualifiedURI is fullyQualifiedURI in reverse: bridged URI back to the
+// alias and the URI the upstream knows.
+//
+// uriIndex answers this for concrete resources, but a resource *template*
+// cannot be indexed — the host expands db://alias/{table}/rows into
+// db://alias/users/rows and reads that, a string no index ever held. Because
+// the alias is always the first authority segment, the mapping is reversible
+// by construction and no RFC 6570 matching is needed to route the read.
+//
+// Returns ok=false when the URI does not have the shape this bridge produces.
+// Aliases longer than aliasMaxLen were hashed on the way out and cannot be
+// recovered, so the caller must confirm the alias against a live child rather
+// than trusting it.
+func splitQualifiedURI(fq string) (alias, original string, ok bool) {
+	scheme, rest, found := strings.Cut(fq, "://")
+	if !found {
+		return "", "", false
+	}
+	alias, remainder, found := strings.Cut(rest, "/")
+	if !found || alias == "" {
+		return "", "", false
+	}
+	if scheme == "sandrpod" {
+		// The synthetic scheme given to URIs that arrived without one.
+		return alias, remainder, true
+	}
+	return alias, scheme + "://" + remainder, true
 }
 
 func shortHash(s string) string {
