@@ -45,6 +45,7 @@ func runFixtureServer(name string) {
 	opts := []server.ServerOption{
 		server.WithToolCapabilities(true),
 		server.WithResourceCapabilities(false, true),
+		server.WithPromptCapabilities(true),
 	}
 	// The "paged" instance hands back small pages with a nextCursor, which is
 	// how a real server with many resources behaves and what the bridge has
@@ -107,6 +108,34 @@ func runFixtureServer(name string) {
 				URI:      "asset://logo.png",
 				MIMEType: "image/png",
 				Blob:     "iVBORw0KGgo=", // base64, enough to prove the shape
+			}}, nil
+		})
+
+	// A prompt, so the third server feature is exercised too.
+	s.AddPrompt(
+		mcp.Prompt{
+			Name:        "summarise",
+			Description: "summarise a thing",
+			Arguments:   []mcp.PromptArgument{{Name: "topic", Required: true}},
+		},
+		func(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+			return &mcp.GetPromptResult{
+				Description: "from " + name,
+				Messages: []mcp.PromptMessage{{
+					Role:    mcp.RoleUser,
+					Content: mcp.TextContent{Type: "text", Text: "summarise " + req.Params.Arguments["topic"]},
+				}},
+			}, nil
+		})
+
+	// A resource template. The host expands it and reads the expansion — a
+	// URI no index ever held.
+	s.AddResourceTemplate(
+		mcp.NewResourceTemplate("doc://{section}/body", "doc", mcp.WithTemplateMIMEType("text/plain")),
+		func(_ context.Context, req mcp.ReadResourceRequest) ([]mcp.ResourceContents, error) {
+			return []mcp.ResourceContents{mcp.TextResourceContents{
+				URI: req.Params.URI, MIMEType: "text/plain",
+				Text: "expanded " + req.Params.URI + " on " + name,
 			}}, nil
 		})
 
@@ -466,4 +495,123 @@ func TestUpstreamPaginationIsFollowed(t *testing.T) {
 	if len(lr.Resources) != pagedResourceCount {
 		t.Errorf("host saw %d resources, want %d", len(lr.Resources), pagedResourceCount)
 	}
+}
+
+// Prompts are the third server feature. Before this they were dropped whole:
+// a child's prompts never reached the host, which for servers that ship
+// preset workflows is most of what they offer.
+func TestPromptsEndToEnd(t *testing.T) {
+	m := startReal(t, fixtureConfig(t, "alpha", "beta"))
+	c := dialOverHTTP(t, m)
+	ctx := context.Background()
+
+	lp, err := c.ListPrompts(ctx, mcp.ListPromptsRequest{})
+	if err != nil {
+		t.Fatalf("prompts/list: %v", err)
+	}
+	if len(lp.Prompts) != 2 {
+		t.Fatalf("prompts = %d, want 2 (one per child): %+v", len(lp.Prompts), lp.Prompts)
+	}
+	names := map[string]bool{}
+	for _, p := range lp.Prompts {
+		names[p.Name] = true
+	}
+	// Same alias__name scheme as tools — a prompt is keyed by name, so it
+	// needs no URI surgery.
+	for _, want := range []string{"alpha__summarise", "beta__summarise"} {
+		if !names[want] {
+			t.Errorf("missing %s; got %v", want, names)
+		}
+	}
+
+	req := mcp.GetPromptRequest{}
+	req.Params.Name = "beta__summarise"
+	req.Params.Arguments = map[string]string{"topic": "pagination"}
+	got, err := c.GetPrompt(ctx, req)
+	if err != nil {
+		t.Fatalf("prompts/get: %v", err)
+	}
+	if got.Description != "from beta" {
+		t.Errorf("description = %q, want the beta child's", got.Description)
+	}
+	tc, ok := got.Messages[0].Content.(mcp.TextContent)
+	if !ok {
+		t.Fatalf("content is %T", got.Messages[0].Content)
+	}
+	if !strings.Contains(tc.Text, "pagination") {
+		t.Errorf("arguments did not reach the child: %q", tc.Text)
+	}
+}
+
+// Templates were the regression: declaring the resources capability made
+// mcp-go answer resources/templates/list, and the bridge returned an empty
+// list — telling a host there are none when an upstream has some.
+func TestResourceTemplatesEndToEnd(t *testing.T) {
+	m := startReal(t, fixtureConfig(t, "alpha"))
+	c := dialOverHTTP(t, m)
+	ctx := context.Background()
+
+	lt, err := c.ListResourceTemplates(ctx, mcp.ListResourceTemplatesRequest{})
+	if err != nil {
+		t.Fatalf("resources/templates/list: %v", err)
+	}
+	if len(lt.ResourceTemplates) != 1 {
+		t.Fatalf("templates = %d, want 1: %+v", len(lt.ResourceTemplates), lt.ResourceTemplates)
+	}
+	raw := lt.ResourceTemplates[0].URITemplate.Raw()
+	if raw != "doc://alpha/{section}/body" {
+		t.Fatalf("template = %q, want doc://alpha/{section}/body", raw)
+	}
+
+	// The host expands and reads. This URI was never in any index, so it
+	// only resolves because DispatchResource reverses the alias rewrite.
+	rr := mcp.ReadResourceRequest{}
+	rr.Params.URI = "doc://alpha/intro/body"
+	got, err := c.ReadResource(ctx, rr)
+	if err != nil {
+		t.Fatalf("read expanded template: %v", err)
+	}
+	tc := got.Contents[0].(mcp.TextResourceContents)
+	// The child must see its own un-namespaced form.
+	if !strings.Contains(tc.Text, "doc://intro/body") {
+		t.Errorf("child saw %q, want the un-namespaced doc://intro/body", tc.Text)
+	}
+	if !strings.Contains(tc.Text, "on alpha") {
+		t.Errorf("routed to the wrong child: %q", tc.Text)
+	}
+}
+
+// dialOverHTTP is the shared host-side setup: real Streamable-HTTP client
+// against the bridge's real handler.
+func dialOverHTTP(t *testing.T, m *ChildManager) *client.Client {
+	t.Helper()
+	srv := httptest.NewServer(NewHTTPHandler(m))
+	t.Cleanup(srv.Close)
+	c, err := client.NewStreamableHttpClient(srv.URL + "/mcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = c.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := c.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	req := mcp.InitializeRequest{}
+	req.Params.ProtocolVersion = mcp.LATEST_PROTOCOL_VERSION
+	req.Params.ClientInfo = mcp.Implementation{Name: "host", Version: "1"}
+	res, err := c.Initialize(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Capabilities.Prompts == nil {
+		t.Fatal("prompts capability not declared — a conforming client will never ask")
+	}
+	// As with resources, SetPrompts declares the capability implicitly with
+	// zero values; the explicit WithPromptCapabilities is what makes
+	// listChanged true, so a host learns when a child's prompts appear.
+	if !res.Capabilities.Prompts.ListChanged {
+		t.Error("prompts listChanged is false — hosts will not be told when prompts appear")
+	}
+	return c
 }

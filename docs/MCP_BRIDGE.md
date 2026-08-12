@@ -122,6 +122,8 @@ Standard Claude Desktop layout, with optional sandrpod extensions:
 | `tool_denylist` | (none) | These tools are removed even if allowlisted. |
 | `resource_allowlist` | (all) | Same idea for resources, keyed on URI. |
 | `resource_denylist` | (none) | Removed even if allowlisted. |
+| `prompt_allowlist` | (all) | Same idea for prompts, keyed on name. |
+| `prompt_denylist` | (none) | Removed even if allowlisted. |
 
 The resource lists are separate from the tool lists on purpose: the tool lists
 hold names, so reusing them would match no resource at all and a `tool_allowlist`
@@ -255,6 +257,23 @@ bridged:   ui://<alias>/form
 `_meta.ui.resourceUri` on the tool is rewritten to match, so the URI a host reads
 out of `tools/list` is the one that works on `resources/read`. Collisions after
 namespacing fall back to the same `__from_<server-name>` suffix used for tools.
+
+### Prompts and resource templates
+
+Both are proxied on the same terms as tools and resources.
+
+**Prompts** take the `alias__name` prefix tools use — a prompt is keyed by
+name, so it needs no URI surgery. `prompts/list` and `prompts/get` both go
+through the permission gate, with `Source = "mcp.prompt"`.
+
+**Resource templates** are namespaced like concrete resources
+(`doc://{section}/body` → `doc://<alias>/{section}/body`; the RFC 6570
+expressions are untouched because the alias only adds a literal segment). A
+host expands the template and reads the expansion — a URI no index ever held —
+so the read is routed by reversing the alias rewrite rather than by lookup.
+The expansion is still checked against the child's declared templates first,
+so a child publishing one template does not become readable at any address a
+caller invents.
 
 ### What is not proxied
 

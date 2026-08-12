@@ -25,6 +25,10 @@ type fakeTransport struct {
 	// only advertises the capability when it has resources, so the default
 	// zero value behaves like the overwhelming majority of MCP servers.
 	resources   []mcp.Resource
+	templates   []mcp.ResourceTemplate
+	prompts     []mcp.Prompt
+	promptResp  *mcp.GetPromptResult
+	lastPrompt  string
 	readResp    *mcp.ReadResourceResult
 	readErr     error
 	listResErr  error
@@ -36,6 +40,11 @@ func (f *fakeTransport) Initialize(context.Context, mcp.InitializeRequest) (*mcp
 	res := &mcp.InitializeResult{
 		ProtocolVersion: mcp.LATEST_PROTOCOL_VERSION,
 		ServerInfo:      mcp.Implementation{Name: "fake", Version: "1"},
+	}
+	if f.prompts != nil {
+		res.Capabilities.Prompts = &struct {
+			ListChanged bool `json:"listChanged,omitempty"`
+		}{}
 	}
 	if f.resources != nil || f.listResErr != nil {
 		res.Capabilities.Resources = &struct {
@@ -53,6 +62,18 @@ func (f *fakeTransport) ListResources(context.Context, mcp.ListResourcesRequest)
 		return nil, f.listResErr
 	}
 	return &mcp.ListResourcesResult{Resources: f.resources}, nil
+}
+func (f *fakeTransport) ListResourceTemplates(context.Context, mcp.ListResourceTemplatesRequest) (*mcp.ListResourceTemplatesResult, error) {
+	return &mcp.ListResourceTemplatesResult{ResourceTemplates: f.templates}, nil
+}
+func (f *fakeTransport) ListPrompts(context.Context, mcp.ListPromptsRequest) (*mcp.ListPromptsResult, error) {
+	return &mcp.ListPromptsResult{Prompts: f.prompts}, nil
+}
+func (f *fakeTransport) GetPrompt(_ context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	f.mu.Lock()
+	f.lastPrompt = req.Params.Name
+	f.mu.Unlock()
+	return f.promptResp, nil
 }
 func (f *fakeTransport) ReadResource(_ context.Context, req mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	f.mu.Lock()

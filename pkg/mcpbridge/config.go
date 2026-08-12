@@ -115,6 +115,8 @@ type SandrpodOpts struct {
 	// and an allowlist meant for tools would silently hide every resource.
 	ResourceAllowlist []string `json:"resource_allowlist,omitempty"`
 	ResourceDenylist  []string `json:"resource_denylist,omitempty"`
+	PromptAllowlist   []string `json:"prompt_allowlist,omitempty"`
+	PromptDenylist    []string `json:"prompt_denylist,omitempty"`
 }
 
 // IsEnabled reports whether the server should be spawned. Defaults to true

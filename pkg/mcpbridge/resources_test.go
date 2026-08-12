@@ -10,6 +10,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/yosida95/uritemplate/v3"
 )
 
 // mkUIResource is an MCP Apps interface resource: HTML behind a ui:// URI,
@@ -445,7 +446,7 @@ func TestFullyQualifiedURI(t *testing.T) {
 		{"ui scheme", "notion", "ui://form", "ui://notion/form"},
 		{"nested path", "notion", "ui://form/edit", "ui://notion/form/edit"},
 		{"file scheme", "fs", "file:///etc/hosts", "file://fs//etc/hosts"},
-		{"opaque scheme", "x", "urn:ietf:rfc:7231", "urn://x/ietf:rfc:7231"},
+		{"opaque scheme", "x", "urn:ietf:rfc:7231", "sandrpod://x/urn:ietf:rfc:7231"},
 		{"no scheme at all", "x", "bare", "sandrpod://x/bare"},
 	}
 	for _, tc := range tests {
@@ -498,4 +499,53 @@ func (r *recordingAudit) seen() []AuditEvent {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]AuditEvent(nil), r.events...)
+}
+
+// The template fallback must not become "this child has templates, so any URI
+// goes". Tested against a fake that serves anything: with a real upstream the
+// server does its own template matching and would mask a broken guard here,
+// which is exactly how the first version of this test passed while asserting
+// nothing.
+func TestResourceTemplateGuard(t *testing.T) {
+	tpl, err := uritemplate.New("doc://{section}/body")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fakeTransport{
+		tools:     []mcp.Tool{mkTool("t", "")},
+		resources: []mcp.Resource{},
+		templates: []mcp.ResourceTemplate{{
+			Name:        "doc",
+			URITemplate: &mcp.URITemplate{Template: tpl},
+		}},
+		// Serves whatever it is asked for — so anything that gets through is
+		// the bridge's decision, not the upstream's.
+		readResp: &mcp.ReadResourceResult{Contents: []mcp.ResourceContents{
+			mcp.TextResourceContents{URI: "any", MIMEType: "text/plain", Text: "served"},
+		}},
+	}
+	m := startManager(t, `{"mcpServers":{"alpha":{"command":"a-bin"}}}`,
+		map[string]*fakeTransport{"a-bin": f})
+	ctx := context.Background()
+
+	if _, err := m.DispatchResource(ctx, "doc://alpha/intro/body"); err != nil {
+		t.Fatalf("a legitimate expansion was rejected: %v", err)
+	}
+	if f.lastReadURI != "doc://intro/body" {
+		t.Errorf("upstream saw %q, want the un-namespaced doc://intro/body", f.lastReadURI)
+	}
+
+	for _, bad := range []string{
+		"doc://alpha/intro/body/extra", // more segments than the template
+		"doc://alpha/intro",            // fewer
+		"secret://alpha/etc/passwd",    // different scheme entirely
+	} {
+		f.lastReadURI = ""
+		if _, err := m.DispatchResource(ctx, bad); err == nil {
+			t.Errorf("%s was served, but matches no declared template", bad)
+		}
+		if f.lastReadURI != "" {
+			t.Errorf("%s reached the upstream as %q — the guard let it past", bad, f.lastReadURI)
+		}
+	}
 }

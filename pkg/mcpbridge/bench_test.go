@@ -48,6 +48,15 @@ func (f *fastTransport) ListResources(context.Context, mcp.ListResourcesRequest)
 func (f *fastTransport) ReadResource(context.Context, mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	return &mcp.ReadResourceResult{}, nil
 }
+func (f *fastTransport) ListResourceTemplates(context.Context, mcp.ListResourceTemplatesRequest) (*mcp.ListResourceTemplatesResult, error) {
+	return &mcp.ListResourceTemplatesResult{}, nil
+}
+func (f *fastTransport) ListPrompts(context.Context, mcp.ListPromptsRequest) (*mcp.ListPromptsResult, error) {
+	return &mcp.ListPromptsResult{}, nil
+}
+func (f *fastTransport) GetPrompt(context.Context, mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	return &mcp.GetPromptResult{}, nil
+}
 func (f *fastTransport) Ping(context.Context) error { return nil }
 func (f *fastTransport) Close() error               { return nil }
 

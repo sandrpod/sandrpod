@@ -43,6 +43,11 @@ type childTransport interface {
 	// them after initialize reports the resources capability.
 	ListResources(ctx context.Context, req mcp.ListResourcesRequest) (*mcp.ListResourcesResult, error)
 	ReadResource(ctx context.Context, req mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error)
+	ListResourceTemplates(ctx context.Context, req mcp.ListResourceTemplatesRequest) (*mcp.ListResourceTemplatesResult, error)
+	// Prompts are the third server feature beside tools and resources; the
+	// same capability gate applies.
+	ListPrompts(ctx context.Context, req mcp.ListPromptsRequest) (*mcp.ListPromptsResult, error)
+	GetPrompt(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error)
 	// Ping is used by the supervisor goroutine to detect dead children
 	// (stdio child has crashed or hung). MCP defines ping as a no-op
 	// JSON-RPC method; if the child can't answer, it's gone.
@@ -68,6 +73,15 @@ func (r *realChildTransport) ListResources(ctx context.Context, req mcp.ListReso
 }
 func (r *realChildTransport) ReadResource(ctx context.Context, req mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 	return r.c.ReadResource(ctx, req)
+}
+func (r *realChildTransport) ListResourceTemplates(ctx context.Context, req mcp.ListResourceTemplatesRequest) (*mcp.ListResourceTemplatesResult, error) {
+	return r.c.ListResourceTemplates(ctx, req)
+}
+func (r *realChildTransport) ListPrompts(ctx context.Context, req mcp.ListPromptsRequest) (*mcp.ListPromptsResult, error) {
+	return r.c.ListPrompts(ctx, req)
+}
+func (r *realChildTransport) GetPrompt(ctx context.Context, req mcp.GetPromptRequest) (*mcp.GetPromptResult, error) {
+	return r.c.GetPrompt(ctx, req)
 }
 func (r *realChildTransport) Ping(ctx context.Context) error { return r.c.Ping(ctx) }
 func (r *realChildTransport) Close() error                   { return r.c.Close() }
@@ -157,6 +171,8 @@ type Child struct {
 	transport    childTransport
 	tools        []mcp.Tool
 	resources    []mcp.Resource
+	templates    []mcp.ResourceTemplate
+	prompts      []mcp.Prompt
 	state        ChildState
 	lastError    string
 	authURL      string // set while state == StateWaitingAuth
@@ -244,9 +260,24 @@ func (c *Child) Start(ctx context.Context) error {
 	// is degraded to "no resources", never to StateFailed: its tools still
 	// work, and MCP Apps is the only thing that misses out.
 	var resources []mcp.Resource
+	var templates []mcp.ResourceTemplate
 	if initResp != nil && initResp.Capabilities.Resources != nil {
 		if rr, rerr := t.ListResources(hsCtx, mcp.ListResourcesRequest{}); rerr == nil && rr != nil {
 			resources = filterResources(rr.Resources, c.Cfg.Sandrpod)
+		}
+		// Templates ride on the same capability. A server may declare
+		// resources and implement only one of the two lists, so this is
+		// tolerated separately.
+		if tr, terr := t.ListResourceTemplates(hsCtx, mcp.ListResourceTemplatesRequest{}); terr == nil && tr != nil {
+			templates = tr.ResourceTemplates
+		}
+	}
+
+	// Prompts, likewise gated on the declared capability.
+	var prompts []mcp.Prompt
+	if initResp != nil && initResp.Capabilities.Prompts != nil {
+		if pr, perr := t.ListPrompts(hsCtx, mcp.ListPromptsRequest{}); perr == nil && pr != nil {
+			prompts = filterPrompts(pr.Prompts, c.Cfg.Sandrpod)
 		}
 	}
 
@@ -254,6 +285,8 @@ func (c *Child) Start(ctx context.Context) error {
 	c.transport = t
 	c.tools = tools
 	c.resources = resources
+	c.templates = templates
+	c.prompts = prompts
 	c.state = StateReady
 	c.startedAt = time.Now()
 	c.mu.Unlock()
@@ -269,6 +302,8 @@ func (c *Child) Stop(_ context.Context) error {
 	c.transport = nil
 	c.tools = nil
 	c.resources = nil
+	c.templates = nil
+	c.prompts = nil
 	c.state = StateStopped
 	c.mu.Unlock()
 	if t == nil {
@@ -293,6 +328,24 @@ func (c *Child) Resources() []mcp.Resource {
 	defer c.mu.RUnlock()
 	out := make([]mcp.Resource, len(c.resources))
 	copy(out, c.resources)
+	return out
+}
+
+// ResourceTemplates returns a copy of the cached template slice.
+func (c *Child) ResourceTemplates() []mcp.ResourceTemplate {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]mcp.ResourceTemplate, len(c.templates))
+	copy(out, c.templates)
+	return out
+}
+
+// Prompts returns a copy of the cached prompt slice.
+func (c *Child) Prompts() []mcp.Prompt {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	out := make([]mcp.Prompt, len(c.prompts))
+	copy(out, c.prompts)
 	return out
 }
 
@@ -347,12 +400,18 @@ func (c *Child) ReadResource(ctx context.Context, uri string) (*mcp.ReadResource
 	t := c.transport
 	state := c.state
 	resources := c.resources
+	templates := c.templates
 	c.mu.RUnlock()
 
 	if state != StateReady || t == nil {
 		return nil, fmt.Errorf("child %s not ready (state=%s)", c.Name, state)
 	}
-	if !resourceKnown(resources, uri) {
+	// A template expansion is never in the concrete list — the host built
+	// doc://intro/body out of doc://{section}/body. Fall back to matching
+	// the declared templates rather than waving every URI through, so a
+	// child that publishes one template does not become readable at any
+	// address the caller invents.
+	if !resourceKnown(resources, uri) && !templateMatches(templates, uri) {
 		return nil, fmt.Errorf("resource %s not exposed by child %s", uri, c.Name)
 	}
 
@@ -362,6 +421,31 @@ func (c *Child) ReadResource(ctx context.Context, uri string) (*mcp.ReadResource
 	req := mcp.ReadResourceRequest{}
 	req.Params.URI = uri
 	return t.ReadResource(ctx, req)
+}
+
+// GetPrompt proxies a prompts/get, with the readiness check and in-flight
+// accounting CallTool and ReadResource use.
+func (c *Child) GetPrompt(ctx context.Context, name string, args map[string]string) (*mcp.GetPromptResult, error) {
+	c.mu.RLock()
+	t := c.transport
+	state := c.state
+	prompts := c.prompts
+	c.mu.RUnlock()
+
+	if state != StateReady || t == nil {
+		return nil, fmt.Errorf("child %s not ready (state=%s)", c.Name, state)
+	}
+	if !promptKnown(prompts, name) {
+		return nil, fmt.Errorf("prompt %s not exposed by child %s", name, c.Name)
+	}
+
+	c.inFlight.Add(1)
+	defer c.inFlight.Done()
+
+	req := mcp.GetPromptRequest{}
+	req.Params.Name = name
+	req.Params.Arguments = args
+	return t.GetPrompt(ctx, req)
 }
 
 // WaitDrain blocks until all in-flight CallTool invocations on this child
@@ -504,6 +588,21 @@ func toolKnown(tools []mcp.Tool, name string) bool {
 	return false
 }
 
+// templateMatches reports whether uri is an expansion of one of the child's
+// declared templates. uritemplate compiles each to a regexp, so this is the
+// library's own notion of "matches", not a prefix guess.
+func templateMatches(templates []mcp.ResourceTemplate, uri string) bool {
+	for _, t := range templates {
+		if t.URITemplate == nil || t.URITemplate.Template == nil {
+			continue
+		}
+		if re := t.URITemplate.Regexp(); re != nil && re.MatchString(uri) {
+			return true
+		}
+	}
+	return false
+}
+
 func resourceKnown(resources []mcp.Resource, uri string) bool {
 	for _, r := range resources {
 		if r.URI == uri {
@@ -511,6 +610,40 @@ func resourceKnown(resources []mcp.Resource, uri string) bool {
 		}
 	}
 	return false
+}
+
+func promptKnown(prompts []mcp.Prompt, name string) bool {
+	for _, p := range prompts {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// filterPrompts is filterTools keyed on prompt name, with its own lists for
+// the same reason resources have theirs: a name that identifies a tool does
+// not identify a prompt.
+func filterPrompts(in []mcp.Prompt, opts *SandrpodOpts) []mcp.Prompt {
+	if opts == nil {
+		return in
+	}
+	allow := opts.PromptAllowlist
+	deny := opts.PromptDenylist
+	if len(allow) == 0 && len(deny) == 0 {
+		return in
+	}
+	out := make([]mcp.Prompt, 0, len(in))
+	for _, p := range in {
+		if len(allow) > 0 && !slices.Contains(allow, p.Name) {
+			continue
+		}
+		if slices.Contains(deny, p.Name) {
+			continue
+		}
+		out = append(out, p)
+	}
+	return out
 }
 
 // filterResources applies the same allow/deny discipline as filterTools, but
