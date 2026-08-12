@@ -38,16 +38,19 @@ func (a *mcpAuditAdapter) Record(ev mcpbridge.AuditEvent) {
 	}
 
 	reason := redactReason(ev)
-	// Name what was acted on. Source already says whether this was a call or
-	// a read, but "some resource from dinvora" is a much weaker audit line
-	// than the URI — and the two fields are mutually exclusive by
-	// construction, so one branch each.
+	// Name what was acted on. Source already says which kind of action it
+	// was, but "some resource from dinvora" is a much weaker audit line than
+	// the URI. The fields are mutually exclusive by construction, so one
+	// branch each — and a new one on AuditEvent needs a branch here or it
+	// silently never reaches the log.
 	caller := "mcp.bridge"
 	switch {
 	case ev.Tool != "":
 		caller = "mcp.bridge:" + ev.Tool
 	case ev.Resource != "":
 		caller = "mcp.bridge:" + ev.Resource
+	case ev.Prompt != "":
+		caller = "mcp.bridge:" + ev.Prompt
 	}
 
 	_ = a.rec.Record(audit.Event{

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -109,5 +111,60 @@ func TestMCPAuditAdapterRedactsPayloads(t *testing.T) {
 	})
 	if strings.Contains(got.Reason, "123-45-6789") || strings.Contains(got.Caller, "123-45-6789") {
 		t.Errorf("argsSummary leaked into the audit line: caller=%q reason=%q", got.Caller, got.Reason)
+	}
+}
+
+func TestMCPAuditAdapterNamesThePrompt(t *testing.T) {
+	got := recordAndRead(t, mcpbridge.AuditEvent{
+		Source:   "mcp.prompt",
+		Decision: mcpbridge.DecisionAllow,
+		Server:   "dinvora",
+		Prompt:   "summarise",
+	})
+	if !strings.Contains(got.Caller, "summarise") {
+		t.Errorf("caller = %q, want it to name the prompt", got.Caller)
+	}
+}
+
+// A guard against adding a fourth identifying field to AuditEvent and
+// forgetting the branch — which has now happened twice, once for Resource and
+// once for Prompt. Every field that identifies *what* was acted on must reach
+// the log; reflection notices the next one without anyone remembering to.
+func TestMCPAuditAdapterCarriesEveryIdentifyingField(t *testing.T) {
+	// Fields on AuditEvent that name the target of the action, as opposed to
+	// describing the outcome. Extend deliberately, not to silence a failure.
+	identifying := []string{"Tool", "Resource", "Prompt"}
+
+	typ := reflect.TypeOf(mcpbridge.AuditEvent{})
+	for _, name := range identifying {
+		if _, ok := typ.FieldByName(name); !ok {
+			t.Fatalf("AuditEvent has no field %s — update this list", name)
+		}
+	}
+
+	// Anything string-typed and not in the known-descriptive set is a
+	// candidate the list may have missed.
+	descriptive := map[string]bool{
+		"Source": true, "Server": true, "Decision": true, "ArgsSummary": true,
+		"ResultStatus": true, "Reason": true, "SessionID": true, "Caller": true,
+	}
+	for i := range typ.NumField() {
+		f := typ.Field(i)
+		if f.Type.Kind() != reflect.String || descriptive[f.Name] {
+			continue
+		}
+		if !slices.Contains(identifying, f.Name) {
+			t.Errorf("AuditEvent.%s is a new string field: either add it to the "+
+				"adapter's switch and to `identifying`, or to `descriptive`", f.Name)
+		}
+	}
+
+	for _, name := range identifying {
+		ev := mcpbridge.AuditEvent{Source: "mcp.x", Server: "s"}
+		reflect.ValueOf(&ev).Elem().FieldByName(name).SetString("VALUE-" + name)
+		got := recordAndRead(t, ev)
+		if !strings.Contains(got.Caller, "VALUE-"+name) {
+			t.Errorf("AuditEvent.%s never reaches the audit line (caller=%q)", name, got.Caller)
+		}
 	}
 }
