@@ -9,8 +9,10 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -342,5 +344,86 @@ func TestMCPLocalSocket_RefusesToClobberRegularFile(t *testing.T) {
 	}
 	if string(body) != "not a socket" {
 		t.Errorf("file contents changed to %q", body)
+	}
+}
+
+// Both sockets must be gone after SIGTERM.
+//
+// This needs a real process: the leak was main() returning in the same
+// breath as cancel(), so the cleanup goroutines never ran. Nothing
+// in-process reproduces that — the bug lives in the gap between cancel and
+// exit, which only exists when there is an exit.
+func TestMCPSockets_RemovedOnSIGTERM(t *testing.T) {
+	if testing.Short() {
+		t.Skip("builds a binary")
+	}
+	home, err := os.MkdirTemp("/tmp", "spT")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(home)
+
+	agent := filepath.Join(home, "agent")
+	if out, err := exec.Command("go", "build", "-o", agent, "./").CombinedOutput(); err != nil {
+		t.Fatalf("build agent: %v\n%s", err, out)
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := filepath.Join(home, "mcp.json")
+	body, _ := json.Marshal(map[string]any{"mcpServers": map[string]any{
+		"d": map[string]any{"command": self, "env": map[string]string{localFixtureEnv: "1"}},
+	}})
+	if err := os.WriteFile(cfg, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(agent, "-mcp-only", "-mcp-enabled", "-mcp-config", cfg,
+		"-mcp-listen", "127.0.0.1:0", "-mcp-oauth-callback", "127.0.0.1:0")
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill() }()
+
+	socks := []string{
+		filepath.Join(home, ".sandrpod", "mcp.sock"),
+		filepath.Join(home, ".sandrpod", "mcp-local.sock"),
+	}
+	deadline := time.Now().Add(20 * time.Second)
+	for time.Now().Before(deadline) {
+		n := 0
+		for _, s := range socks {
+			if _, err := os.Stat(s); err == nil {
+				n++
+			}
+		}
+		if n == len(socks) {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	for _, s := range socks {
+		if _, err := os.Stat(s); err != nil {
+			t.Fatalf("%s never appeared: %v", filepath.Base(s), err)
+		}
+	}
+
+	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() { _, _ = cmd.Process.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(20 * time.Second):
+		t.Fatal("agent did not exit within 20s of SIGTERM")
+	}
+
+	for _, s := range socks {
+		if _, err := os.Stat(s); err == nil {
+			t.Errorf("%s survived SIGTERM", filepath.Base(s))
+		}
 	}
 }

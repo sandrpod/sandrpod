@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/homedir"
@@ -87,11 +88,21 @@ func startMCPLocalServer(ctx context.Context, mgr *mcpbridge.ChildManager) {
 			log.Printf("MCP local serve: %v", err)
 		}
 	}()
+	// Teardown runs from shutdownMCPBridge (synchronously, before main
+	// cancels and returns) as well as on ctx cancellation, whichever comes
+	// first. sync.Once because both paths can fire.
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+			_ = os.Remove(sockPath)
+		})
+	}
+	registerSocketTeardown(stop)
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-		_ = os.Remove(sockPath)
+		stop()
 	}()
 }
