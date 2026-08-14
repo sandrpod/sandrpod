@@ -86,6 +86,7 @@ func installMCPBridge(ctx context.Context) http.Handler {
 
 	currentMgr = mgr
 	startMCPAdminServer(ctx, mgr)
+	startMCPLocalServer(ctx, mgr)
 
 	// Wrap with shared-secret middleware. When --mcp-token is unset we
 	// fall through unchanged (backward compatible). When set, every
