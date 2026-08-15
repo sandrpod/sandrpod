@@ -27,7 +27,7 @@ services:
       retries: 5
 
   server:
-    image: ghcr.io/sandrpod/server:v0.5.5
+    image: ghcr.io/sandrpod/server:v0.5.6
     container_name: sandrpod-server
     restart: unless-stopped
     command:
@@ -62,7 +62,7 @@ services:
       start_period: 3s
 
   poder:
-    image: ghcr.io/sandrpod/poder:v0.5.5
+    image: ghcr.io/sandrpod/poder:v0.5.6
     container_name: sandrpod-poder
     restart: unless-stopped
     volumes:
@@ -81,7 +81,7 @@ services:
       # be the network's REAL name — hence `name:` pinned below. Get it wrong
       # and sandboxes are created fine but every exec hangs.
       SANDRPOD_NETWORK: sandrpod
-      SANDRPOD_TOOLBOX_IMAGE: ${SANDRPOD_TOOLBOX_IMAGE:-ghcr.io/sandrpod/toolbox:v0.5.5}
+      SANDRPOD_TOOLBOX_IMAGE: ${SANDRPOD_TOOLBOX_IMAGE:-ghcr.io/sandrpod/toolbox:v0.5.6}
       TZ: Asia/Shanghai
     networks: [sandrpod]
     depends_on:

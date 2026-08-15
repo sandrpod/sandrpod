@@ -1,6 +1,6 @@
 # SandrPod 架构文档
 
-> **版本**: v0.5.5
+> **版本**: v0.5.6
 > **更新日期**: 2026-08
 > English: [ARCHITECTURE.md](ARCHITECTURE.md)
 >
@@ -351,6 +351,11 @@ sandrpod-tray seed                                 # 安装默认硬锁
 呈现，绝不发给远端调用方。`-mcp-guard-manifest` 在授权后钉住工具定义，
 某个 server 偷偷改了工具 schema 会被拒绝而不是被信任。
 
+桥同时挂在 `~/.sandrpod/mcp-local.sock` 这个 AF_UNIX socket 上，与隧道入口
+共用同一个 manager——同一台机器上的宿主可以直连，不必出网再绕回来经控制平面
+（0.13 毫秒 vs 约 1 秒）。别名命名空间、权限门、审计全部一致：这是快车道，
+不是旁路。认证边界是 socket 的 0600 权限，所以刻意不加 token。
+
 **资源**与工具一同被代理，这是
 [MCP Apps](https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp)
 宿主能取到界面 HTML 的前提：那份 HTML 只能经 `resources/read` 拿到，而约束
@@ -568,6 +573,7 @@ sandrpod/
 | sandrpod-agent | 无 | 同上 |
 | Toolbox | 容器内 `:8080` | 只能经隧道访问（测试时映射到 `:18080`） |
 | MCP 桥（agent） | `127.0.0.1:7090` | 仅回环 |
+| MCP 本机 socket | `~/.sandrpod/mcp-local.sock` | 同机宿主直连；0600，无 token |
 | mcp-gateway（沙箱） | `:50005` | 经 E2B 端口代理访问 |
 
 | 组件 | 环境变量 | 用途 |

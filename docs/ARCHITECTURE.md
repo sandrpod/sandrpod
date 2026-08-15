@@ -1,6 +1,6 @@
 # SandrPod Architecture
 
-> **Version**: v0.5.5
+> **Version**: v0.5.6
 > **Updated**: 2026-08
 > 中文版：[ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)
 >
@@ -375,6 +375,13 @@ URL is only ever surfaced over the admin socket, never to a remote caller.
 `-mcp-guard-manifest` pins tool definitions after approval, so a server that
 silently changes a tool's schema is rejected rather than trusted.
 
+The bridge is also served on an AF_UNIX socket at
+`~/.sandrpod/mcp-local.sock`, sharing the same manager — so a host on this
+machine reaches it directly instead of leaving the machine and coming back
+through the control plane (0.13 ms rather than ~1 s). Same alias namespace,
+same permission gate, same audit: a shortcut, not a bypass. The auth boundary
+is the socket's 0600 mode, which is why there is deliberately no token.
+
 **Resources** are proxied alongside tools, which is what lets an
 [MCP Apps](https://modelcontextprotocol.io/seps/1865-mcp-apps-interactive-user-interfaces-for-mcp)
 host fetch a server's interface HTML: that is only reachable through
@@ -594,6 +601,7 @@ sandrpod/
 | sandrpod-agent | none | Same |
 | Toolbox | `:8080` in-container | Reached only through a tunnel (`:18080` in tests) |
 | MCP bridge (agent) | `127.0.0.1:7090` | Loopback only |
+| MCP local socket | `~/.sandrpod/mcp-local.sock` | Same-machine hosts; 0600, no token |
 | mcp-gateway (sandbox) | `:50005` | Reached through the E2B port proxy |
 
 | Component | Env | Purpose |
