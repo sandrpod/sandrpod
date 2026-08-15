@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,10 +23,37 @@ import (
 // only called once from main().
 var currentMgr *mcpbridge.ChildManager
 
+// socketTeardowns holds one closer per local AF_UNIX server. The servers
+// also tear themselves down when their context is cancelled, but main
+// cancels and returns in the same breath, so the process is gone before
+// those goroutines run and the socket files survive. Running them here
+// makes teardown synchronous and ordered: shutdownMCPBridge is called
+// before cancel().
+var (
+	socketMu        sync.Mutex
+	socketTeardowns []func()
+)
+
+func registerSocketTeardown(fn func()) {
+	socketMu.Lock()
+	defer socketMu.Unlock()
+	socketTeardowns = append(socketTeardowns, fn)
+}
+
 // shutdownMCPBridge gracefully drains in-flight tool calls then tears
 // down the manager. No-op if the bridge was never started. Called from
 // main() and runMCPOnly() so SIGTERM doesn't strand clients mid-call.
 func shutdownMCPBridge(drainTimeout time.Duration) {
+	// Sockets go first: stop accepting before draining, so nothing new
+	// arrives while in-flight calls finish.
+	socketMu.Lock()
+	teardowns := socketTeardowns
+	socketTeardowns = nil
+	socketMu.Unlock()
+	for _, fn := range teardowns {
+		fn()
+	}
+
 	if currentMgr == nil {
 		return
 	}
@@ -86,6 +114,7 @@ func installMCPBridge(ctx context.Context) http.Handler {
 
 	currentMgr = mgr
 	startMCPAdminServer(ctx, mgr)
+	startMCPLocalServer(ctx, mgr)
 
 	// Wrap with shared-secret middleware. When --mcp-token is unset we
 	// fall through unchanged (backward compatible). When set, every
