@@ -1,8 +1,10 @@
 # Copyright 2026 SandrPod Contributors
-# Server + Poder + PostgreSQL（生产 / 多实例后端）。拉取 GHCR 发布镜像。
+# Server + Poder + PostgreSQL (production / multi-instance backend).
+# Pulls the published GHCR images.
 #   docker compose -f docker/docker-compose.pg.yml up -d
-# 单实例快速开始（SQLite）用 docker-compose.yml；多实例横向扩展见
-# docs/MULTI_INSTANCE_DEPLOYMENT.md（本文件是它的单机 PostgreSQL 起点）。
+# For the single-instance quickstart (SQLite) use docker-compose.yml. For scaling out,
+# see docs/MULTI_INSTANCE_DEPLOYMENT.md — this file is its single-host PostgreSQL
+# starting point.
 
 services:
   postgres:

@@ -1,5 +1,5 @@
 # Copyright 2026 SandrPod Contributors
-# 本地开发部署 - 从源码构建所有镜像
+# Local development — builds every image from source.
 
 services:
   server:
