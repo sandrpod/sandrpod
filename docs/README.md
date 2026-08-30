@@ -25,8 +25,18 @@ grouped below. Docs marked **(中文)** are written in Chinese.
 ## Cloud providers
 
 One guide per provider — credentials, env vars, instance defaults, and the
-remote-exec backend each cloud uses (managed run-command API vs SSH with
-per-VM ephemeral keys):
+remote-exec backend each cloud uses.
+
+That backend decides how much setup you are in for, so it is worth knowing
+before you pick one to try first:
+
+- **SSH, per-VM ephemeral keys** — GCP, DigitalOcean, Hetzner. An API token (or
+  service-account JSON) is the whole credential story.
+- **Managed run-command** — AWS (SSM), Aliyun (CloudAssist), Azure (Run
+  Command), Tencent (TAT), Oracle (Instance Agent). These additionally need the
+  launched VM to carry an identity the run-command service recognises — on AWS
+  that is `AWS_IAM_INSTANCE_PROFILE`, and it is the single most-missed
+  prerequisite.
 
 [AWS](AWS_PROVISIONING.md) ·
 [Aliyun](ALIYUN_PROVISIONING.md) ·
