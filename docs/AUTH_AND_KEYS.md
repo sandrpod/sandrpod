@@ -114,6 +114,10 @@ everything runs as an anonymous admin. Never do this on a reachable server.
 
 - `-max-sandboxes-per-owner N` caps concurrent sandboxes per **user** token
   (admins exempt). Env: `SANDRPOD_MAX_SANDBOXES_PER_OWNER`.
+
+Both this and `-rate-limit` apply to the native API *and* the E2B-compatible
+surface. On the E2B surface the rate limit counts every envd call — file
+operations and commands included — not just control-plane requests.
 - `-rate-limit R` throttles requests/second per **user** token (admins exempt).
   Env: `SANDRPOD_RATE_LIMIT`.
 - Ownerless records (created before multi-token auth, or with auth off) stay

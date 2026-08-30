@@ -75,11 +75,23 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 
 	// 2. No available Poder — must provision a VM first (cloud providers only)
 	if providerType == "local" || providerType == "docker" {
-		// A local worker cannot be provisioned on demand, but it may simply not
-		// have registered yet: the control plane answers /health as soon as it
-		// binds, seconds before the poder container has dialled in. Someone
-		// following the quickstart hits that window, and a hard error there
-		// reads as "this product is broken" rather than "wait a moment".
+		// A worker that is registered but full will never pass SelectBest, and
+		// no amount of waiting changes that. Say so now: spending the grace
+		// period first and then reporting "no worker registered" sends the
+		// reader to `docker compose ps`, where they find the worker online and
+		// learn nothing. Under load this also cost 30s on every rejected create.
+		if n := s.atCapacity(providerType, req.Region); n > 0 {
+			return nil, fmt.Errorf(
+				"no available %s poder found — %d worker(s) online but at their container "+
+					"limit; stop idle sandboxes, raise the worker's limit, or add a worker",
+				providerType, n)
+		}
+
+		// Nothing registered at all. It may simply not have registered yet: the
+		// control plane answers /health as soon as it binds, seconds before the
+		// poder container has dialled in. Someone following the quickstart hits
+		// that window, and a hard error there reads as "this product is broken"
+		// rather than "wait a moment".
 		//
 		// Poll rather than fail. This costs nothing when a poder is already
 		// present — the first check happens before the first sleep.
@@ -275,6 +287,29 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType, region str
 
 	log.Printf("[Scheduler] Poder container started on VM %s", vm.ID)
 	return nil
+}
+
+// atCapacity counts ONLINE poders matching region/providerType that have hit
+// their container limit. SelectBest rejects a matching online poder for exactly
+// one reason — that limit — so a non-zero count here is the whole explanation
+// for why it found nothing.
+func (s *Scheduler) atCapacity(providerType, region string) int {
+	n := 0
+	for _, p := range s.poderStore.List() {
+		if p.State != PoderStateOnline {
+			continue
+		}
+		if region != "" && p.Region != region {
+			continue
+		}
+		if providerType != "" && p.ProviderType != providerType {
+			continue
+		}
+		if p.Usage.Containers >= p.Resources.MaxContainers {
+			n++
+		}
+	}
+	return n
 }
 
 // waitForPoderRegistration polls poderStore until a Poder of the matching type comes online

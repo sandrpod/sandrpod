@@ -24,11 +24,14 @@ type ctxKey int
 const (
 	ctxIdent ctxKey = iota
 	ctxSandbox
+	ctxAdmin
 )
 
-// Authenticator validates a presented E2B key and returns the identity string
-// the backends use for ownership/quota. Return ("", false) to reject.
-type Authenticator func(key string) (identity string, ok bool)
+// Authenticator validates a presented E2B key. identity is the string backends
+// use for ownership; admin reports whether the key is exempt from per-owner
+// limits (the host's own notion of a privileged token). Return ok=false to
+// reject.
+type Authenticator func(key string) (identity string, admin bool, ok bool)
 
 // Config wires the gateway.
 type Config struct {
@@ -36,8 +39,14 @@ type Config struct {
 	// "sandrpod.example.com". Requests arrive at api.<domain> and
 	// <port>-<sandboxID>.<domain>. When empty, host routing is disabled and
 	// everything is treated as control plane (useful for path-based testing).
-	Domain    string
-	Auth      Authenticator
+	Domain string
+	Auth   Authenticator
+	// Throttle, when set, is consulted after authentication with the resolved
+	// identity. Returning false rejects the request with 429. The host embeds
+	// its own limiter here: this gateway is usually dispatched to ahead of the
+	// host's own middleware, so a limiter installed only there never sees E2B
+	// traffic at all.
+	Throttle  func(identity string, admin bool) bool
 	Sandboxes SandboxBackend
 	Envd      EnvdBackend
 	// Code, when set, backs the code-interpreter run_code surface reached at
@@ -158,7 +167,7 @@ func Handler(cfg Config) http.Handler {
 		if key == "" {
 			key = r.Header.Get("X-Access-Token")
 		}
-		ident, ok := cfg.Auth(key)
+		ident, admin, ok := cfg.Auth(key)
 		if !ok {
 			if healthProbe {
 				writeErr(w, http.StatusBadGateway, "sandbox is not running")
@@ -176,9 +185,15 @@ func Handler(cfg Config) http.Handler {
 				writeErr(w, http.StatusUnauthorized, "unauthorized: missing or invalid API key")
 				return
 			}
-			ident = "" // anonymous; scoped by the resolver or by the Host
+			ident, admin = "", false // anonymous; scoped by the resolver or by the Host
 		}
 		r = r.WithContext(context.WithValue(r.Context(), ctxIdent, ident))
+		r = r.WithContext(context.WithValue(r.Context(), ctxAdmin, admin))
+
+		if cfg.Throttle != nil && !cfg.Throttle(ident, admin) {
+			writeErr(w, http.StatusTooManyRequests, "rate limit exceeded")
+			return
+		}
 
 		// Fall back to the headers / single-sandbox resolver when the Host did
 		// not name a sandbox (e.g. the fixed E2B_SANDBOX_URL in debug mode).
@@ -352,6 +367,12 @@ func identOf(r *http.Request) string {
 		return v
 	}
 	return ""
+}
+
+// adminOf reports whether the authenticated key is exempt from per-owner limits.
+func adminOf(r *http.Request) bool {
+	v, _ := r.Context().Value(ctxAdmin).(bool)
+	return v
 }
 
 // sandboxOf returns the sandbox ID for an envd request. It prefers the ctx

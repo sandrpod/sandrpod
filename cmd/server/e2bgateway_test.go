@@ -37,7 +37,7 @@ func TestE2BAuthenticator_EnvdToken(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			id, ok := auth(tc.key)
+			id, _, ok := auth(tc.key)
 			if ok != tc.wantOK || id != tc.wantID {
 				t.Errorf("auth(%q) = (%q, %v), want (%q, %v)", tc.key, id, ok, tc.wantID, tc.wantOK)
 			}

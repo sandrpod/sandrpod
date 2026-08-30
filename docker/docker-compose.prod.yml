@@ -41,6 +41,12 @@ services:
       #   api.<domain>                    -> control plane
       #   <port>-<sandboxID>.<domain>     -> tunnel -> toolbox (envd) in the sandbox
       SANDRPOD_E2B_DOMAIN: ${SANDRPOD_DOMAIN:?set SANDRPOD_DOMAIN}
+      # Per-tenant caps for a host on a public IP. Off by default; they apply to
+      # user-role tokens on both the native and E2B surfaces (admins exempt).
+      # See "Bound what one key can do" in docs/PRODUCTION_DEPLOYMENT.md.
+      # SANDRPOD_MAX_SANDBOXES_PER_OWNER: 5
+      # SANDRPOD_RATE_LIMIT: 10
+      # SANDRPOD_SANDBOX_IDLE_TIMEOUT: 2h
       TZ: Asia/Shanghai
     ports:
       # Loopback only, so the native API is reachable on the host but not from

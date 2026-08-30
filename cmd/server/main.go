@@ -733,18 +733,11 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				return
 			}
 
-			// Per-owner quota (admins exempt; 0 = unlimited).
-			if !ident.isAdmin() && cfg.MaxSandboxesPerOwner > 0 {
-				owned := 0
-				for _, sb := range sandboxStore.List() {
-					if sb.Owner == ident.Name {
-						owned++
-					}
-				}
-				if owned >= cfg.MaxSandboxesPerOwner {
-					http.Error(w, fmt.Sprintf("sandbox quota reached (%d)", cfg.MaxSandboxesPerOwner), http.StatusTooManyRequests)
-					return
-				}
+			// Per-owner quota (admins exempt; 0 = unlimited). Shared with the
+			// E2B gateway's create path — see quotaExceeded.
+			if !ident.isAdmin() && quotaExceeded(sandboxStore, ident.Name, cfg.MaxSandboxesPerOwner) {
+				http.Error(w, fmt.Sprintf("sandbox quota reached (%d)", cfg.MaxSandboxesPerOwner), http.StatusTooManyRequests)
+				return
 			}
 
 			// Async path: register a job + PENDING record, provision in the

@@ -164,3 +164,20 @@ func runSandboxCreate(
 	notifyEvent("sandbox.running", map[string]any{"name": req.Name, "provider": req.ProviderType, "poder_id": schedJob.PoderID})
 	return sb, jobID, nil
 }
+
+// quotaExceeded reports whether owner already holds max sandboxes. max <= 0
+// means unlimited. Both create paths — native POST /api/v1/sandboxes and the
+// E2B gateway's POST /sandboxes — must consult this; a check written into only
+// one of them is a cap that does nothing on the other surface.
+func quotaExceeded(store podpkg.SandboxRepository, owner string, max int) bool {
+	if max <= 0 {
+		return false
+	}
+	owned := 0
+	for _, sb := range store.List() {
+		if sb.Owner == owner {
+			owned++
+		}
+	}
+	return owned >= max
+}

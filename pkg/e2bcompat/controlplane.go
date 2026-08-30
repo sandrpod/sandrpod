@@ -7,9 +7,15 @@ package e2bcompat
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 )
+
+// ErrQuotaExceeded is returned by SandboxBackend.CreateSandbox when the caller
+// is already at its per-owner sandbox limit. The control plane answers 429 for
+// it, so a client can tell "you have too many" from "something broke".
+var ErrQuotaExceeded = errors.New("sandbox quota exceeded")
 
 // SandboxBackend is what the control plane needs from SandrPod. The server
 // implements it over its scheduler/store; tests use a fake. `identity` is the
@@ -17,7 +23,9 @@ import (
 // ownership/quota.
 type SandboxBackend interface {
 	// CreateSandbox provisions a sandbox and returns its E2B-facing view.
-	CreateSandbox(ident string, req NewSandbox) (SandboxDetail, error)
+	// admin reports whether the caller is exempt from per-owner limits; return
+	// ErrQuotaExceeded to have the refusal surfaced as 429 rather than 500.
+	CreateSandbox(ident string, admin bool, req NewSandbox) (SandboxDetail, error)
 	// GetSandbox returns one sandbox by E2B sandbox ID (nil,false if absent).
 	GetSandbox(ident, sandboxID string) (SandboxDetail, bool)
 	// ListSandboxes returns the caller's sandboxes, optionally filtered by
@@ -77,8 +85,12 @@ func (c *controlPlane) handleSandboxes(w http.ResponseWriter, r *http.Request) {
 		if req.Timeout == 0 {
 			req.Timeout = DefaultTimeoutSeconds
 		}
-		detail, err := c.backend.CreateSandbox(ident, req)
+		detail, err := c.backend.CreateSandbox(ident, adminOf(r), req)
 		if err != nil {
+			if errors.Is(err, ErrQuotaExceeded) {
+				writeErr(w, http.StatusTooManyRequests, err.Error())
+				return
+			}
 			writeErr(w, http.StatusInternalServerError, err.Error())
 			return
 		}
