@@ -118,6 +118,12 @@ docker: docker-poder docker-toolbox ## Build all Docker images
 
 # ─── Maintenance ────────────────────────────────────────────────────────────
 
+check-versions: ## Verify every pinned release version in the repo agrees
+	@./scripts/check-versions.sh
+
+bump-version: ## Rewrite every pinned version (make bump-version VERSION=v0.6.0)
+	@./scripts/bump-version.sh "$(VERSION)"
+
 clean: ## Remove built binaries
 	rm -f server poder agent toolbox
 	rm -rf dist/

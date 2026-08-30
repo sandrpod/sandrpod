@@ -11,6 +11,17 @@ grouped below. Docs marked **(中文)** are written in Chinese.
 | [ARCHITECTURE.md](ARCHITECTURE.md) ([中文](ARCHITECTURE.zh.md)) | The implemented architecture: API Server, Poder workers, Toolbox, reverse tunnel, E2B gateway, permission gate, MCP bridge, state machine, request flows |
 | [ROADMAP.md](ROADMAP.md) | Product-gap analysis vs E2B/Modal/Daytona and the prioritized plan |
 
+## Releasing
+
+Every pinned version in the repo — the reference compose file, the eight
+provider guides, the architecture headers, the Python SDK — is rewritten in one
+pass, and CI fails if any of them disagree:
+
+```bash
+make bump-version VERSION=v0.6.0    # rewrite them all
+make check-versions                 # what CI runs
+```
+
 ## Deployment & operations
 
 | Doc | What it covers |

@@ -44,6 +44,11 @@ jobs:
             exit 1
           fi
 
+      - name: Pinned versions agree
+        # Catches a release that bumped the compose file and forgot the eight
+        # provider guides — which is how they sat four releases behind.
+        run: ./scripts/check-versions.sh
+
       - name: Vet
         run: go vet ./...
 
