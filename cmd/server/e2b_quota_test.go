@@ -3,12 +3,14 @@ package main
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/e2bcompat"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/store"
+	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
 
 // -max-sandboxes-per-owner was enforced only in the native POST
@@ -99,5 +101,33 @@ func TestQuotaExceeded_ZeroMeansUnlimited(t *testing.T) {
 	}
 	if !quotaExceeded(stores.Sandboxes, "alice", 50) {
 		t.Error("50 held against a cap of 50 must be over")
+	}
+}
+
+// envd lives inside the container. The E2B gateway resolved its tunnel without
+// looking at the sandbox's state, so a request against a stopped or paused one
+// was proxied into a dead container and hung with no response — the same defect
+// the native surface had.
+func TestE2BToolboxTarget_RefusesWhenNotRunning(t *testing.T) {
+	for _, state := range []podpkg.State{
+		podpkg.StateStopped, podpkg.StatePending, podpkg.StateError, podpkg.StateTerminated,
+	} {
+		stores := store.NewMemoryStores()
+		if err := stores.Sandboxes.Add(&podpkg.SandboxInfo{
+			Name: "sbx", Owner: "alice", PoderID: "P", State: state,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		d := e2bDeps{sandboxes: stores.Sandboxes, tunnelStore: tunnel.NewTunnelStore(),
+			directStore: tunnel.NewDirectTunnelStore()}
+
+		_, _, err := d.toolboxTarget("sbx", "files")
+		if err == nil {
+			t.Errorf("state %s: resolved a target into a container that is not up", state)
+			continue
+		}
+		if !strings.Contains(err.Error(), string(state)) {
+			t.Errorf("state %s: error %q does not say which state it is in", state, err)
+		}
 	}
 }

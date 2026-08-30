@@ -1,9 +1,12 @@
 //go:build linux
 
 // Copyright 2026 SandrPod Contributors
-// Linux resource metrics: /proc/meminfo for memory, /proc/stat sampled twice
-// for CPU percent, statfs for disk. This is the production path (the toolbox
-// runs in Linux sandbox containers).
+// Linux resource metrics. The cgroup is consulted first — /proc/meminfo,
+// /proc/stat and NumCPU describe the HOST inside a container, so a capped
+// sandbox otherwise reports the machine it landed on. The host view remains
+// the fallback, and the right answer where there is no limit (or no cgroup,
+// as under a bare-metal sandrpod-agent). Disk stays statfs: nothing sets a
+// per-container quota, so the filesystem really is shared.
 
 package toolbox
 
@@ -17,8 +20,23 @@ import (
 )
 
 func collectPlatformMetrics(m *Metrics) {
-	m.MemTotal, m.MemUsed = readMemInfo()
-	m.CPUUsedPct = sampleCPUPercent()
+	if limit, used, ok := cgroupMemory(); ok {
+		m.MemTotal, m.MemUsed = limit, used
+	} else {
+		m.MemTotal, m.MemUsed = readMemInfo()
+	}
+
+	cores := float64(m.CPUCount)
+	if q, ok := cgroupCPUQuota(); ok {
+		cores = q
+		// CPUCount is an integer; round a fractional allowance up so half a
+		// core reads as 1 rather than 0.
+		m.CPUCount = int(q)
+		if float64(m.CPUCount) < q {
+			m.CPUCount++
+		}
+	}
+	m.CPUUsedPct = sampleCPUPercent(cores)
 	m.DiskTotal, m.DiskUsed = readDisk(defaultWorkDir())
 }
 
@@ -51,11 +69,33 @@ func readMemInfo() (total, used uint64) {
 	return memTotal, memTotal - memAvail
 }
 
-// sampleCPUPercent reads /proc/stat twice ~100ms apart and returns the busy
-// fraction of total jiffies as a percentage.
-func sampleCPUPercent() float64 {
+// sampleCPUPercent returns busy CPU as a percentage of `cores`. It samples the
+// cgroup's own consumed CPU time when available — /proc/stat is host-wide, so
+// on a busy host a completely idle sandbox reported the host's load as its own.
+func sampleCPUPercent(cores float64) float64 {
+	if u1, ok := cgroupCPUUsec(); ok && cores > 0 {
+		time.Sleep(cpuSampleInterval)
+		if u2, ok2 := cgroupCPUUsec(); ok2 && u2 >= u1 {
+			busy := float64(u2-u1) / float64(cpuSampleInterval.Microseconds())
+			pct := busy / cores * 100
+			if pct > 100 {
+				pct = 100
+			}
+			return pct
+		}
+	}
+	return sampleHostCPUPercent()
+}
+
+// cpuSampleInterval is how long the two CPU readings are spaced. Long enough to
+// be meaningful, short enough that a metrics call stays snappy.
+const cpuSampleInterval = 100 * time.Millisecond
+
+// sampleHostCPUPercent reads /proc/stat twice and returns the busy fraction of
+// total jiffies as a percentage. Host-wide; used when there is no cgroup.
+func sampleHostCPUPercent() float64 {
 	idle1, total1 := readCPUJiffies()
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(cpuSampleInterval)
 	idle2, total2 := readCPUJiffies()
 	dt := total2 - total1
 	if dt == 0 {

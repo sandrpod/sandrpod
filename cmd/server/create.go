@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
 	"time"
 
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
@@ -180,4 +181,29 @@ func quotaExceeded(store podpkg.SandboxRepository, owner string, max int) bool {
 		}
 	}
 	return owned >= max
+}
+
+// maxSandboxNameLen bounds the name so it stays usable as a map key, a log
+// field, and a URL path segment.
+const maxSandboxNameLen = 64
+
+// sandboxNamePattern is what a name may contain. The container itself is named
+// by a generated id, so this is not a shell- or Docker-safety boundary — it is
+// about addressability: a name is a URL path segment, and one containing "/"
+// (or empty) produces a sandbox that is created, runs, and can never be
+// fetched or deleted again through the API. Nothing downstream rejects it, so
+// this is the only place it can be caught.
+var sandboxNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// validateSandboxName returns a reason the name is unusable, or "".
+func validateSandboxName(name string) string {
+	switch {
+	case name == "":
+		return "sandbox name is required"
+	case len(name) > maxSandboxNameLen:
+		return fmt.Sprintf("sandbox name is too long (%d > %d)", len(name), maxSandboxNameLen)
+	case !sandboxNamePattern.MatchString(name):
+		return "sandbox name must start with a letter or digit and contain only letters, digits, '.', '_' or '-'"
+	}
+	return ""
 }
