@@ -90,6 +90,7 @@ def save_config_token(token):
 
 
 @click.group()
+@click.version_option(package_name="sandrpod-cli", prog_name="sandrpod-cli")
 @click.option("--api-url", default=None, help="API URL (overrides config)")
 @click.option("--timeout", default=30, help="Request timeout")
 @click.option("--mcp-token", default=None, help="Personal MCP token (shared secret for the agent bridge; or set SANDRPOD_MCP_TOKEN)")
