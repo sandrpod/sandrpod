@@ -390,12 +390,6 @@ func (p *GCPProvider) GetHealthStatus(ctx context.Context, vmID string) (*provid
 	}
 	status := &provider.HealthStatus{VMReady: vm.State == provider.VMStateRunning}
 
-	if vm.State == provider.VMStateRunning && vm.PublicIP != "" {
-		checkCmd := "docker ps > /dev/null 2>&1 && echo ok || echo fail"
-		if result, err := p.ExecuteCommand(ctx, vmID, checkCmd); err == nil && result.ExitCode == 0 {
-			status.DockerReady = true
-		}
-	}
 	return status, nil
 }
 

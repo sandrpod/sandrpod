@@ -355,13 +355,17 @@ const ssmRegistrationTimeout = 3 * time.Minute
 func (p *AWSProvider) ExecuteCommand(ctx context.Context, vmID, command string) (*provider.CommandResult, error) {
 	// A just-launched instance isn't an SSM-managed instance until its agent
 	// registers (~1-2 min after boot). Until then SendCommand returns
-	// InvalidInstanceId; retry until it's accepted or the deadline passes.
-	sendCtx := ctx
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		sendCtx, cancel = context.WithTimeout(ctx, ssmRegistrationTimeout)
-		defer cancel()
-	}
+	// InvalidInstanceId; retry until it's accepted or this bound passes.
+	//
+	// The bound is always applied. It used to be skipped whenever the caller
+	// already had a deadline — which the scheduler always does, and its budget
+	// is for the whole provision. An instance that will NEVER become SSM-managed
+	// (no IAM instance profile, the most-missed AWS prerequisite) therefore
+	// retried for twenty minutes, billing throughout, instead of failing in
+	// three. WithTimeout still caps at the caller's deadline when that is
+	// sooner, so nothing outlives its budget.
+	sendCtx, cancel := context.WithTimeout(ctx, ssmRegistrationTimeout)
+	defer cancel()
 	var cmdResp *ssm.SendCommandOutput
 	for {
 		var err error
@@ -450,15 +454,6 @@ func (p *AWSProvider) GetHealthStatus(ctx context.Context, vmID string) (*provid
 
 	status := &provider.HealthStatus{
 		VMReady: vm.State == provider.VMStateRunning,
-	}
-
-	// Check whether Docker is running via SSM
-	if vm.State == provider.VMStateRunning {
-		checkCmd := "docker ps > /dev/null 2>&1 && echo 'ok' || echo 'fail'"
-		result, err := p.ExecuteCommand(ctx, vmID, checkCmd)
-		if err == nil && result.ExitCode == 0 {
-			status.DockerReady = true
-		}
 	}
 
 	return status, nil

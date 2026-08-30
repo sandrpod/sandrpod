@@ -361,14 +361,13 @@ var invocationTerminalStatuses = map[string]bool{
 // CloudAssist service and waits for the result.
 func (p *AliyunProvider) ExecuteCommand(ctx context.Context, vmID, command string) (*provider.CommandResult, error) {
 	// A just-launched instance's CloudAssist agent needs time to register.
-	// Until then RunCommand/InvokeCommand returns an instance-not-ready
-	// error code; retry until accepted or the deadline passes.
-	sendCtx := ctx
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		sendCtx, cancel = context.WithTimeout(ctx, cloudAssistRegistrationTimeout)
-		defer cancel()
-	}
+	// Until then RunCommand/InvokeCommand returns an instance-not-ready error
+	// code; retry until accepted or this bound passes. Always applied: skipping
+	// it when the caller has a deadline handed an agent that will never register
+	// the caller's whole provisioning budget. WithTimeout still caps at that
+	// deadline when it is sooner.
+	sendCtx, cancel := context.WithTimeout(ctx, cloudAssistRegistrationTimeout)
+	defer cancel()
 
 	runReq := ecs.CreateRunCommandRequest()
 	runReq.RegionId = p.region
@@ -499,15 +498,6 @@ func (p *AliyunProvider) GetHealthStatus(ctx context.Context, vmID string) (*pro
 
 	status := &provider.HealthStatus{
 		VMReady: vm.State == provider.VMStateRunning,
-	}
-
-	// Use CloudAssist to verify Docker is running
-	if vm.State == provider.VMStateRunning && vm.PublicIP != "" {
-		checkCmd := "docker ps > /dev/null 2>&1 && echo 'ok' || echo 'fail'"
-		result, err := p.ExecuteCommand(ctx, vmID, checkCmd)
-		if err == nil && result.ExitCode == 0 {
-			status.DockerReady = true
-		}
 	}
 
 	return status, nil
