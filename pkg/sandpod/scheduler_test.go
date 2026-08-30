@@ -6,7 +6,10 @@ package sandpod
 import (
 	"context"
 	"errors"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // mockPoderRepo is a minimal implementation of PoderRepository for testing.
@@ -165,6 +168,12 @@ func TestScheduler_ScheduleSandboxCreation_HappyPath(t *testing.T) {
 }
 
 func TestScheduler_ScheduleSandboxCreation_NoAvailableLocalPoder(t *testing.T) {
+	// The local path now waits for a worker that may still be registering,
+	// so shorten the window rather than making the test sit through it.
+	prev := LocalPoderGracePeriod
+	LocalPoderGracePeriod = 200 * time.Millisecond
+	t.Cleanup(func() { LocalPoderGracePeriod = prev })
+
 	mock := &mockPoderRepo{
 		selectBestFn: func(region, providerType string) (*PoderInfo, error) {
 			return nil, errors.New("no available poder found")
@@ -184,13 +193,19 @@ func TestScheduler_ScheduleSandboxCreation_NoAvailableLocalPoder(t *testing.T) {
 		t.Fatal("expected error when no local poder available, got nil")
 	}
 
-	expectedMsg := "no available local poder found"
-	if err.Error() != expectedMsg {
-		t.Errorf("expected error %q, got %q", expectedMsg, err.Error())
+	// Contains, not equals: the message now also says where to look.
+	if !strings.Contains(err.Error(), "no available local poder found") {
+		t.Errorf("error %q does not identify the missing worker", err.Error())
 	}
 }
 
 func TestScheduler_ScheduleSandboxCreation_NoAvailableDockerPoder(t *testing.T) {
+	// The local path now waits for a worker that may still be registering,
+	// so shorten the window rather than making the test sit through it.
+	prev := LocalPoderGracePeriod
+	LocalPoderGracePeriod = 200 * time.Millisecond
+	t.Cleanup(func() { LocalPoderGracePeriod = prev })
+
 	mock := &mockPoderRepo{
 		selectBestFn: func(region, providerType string) (*PoderInfo, error) {
 			return nil, errors.New("no available poder found")
@@ -210,13 +225,18 @@ func TestScheduler_ScheduleSandboxCreation_NoAvailableDockerPoder(t *testing.T) 
 		t.Fatal("expected error when no docker poder available, got nil")
 	}
 
-	expectedMsg := "no available docker poder found"
-	if err.Error() != expectedMsg {
-		t.Errorf("expected error %q, got %q", expectedMsg, err.Error())
+	if !strings.Contains(err.Error(), "no available docker poder found") {
+		t.Errorf("error %q does not identify the missing worker", err.Error())
 	}
 }
 
 func TestScheduler_ScheduleSandboxCreation_EmptyProviderDefaultsToLocal(t *testing.T) {
+	// The local path now waits for a worker that may still be registering,
+	// so shorten the window rather than making the test sit through it.
+	prev := LocalPoderGracePeriod
+	LocalPoderGracePeriod = 200 * time.Millisecond
+	t.Cleanup(func() { LocalPoderGracePeriod = prev })
+
 	mock := &mockPoderRepo{
 		selectBestFn: func(region, providerType string) (*PoderInfo, error) {
 			return nil, errors.New("no available poder found")
@@ -236,9 +256,9 @@ func TestScheduler_ScheduleSandboxCreation_EmptyProviderDefaultsToLocal(t *testi
 		t.Fatal("expected error for empty provider type defaulting to local, got nil")
 	}
 
-	expectedMsg := "no available local poder found"
-	if err.Error() != expectedMsg {
-		t.Errorf("expected error %q, got %q", expectedMsg, err.Error())
+	// Contains, not equals: the message now also says where to look.
+	if !strings.Contains(err.Error(), "no available local poder found") {
+		t.Errorf("error %q does not identify the missing worker", err.Error())
 	}
 }
 
@@ -271,6 +291,12 @@ func TestNewScheduler_CustomAPIURL(t *testing.T) {
 }
 
 func TestScheduler_SelectBestIsCalledWithCorrectArgs(t *testing.T) {
+	// Exercises the no-worker path; keep it from sitting through the full
+	// grace period.
+	prev := LocalPoderGracePeriod
+	LocalPoderGracePeriod = 200 * time.Millisecond
+	t.Cleanup(func() { LocalPoderGracePeriod = prev })
+
 	var capturedRegion, capturedProviderType string
 
 	mock := &mockPoderRepo{
@@ -295,5 +321,93 @@ func TestScheduler_SelectBestIsCalledWithCorrectArgs(t *testing.T) {
 	}
 	if capturedProviderType != "local" {
 		t.Errorf("SelectBest called with providerType %q, want %q", capturedProviderType, "local")
+	}
+}
+
+// A local worker cannot be provisioned on demand, but in the seconds after
+// `docker compose up` it may simply not have registered yet — the control
+// plane answers /health as soon as it binds. Failing immediately there turns a
+// timing window into "this product is broken" for whoever is following the
+// quickstart, which is the worst possible first impression and is not even
+// accurate.
+func TestScheduleLocal_WaitsForALateRegistration(t *testing.T) {
+	prev := LocalPoderGracePeriod
+	LocalPoderGracePeriod = 3 * time.Second
+	t.Cleanup(func() { LocalPoderGracePeriod = prev })
+
+	var calls atomic.Int32
+	repo := &mockPoderRepo{
+		selectBestFn: func(region, providerType string) (*PoderInfo, error) {
+			// Absent for the first few polls, then registers.
+			if calls.Add(1) < 3 {
+				return nil, errors.New("no poder available")
+			}
+			return &PoderInfo{ID: "poder-late", State: PoderStateOnline, ProviderType: providerType}, nil
+		},
+	}
+
+	s := NewScheduler(repo, "", "")
+	job, err := s.ScheduleSandboxCreation(context.Background(),
+		&CreateSandboxRequest{Name: "demo", ProviderType: "local"})
+	if err != nil {
+		t.Fatalf("a worker that registered during the grace period should have been used: %v", err)
+	}
+	if job.PoderID != "poder-late" {
+		t.Errorf("scheduled on %q, want poder-late", job.PoderID)
+	}
+	if calls.Load() < 3 {
+		t.Errorf("returned after %d checks — it cannot have waited", calls.Load())
+	}
+}
+
+// A worker that is genuinely absent must still fail, and say something the
+// reader can act on.
+func TestScheduleLocal_StillFailsWhenNoWorkerAppears(t *testing.T) {
+	prev := LocalPoderGracePeriod
+	LocalPoderGracePeriod = 300 * time.Millisecond
+	t.Cleanup(func() { LocalPoderGracePeriod = prev })
+
+	repo := &mockPoderRepo{
+		selectBestFn: func(string, string) (*PoderInfo, error) {
+			return nil, errors.New("no poder available")
+		},
+	}
+	s := NewScheduler(repo, "", "")
+	_, err := s.ScheduleSandboxCreation(context.Background(),
+		&CreateSandboxRequest{Name: "demo", ProviderType: "local"})
+	if err == nil {
+		t.Fatal("expected an error when no worker ever registers")
+	}
+	for _, want := range []string{"no available local poder", "docker compose ps"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q — the reader needs somewhere to look", err, want)
+		}
+	}
+}
+
+// The common case must not pay for the grace period: a worker that is already
+// there is returned without sleeping.
+func TestScheduleLocal_NoDelayWhenWorkerPresent(t *testing.T) {
+	prev := LocalPoderGracePeriod
+	LocalPoderGracePeriod = 30 * time.Second
+	t.Cleanup(func() { LocalPoderGracePeriod = prev })
+
+	repo := &mockPoderRepo{
+		selectBestFn: func(region, providerType string) (*PoderInfo, error) {
+			return &PoderInfo{ID: "poder-ready", State: PoderStateOnline, ProviderType: providerType}, nil
+		},
+	}
+	s := NewScheduler(repo, "", "")
+	start := time.Now()
+	job, err := s.ScheduleSandboxCreation(context.Background(),
+		&CreateSandboxRequest{Name: "demo", ProviderType: "local"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.PoderID != "poder-ready" {
+		t.Errorf("PoderID = %q", job.PoderID)
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %v with a worker already online — the grace period should cost nothing", elapsed)
 	}
 }

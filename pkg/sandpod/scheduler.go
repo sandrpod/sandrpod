@@ -39,6 +39,22 @@ func NewScheduler(poderStore PoderRepository, apiURL, token string) *Scheduler {
 	}
 }
 
+// LocalPoderGracePeriod is how long ScheduleSandboxCreation waits for a
+// local/docker worker to register before giving up. Overridable by the server
+// via -local-poder-grace.
+//
+// The default is a compromise: long enough to cover a cold `docker compose up`
+// on a slow machine, short enough that a genuinely missing worker still
+// reports quickly. The create API's synchronous path holds the request open
+// for the duration, but that path already blocks for minutes when a cloud
+// provider provisions a VM, so this is not a new class of behaviour.
+var LocalPoderGracePeriod = 30 * time.Second
+
+// localPoderPollInterval is deliberately much tighter than the cloud path's:
+// a worker that is already starting usually appears within a second or two,
+// and polling every 5s would turn a 1s wait into a 5s one.
+const localPoderPollInterval = 500 * time.Millisecond
+
 // ScheduleSandboxCreation schedules sandbox creation.
 // Flow:
 // 1. Find an available Poder of the requested provider type
@@ -59,7 +75,22 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 
 	// 2. No available Poder — must provision a VM first (cloud providers only)
 	if providerType == "local" || providerType == "docker" {
-		return nil, fmt.Errorf("no available %s poder found", providerType)
+		// A local worker cannot be provisioned on demand, but it may simply not
+		// have registered yet: the control plane answers /health as soon as it
+		// binds, seconds before the poder container has dialled in. Someone
+		// following the quickstart hits that window, and a hard error there
+		// reads as "this product is broken" rather than "wait a moment".
+		//
+		// Poll rather than fail. This costs nothing when a poder is already
+		// present — the first check happens before the first sleep.
+		if p := s.waitForPoderRegistration(providerType, req.Region, LocalPoderGracePeriod, localPoderPollInterval); p != nil {
+			log.Printf("[Scheduler] Poder %s registered during the grace period, scheduling on it", p.ID)
+			return s.createJobForPoder(req, p)
+		}
+		return nil, fmt.Errorf(
+			"no available %s poder found — the control plane is running but no worker "+
+				"registered within %s; check `docker compose ps` and the poder logs",
+			providerType, LocalPoderGracePeriod)
 	}
 
 	log.Printf("[Scheduler] No available poder for %s, creating new VM", providerType)
@@ -84,7 +115,7 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 
 	// 6. Wait for Poder to register and come online
 	log.Printf("[Scheduler] Waiting for poder registration for VM %s", vm.ID)
-	poder = s.waitForPoderRegistration(providerType, req.Region, 5*time.Minute)
+	poder = s.waitForPoderRegistration(providerType, req.Region, 5*time.Minute, 5*time.Second)
 	if poder == nil {
 		return nil, fmt.Errorf("poder registration timeout")
 	}
@@ -248,7 +279,7 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType, region str
 
 // waitForPoderRegistration polls poderStore until a Poder of the matching type comes online
 // or the timeout expires.
-func (s *Scheduler) waitForPoderRegistration(providerType, region string, timeout time.Duration) *PoderInfo {
+func (s *Scheduler) waitForPoderRegistration(providerType, region string, timeout, interval time.Duration) *PoderInfo {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
@@ -260,7 +291,7 @@ func (s *Scheduler) waitForPoderRegistration(providerType, region string, timeou
 		}
 
 		log.Printf("[Scheduler] Waiting for poder registration (provider=%s, region=%s)...", providerType, region)
-		time.Sleep(5 * time.Second)
+		time.Sleep(interval)
 	}
 
 	return nil
