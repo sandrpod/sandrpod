@@ -1,6 +1,6 @@
 # SandrPod 架构文档
 
-> **版本**: v0.5.7
+> **版本**: v0.5.8
 > **更新日期**: 2026-08
 > English: [ARCHITECTURE.md](ARCHITECTURE.md)
 >
