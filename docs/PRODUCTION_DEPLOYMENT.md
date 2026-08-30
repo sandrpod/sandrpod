@@ -112,13 +112,22 @@ ACME client needs API credentials for your DNS provider — not just port 80.
 
 ```bash
 export <PROVIDER>_SECRET_ID=... <PROVIDER>_SECRET_KEY=...     # see lego's docs
-lego --email you@example.com --accept-tos \
-     --dns <provider> --dns.propagation-wait 90s \
-     -d example.com -d '*.example.com' \
-     --path /etc/lego run
+lego run --accept-tos -m you@example.com \
+     --path /etc/lego --dns <provider> --dns.propagation.wait 90s \
+     -d example.com -d '*.example.com'
 ```
 
-Set `--dns.propagation-wait` generously. lego polls the authoritative
+**Check `lego --version` before copying that.** lego 5 moved every flag under
+the `run` subcommand and renamed two of them, so the 4.x form fails with
+`flag provided but not defined: -email`:
+
+| lego 4.x | lego 5.x |
+|---|---|
+| `lego --email … --path … --dns … run` | `lego run -m … --path … --dns …` |
+| `--dns.propagation-wait` | `--dns.propagation.wait` |
+| `lego … renew --days 30` | `lego run … --renew-days 30` (no `renew` subcommand) |
+
+Set the propagation wait generously. lego polls the authoritative
 nameservers for the TXT record it just wrote; ~100 s per domain is normal.
 
 ```
@@ -144,11 +153,11 @@ After=network-online.target
 Type=oneshot
 # DNS-provider credentials plus SANDRPOD_DOMAIN / ACME_EMAIL
 EnvironmentFile=/etc/sandrpod/renew.env
-ExecStart=/usr/local/bin/lego --email ${ACME_EMAIL} --accept-tos \
-  --dns <provider> --dns.propagation-wait 90s \
+ExecStart=/usr/local/bin/lego run --accept-tos -m ${ACME_EMAIL} \
+  --path /etc/lego --dns <provider> --dns.propagation.wait 90s \
   -d ${SANDRPOD_DOMAIN} -d *.${SANDRPOD_DOMAIN} \
-  --path /etc/lego renew --days 30
-ExecStartPost=-/usr/bin/docker kill --signal=SIGUSR1 sandrpod-caddy
+  --renew-days 30 --reuse-key \
+  --deploy-hook '/usr/bin/docker kill --signal=SIGUSR1 sandrpod-caddy'
 ```
 
 ```ini
@@ -164,6 +173,18 @@ WantedBy=timers.target
 
 ```bash
 systemctl daemon-reload && systemctl enable --now lego-renew.timer
+```
+
+`--deploy-hook` runs only when a certificate was actually replaced, so the
+daily no-op costs nothing. Caddy reloads its config — and re-reads the
+certificate files — on `SIGUSR1` without restarting or dropping connections.
+
+Run it once by hand rather than finding out in 60 days that the unit was wrong:
+
+```
+$ systemctl start lego-renew.service && journalctl -u lego-renew -n 2 --no-pager
+lego[…]: Skip renewal: The certificate expires at …, the renewal can be
+         performed in 59d22h55m11s. cert-name=example.com
 ```
 
 ---
@@ -271,6 +292,30 @@ curl -s -X POST -H "Authorization: Bearer $SANDRPOD_TOKEN" \
 ```json
 {"key":"e2b_…","prefix":"e2b_…","name":"demo","role":"user"}
 ```
+
+### Bound what one key can do
+
+A key handed to someone else should not be able to fill the host. Both caps are
+off by default and apply to **user**-role tokens on both surfaces; admins are
+exempt. Add them to the server service:
+
+```yaml
+environment:
+  SANDRPOD_MAX_SANDBOXES_PER_OWNER: 5    # concurrent sandboxes per token
+  SANDRPOD_RATE_LIMIT: 10                # requests/second per token
+  SANDRPOD_SANDBOX_IDLE_TIMEOUT: 2h      # reap what callers forget to kill
+```
+
+Set the rate limit against how the SDK actually behaves, not against
+`Sandbox.create()` alone: every file operation and command is a request on this
+surface too, so a value tuned for control-plane calls will throttle ordinary
+work.
+
+Underneath both sits a hard ceiling you get for free — a worker refuses
+scheduling past its container limit (10 per worker), so a single-host
+deployment cannot exceed that no matter how the caps are set. It is enforced
+from the worker's heartbeat, so a burst of concurrent creates can overshoot it
+slightly before the count catches up.
 
 ---
 

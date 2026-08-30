@@ -35,7 +35,7 @@ type fakeSandboxes struct{ created map[string]SandboxDetail }
 
 func newFakeSandboxes() *fakeSandboxes { return &fakeSandboxes{created: map[string]SandboxDetail{}} }
 
-func (f *fakeSandboxes) CreateSandbox(ident string, req NewSandbox) (SandboxDetail, error) {
+func (f *fakeSandboxes) CreateSandbox(ident string, admin bool, req NewSandbox) (SandboxDetail, error) {
 	d := SandboxDetail{
 		TemplateID: req.TemplateID, SandboxID: "sbx-" + fmt.Sprint(len(f.created)+1),
 		EnvdVersion: DefaultEnvdVersion, State: StateRunning, CPUCount: 2, MemoryMB: 512,
@@ -148,7 +148,7 @@ func (f *fakeCode) RestartContext(_, _ string) error { return nil }
 
 func testGateway() http.Handler {
 	return Handler(Config{
-		Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+		Auth:      func(k string) (string, bool, bool) { return "user1", false, IsE2BKey(k) },
 		Sandboxes: newFakeSandboxes(),
 		Envd:      newFakeEnvd(),
 		Code:      &fakeCode{},
@@ -415,7 +415,7 @@ func TestCodePathAuthRelaxation(t *testing.T) {
 	newGW := func(domain string) http.Handler {
 		return Handler(Config{
 			Domain:    domain,
-			Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+			Auth:      func(k string) (string, bool, bool) { return "user1", false, IsE2BKey(k) },
 			Sandboxes: newFakeSandboxes(),
 			Envd:      newFakeEnvd(),
 			Code:      &fakeCode{},
@@ -461,7 +461,7 @@ func TestPortProxy_GenericPortRouting(t *testing.T) {
 	var gotPort int
 	gw := Handler(Config{
 		Domain:    "app.example.com",
-		Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+		Auth:      func(k string) (string, bool, bool) { return "user1", false, IsE2BKey(k) },
 		Sandboxes: newFakeSandboxes(),
 		Envd:      newFakeEnvd(),
 		Code:      &fakeCode{},
@@ -516,7 +516,7 @@ func TestDataPlane_OwnershipEnforced(t *testing.T) {
 	portHit := false
 	gw := Handler(Config{
 		Domain:    "app.example.com",
-		Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+		Auth:      func(k string) (string, bool, bool) { return "user1", false, IsE2BKey(k) },
 		Authorize: func(ident, sandbox string) bool { return owners[sandbox] == ident },
 		Sandboxes: newFakeSandboxes(),
 		Envd:      newFakeEnvd(),
@@ -572,7 +572,7 @@ func TestEnvdHealth(t *testing.T) {
 	newGW := func(authorize func(string, string) bool, e EnvdBackend) http.Handler {
 		return Handler(Config{
 			Domain:    domain,
-			Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+			Auth:      func(k string) (string, bool, bool) { return "user1", false, IsE2BKey(k) },
 			Authorize: authorize,
 			Sandboxes: newFakeSandboxes(),
 			Envd:      e,
@@ -631,7 +631,7 @@ func TestCodeContextsHostScoped(t *testing.T) {
 	const domain = "example.com"
 	gw := Handler(Config{
 		Domain:    domain,
-		Auth:      func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+		Auth:      func(k string) (string, bool, bool) { return "user1", false, IsE2BKey(k) },
 		Authorize: func(string, string) bool { return false }, // nobody "owns" it
 		Sandboxes: newFakeSandboxes(),
 		Envd:      newFakeEnvd(),
@@ -678,7 +678,7 @@ func TestPublicSandboxPorts(t *testing.T) {
 	newGW := func(private bool) http.Handler {
 		return Handler(Config{
 			Domain:              domain,
-			Auth:                func(k string) (string, bool) { return "user1", IsE2BKey(k) },
+			Auth:                func(k string) (string, bool, bool) { return "user1", false, IsE2BKey(k) },
 			Sandboxes:           newFakeSandboxes(),
 			Envd:                newFakeEnvd(),
 			Code:                &fakeCode{},
@@ -710,5 +710,112 @@ func TestPublicSandboxPorts(t *testing.T) {
 	// Opting in flips only the first case back to requiring a key.
 	if code := get(newGW(true), userPort, "/index.html"); code != http.StatusUnauthorized {
 		t.Errorf("private ports, no key: want 401, got %d", code)
+	}
+}
+
+// quotaSandboxes records the admin bit it was handed and can refuse.
+type quotaSandboxes struct {
+	*fakeSandboxes
+	refuse   bool
+	gotAdmin bool
+	calls    int
+}
+
+func (q *quotaSandboxes) CreateSandbox(ident string, admin bool, req NewSandbox) (SandboxDetail, error) {
+	q.calls++
+	q.gotAdmin = admin
+	if q.refuse {
+		return SandboxDetail{}, fmt.Errorf("%w (2)", ErrQuotaExceeded)
+	}
+	return q.fakeSandboxes.CreateSandbox(ident, admin, req)
+}
+
+// A backend at its per-owner limit must be distinguishable from a broken one:
+// 500 makes an SDK look like the server fell over, and E2B clients treat 429 as
+// backpressure.
+func TestCreateSandbox_QuotaRefusalIs429(t *testing.T) {
+	backend := &quotaSandboxes{fakeSandboxes: newFakeSandboxes(), refuse: true}
+	gw := Handler(Config{
+		Domain:    "app.example.com",
+		Auth:      func(k string) (string, bool, bool) { return "user1", false, IsE2BKey(k) },
+		Sandboxes: backend,
+		Envd:      newFakeEnvd(),
+	})
+	req := httptest.NewRequest("POST", "http://api.app.example.com/sandboxes", strings.NewReader("{}"))
+	req.Host = "api.app.example.com"
+	req.Header.Set("Authorization", "Bearer e2b_"+strings.Repeat("a", 40))
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Errorf("quota refusal answered %d, want 429", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "quota") {
+		t.Errorf("body %q does not say why", rec.Body.String())
+	}
+}
+
+// The admin bit has to survive the trip from Auth to the backend, or the
+// backend cannot honour the documented admin exemption.
+func TestCreateSandbox_AdminBitReachesBackend(t *testing.T) {
+	for _, admin := range []bool{true, false} {
+		backend := &quotaSandboxes{fakeSandboxes: newFakeSandboxes()}
+		gw := Handler(Config{
+			Domain:    "app.example.com",
+			Auth:      func(k string) (string, bool, bool) { return "user1", admin, IsE2BKey(k) },
+			Sandboxes: backend,
+			Envd:      newFakeEnvd(),
+		})
+		req := httptest.NewRequest("POST", "http://api.app.example.com/sandboxes", strings.NewReader("{}"))
+		req.Host = "api.app.example.com"
+		req.Header.Set("Authorization", "Bearer e2b_"+strings.Repeat("a", 40))
+		gw.ServeHTTP(httptest.NewRecorder(), req)
+
+		if backend.calls != 1 {
+			t.Fatalf("admin=%v: backend called %d times", admin, backend.calls)
+		}
+		if backend.gotAdmin != admin {
+			t.Errorf("Auth reported admin=%v but the backend was told %v", admin, backend.gotAdmin)
+		}
+	}
+}
+
+// A limiter installed only on the host's native middleware never sees E2B
+// traffic — e2bHostRouter dispatches here first. The hook must therefore run on
+// this surface, answer 429, and exempt the identities the host says to exempt.
+func TestThrottle_RejectsWith429AndCarriesIdentity(t *testing.T) {
+	var gotIdent string
+	var gotAdmin, allow bool
+	backend := newFakeSandboxes()
+	gw := Handler(Config{
+		Domain:    "app.example.com",
+		Auth:      func(k string) (string, bool, bool) { return "user1", gotAdmin, IsE2BKey(k) },
+		Throttle:  func(id string, admin bool) bool { gotIdent = id; return allow },
+		Sandboxes: backend,
+		Envd:      newFakeEnvd(),
+	})
+	call := func() int {
+		req := httptest.NewRequest("POST", "http://api.app.example.com/sandboxes", strings.NewReader("{}"))
+		req.Host = "api.app.example.com"
+		req.Header.Set("Authorization", "Bearer e2b_"+strings.Repeat("a", 40))
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	allow = false
+	if code := call(); code != http.StatusTooManyRequests {
+		t.Errorf("throttled request answered %d, want 429", code)
+	}
+	if gotIdent != "user1" {
+		t.Errorf("throttle saw identity %q, want user1", gotIdent)
+	}
+	if n := len(backend.created); n != 0 {
+		t.Errorf("throttled request still created %d sandbox(es)", n)
+	}
+
+	allow = true
+	if code := call(); code != http.StatusCreated {
+		t.Errorf("allowed request answered %d, want 201", code)
 	}
 }

@@ -15,6 +15,7 @@ import (
 // mockPoderRepo is a minimal implementation of PoderRepository for testing.
 type mockPoderRepo struct {
 	selectBestFn func(region, providerType string) (*PoderInfo, error)
+	listFn       func() []*PoderInfo
 }
 
 func (m *mockPoderRepo) Register(req *RegisterPoderRequest) (*PoderInfo, error) {
@@ -30,6 +31,9 @@ func (m *mockPoderRepo) Get(id string) (*PoderInfo, bool) {
 }
 
 func (m *mockPoderRepo) List() []*PoderInfo {
+	if m.listFn != nil {
+		return m.listFn()
+	}
 	return nil
 }
 
@@ -409,5 +413,81 @@ func TestScheduleLocal_NoDelayWhenWorkerPresent(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > time.Second {
 		t.Errorf("took %v with a worker already online — the grace period should cost nothing", elapsed)
+	}
+}
+
+// A worker that is online but full is the steady-state failure of a busy
+// deployment, and it used to be reported as the cold-start one: SelectBest
+// filters full workers out, so the grace period ran to completion and then
+// blamed a worker that `docker compose ps` shows running. Both halves matter —
+// the message must name capacity, and it must not spend the grace period first,
+// or every rejected create under load costs 30s.
+func TestScheduleLocal_FullWorkerFailsFastAndSaysSo(t *testing.T) {
+	prev := LocalPoderGracePeriod
+	LocalPoderGracePeriod = 10 * time.Second
+	t.Cleanup(func() { LocalPoderGracePeriod = prev })
+
+	full := &PoderInfo{
+		ID: "poder-full", State: PoderStateOnline, ProviderType: "local", Region: "local",
+		Resources: PoderResources{MaxContainers: 10},
+		Usage:     PoderUsage{Containers: 10},
+	}
+	repo := &mockPoderRepo{
+		selectBestFn: func(string, string) (*PoderInfo, error) {
+			return nil, errors.New("no poder available") // what SelectBest does with a full worker
+		},
+		listFn: func() []*PoderInfo { return []*PoderInfo{full} },
+	}
+
+	s := NewScheduler(repo, "", "")
+	start := time.Now()
+	_, err := s.ScheduleSandboxCreation(context.Background(),
+		&CreateSandboxRequest{Name: "demo", ProviderType: "local", Region: "local"})
+	if err == nil {
+		t.Fatal("expected an error when the only worker is at its container limit")
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %v — waiting cannot free capacity, so it must not wait", elapsed)
+	}
+	if !strings.Contains(err.Error(), "container limit") {
+		t.Errorf("error %q does not mention the container limit", err)
+	}
+	if strings.Contains(err.Error(), "docker compose ps") {
+		t.Errorf("error %q still sends the reader to check a worker that is online", err)
+	}
+}
+
+// The capacity check must not swallow the cold-start case it sits in front of:
+// a worker below its limit that has not registered yet still gets waited for.
+func TestScheduleLocal_UnfullWorkerDoesNotTriggerCapacityPath(t *testing.T) {
+	prev := LocalPoderGracePeriod
+	LocalPoderGracePeriod = 3 * time.Second
+	t.Cleanup(func() { LocalPoderGracePeriod = prev })
+
+	var calls atomic.Int32
+	repo := &mockPoderRepo{
+		selectBestFn: func(region, providerType string) (*PoderInfo, error) {
+			if calls.Add(1) < 3 {
+				return nil, errors.New("no poder available")
+			}
+			return &PoderInfo{ID: "poder-late", State: PoderStateOnline, ProviderType: providerType}, nil
+		},
+		// Present but with room — must not be counted as at-capacity.
+		listFn: func() []*PoderInfo {
+			return []*PoderInfo{{
+				ID: "poder-roomy", State: PoderStateOnline, ProviderType: "local",
+				Resources: PoderResources{MaxContainers: 10},
+				Usage:     PoderUsage{Containers: 3},
+			}}
+		},
+	}
+	s := NewScheduler(repo, "", "")
+	job, err := s.ScheduleSandboxCreation(context.Background(),
+		&CreateSandboxRequest{Name: "demo", ProviderType: "local"})
+	if err != nil {
+		t.Fatalf("a worker with room must still go through the grace period: %v", err)
+	}
+	if job.PoderID != "poder-late" {
+		t.Errorf("scheduled on %q, want poder-late", job.PoderID)
 	}
 }

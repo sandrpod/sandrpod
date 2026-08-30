@@ -131,6 +131,7 @@ func newE2BGateway(domain string, d e2bDeps) http.Handler {
 	return e2bcompat.Handler(e2bcompat.Config{
 		Domain:          domain,
 		Auth:            d.authenticator(),
+		Throttle:        d.throttle,
 		Authorize:       d.authorizeSandbox,
 		Sandboxes:       &e2bSandboxBackend{d},
 		Envd:            &e2bEnvdBackend{d},
@@ -225,16 +226,32 @@ func (b *e2bCodeBackend) RestartContext(name, contextID string) error {
 
 // authenticator maps a presented E2B key to a SandrPod identity. When auth is
 // disabled it accepts any e2b_<hex>-shaped key anonymously.
+// throttle applies the same per-identity rate limit the native API uses
+// (-rate-limit). e2bHostRouter dispatches to the gateway ahead of the native
+// auth middleware, so without this the limiter does not exist on this surface —
+// which is the one deployments actually expose. Anonymous callers (public
+// sandbox ports) are exempt: they share one identity, so a bucket would be a
+// single global cap on legitimate preview traffic.
+func (d e2bDeps) throttle(ident string, admin bool) bool {
+	if apiRateLimit == nil || admin || ident == "" {
+		return true
+	}
+	return apiRateLimit.allow(ident)
+}
+
 func (d e2bDeps) authenticator() e2bcompat.Authenticator {
-	return func(key string) (string, bool) {
+	return func(key string) (string, bool, bool) {
 		if d.cfg.authDisabled() {
-			return "", true // auth disabled: accept anything (incl. empty)
+			// Auth disabled: accept anything, and match the native surface,
+			// whose middleware stores an anonymous *admin* — so per-owner
+			// limits stay off here too rather than capping an open server.
+			return "", true, true
 		}
 		if key == "" {
-			return "", false
+			return "", false, false
 		}
 		if id, ok := resolveToken(d.cfg, key); ok {
-			return id.Name, true
+			return id.Name, id.isAdmin(), true
 		}
 		// Per-sandbox envd access tokens: the gateway mints these (envdToken)
 		// and stores them in a sandbox label. The SDK presents them for envd /
@@ -242,7 +259,10 @@ func (d e2bDeps) authenticator() e2bcompat.Authenticator {
 		// authenticate as the owning sandbox's identity. resolveToken only knows
 		// server tokens; without this, every envd op 401s once server auth is on
 		// (the local, auth-off harness never exercised this path).
-		return d.envdTokenIdentity(key)
+		// A per-sandbox envd token authenticates as the owning sandbox's
+		// identity, which is never privileged.
+		id, ok := d.envdTokenIdentity(key)
+		return id, false, ok
 	}
 }
 
@@ -428,7 +448,14 @@ func e2bSubstrate() (provider, region, instanceType string) {
 	return provider, region, os.Getenv("SANDRPOD_E2B_INSTANCE_TYPE")
 }
 
-func (b *e2bSandboxBackend) CreateSandbox(ident string, req e2bcompat.NewSandbox) (e2bcompat.SandboxDetail, error) {
+func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompat.NewSandbox) (e2bcompat.SandboxDetail, error) {
+	// Same per-owner cap the native POST /api/v1/sandboxes enforces. Without
+	// this the flag silently did nothing on the surface most deployments put on
+	// a public IP.
+	if !admin && quotaExceeded(b.d.sandboxes, ident, b.d.cfg.MaxSandboxesPerOwner) {
+		return e2bcompat.SandboxDetail{}, fmt.Errorf("%w (%d)",
+			e2bcompat.ErrQuotaExceeded, b.d.cfg.MaxSandboxesPerOwner)
+	}
 	name := "e2b" + randToken(8)
 	provider, region, instanceType := e2bSubstrate()
 	create := &podpkg.CreateSandboxRequest{
