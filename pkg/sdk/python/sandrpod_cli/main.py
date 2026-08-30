@@ -92,7 +92,7 @@ def save_config_token(token):
 @click.group()
 @click.option("--api-url", default=None, help="API URL (overrides config)")
 @click.option("--timeout", default=30, help="Request timeout")
-@click.option("--mcp-token", default=None, help="个人 MCP token（agent bridge 共享密钥；也可用 SANDRPOD_MCP_TOKEN）")
+@click.option("--mcp-token", default=None, help="Personal MCP token (shared secret for the agent bridge; or set SANDRPOD_MCP_TOKEN)")
 @click.pass_context
 def cli(ctx, api_url, timeout, mcp_token):
     """SandrPod CLI - Sandbox Management"""
@@ -1010,16 +1010,16 @@ def _load_mcp_config(client, name, config_path):
 @click.group(name="mcp")
 @click.pass_context
 def mcp_group(ctx):
-    """管理沙箱原生 MCP bridge (/mcp: 聚合 MCP server, 改配置热重载)"""
+    """Manage the sandbox's native MCP bridge (/mcp: aggregates MCP servers, hot-reloads on config change)."""
     pass
 
 
 @mcp_group.command(name="ls")
 @click.argument("name")
-@click.option("--config-path", default="", help="覆盖 mcp.json 路径 (默认自动探测)")
+@click.option("--config-path", default="", help="Override the mcp.json path (auto-detected by default)")
 @click.pass_context
 def mcp_ls(ctx, name, config_path):
-    """列出沙箱已配置的 MCP server (读 mcp.json)"""
+    """List the MCP servers configured in the sandbox (reads mcp.json)."""
     client = ctx.parent.parent.obj["client"]
     try:
         path = _mcp_config_path(client, name, config_path)
@@ -1043,14 +1043,14 @@ def mcp_ls(ctx, name, config_path):
 @click.argument("name")
 @click.argument("server")
 @click.argument("command", required=False)
-@click.option("--url", default="", help="remote MCP endpoint (与 stdio command 二选一)")
-@click.option("--type", "server_type", default="", help="remote 传输: streamable-http(默认)|http|sse")
-@click.option("--env", "envs", multiple=True, help="环境变量 K=V (可多次)")
-@click.option("--header", "headers", multiple=True, help="remote 请求头 K=V (可多次)")
-@click.option("--config-path", default="", help="覆盖 mcp.json 路径")
+@click.option("--url", default="", help="Remote MCP endpoint (alternative to a stdio command)")
+@click.option("--type", "server_type", default="", help="Remote transport: streamable-http (default) | http | sse")
+@click.option("--env", "envs", multiple=True, help="Environment variable K=V (repeatable)")
+@click.option("--header", "headers", multiple=True, help="Remote request header K=V (repeatable)")
+@click.option("--config-path", default="", help="Override the mcp.json path")
 @click.pass_context
 def mcp_add(ctx, name, server, command, url, server_type, envs, headers, config_path):
-    """加一个 MCP server (stdio 命令整体加引号)
+    """Add an MCP server (quote the whole stdio command).
 
     stdio:  sandrpod-cli mcp add <sb> exa "npx -y exa-mcp-server" --env EXA_API_KEY=xxx
     remote: sandrpod-cli mcp add <sb> gh --url https://api.githubcopilot.com/mcp/ --header "Authorization=Bearer xxx"
@@ -1068,13 +1068,13 @@ def mcp_add(ctx, name, server, command, url, server_type, envs, headers, config_
         elif command:
             parts = shlex.split(command)
             if not parts:
-                click.echo("Error: stdio command 为空", err=True)
+                click.echo("Error: empty stdio command", err=True)
                 sys.exit(1)
             entry["command"] = parts[0]
             if len(parts) > 1:
                 entry["args"] = parts[1:]
         else:
-            click.echo('Error: 需要 stdio command (加引号, 如 "npx -y exa-mcp-server") 或 --url', err=True)
+            click.echo('Error: need a quoted stdio command (e.g. "npx -y exa-mcp-server") or --url', err=True)
             sys.exit(1)
         env = _kv(envs)
         if env:
@@ -1084,7 +1084,7 @@ def mcp_add(ctx, name, server, command, url, server_type, envs, headers, config_
         servers = {**cfg.get("mcpServers", {}), server: entry}
         new_cfg = {**cfg, "mcpServers": servers}
         client.write_file(name, path, json.dumps(new_cfg, indent=2))
-        click.echo(f"Added MCP server '{server}' → {path} (bridge 热重载, `mcp tools {name}` 查看)")
+        click.echo(f"Added MCP server '{server}' → {path} (bridge hot-reloads; run `mcp tools {name}` to verify)")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -1093,10 +1093,10 @@ def mcp_add(ctx, name, server, command, url, server_type, envs, headers, config_
 @mcp_group.command(name="rm")
 @click.argument("name")
 @click.argument("server")
-@click.option("--config-path", default="", help="覆盖 mcp.json 路径")
+@click.option("--config-path", default="", help="Override the mcp.json path")
 @click.pass_context
 def mcp_rm(ctx, name, server, config_path):
-    """删除一个 MCP server"""
+    """Remove an MCP server."""
     client = ctx.parent.parent.obj["client"]
     try:
         path = _mcp_config_path(client, name, config_path)
@@ -1107,7 +1107,7 @@ def mcp_rm(ctx, name, server, config_path):
         servers = {k: v for k, v in cfg["mcpServers"].items() if k != server}
         new_cfg = {**cfg, "mcpServers": servers}
         client.write_file(name, path, json.dumps(new_cfg, indent=2))
-        click.echo(f"Removed MCP server '{server}' → {path} (bridge 热重载)")
+        click.echo(f"Removed MCP server '{server}' → {path} (bridge hot-reloads)")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -1117,21 +1117,21 @@ def mcp_rm(ctx, name, server, config_path):
 @click.argument("name")
 @click.pass_context
 def mcp_url(ctx, name):
-    """打印沙箱原生 MCP 端点 URL + 连接所需的两层鉴权头"""
+    """Print the sandbox's native MCP endpoint URL and the two auth headers needed to connect."""
     client = ctx.parent.parent.obj["client"]
     click.echo(client.mcp_url(name))
     # 两层鉴权(见 MCP_AUTH_HEADER_CONFLICT_FIX):平台 token 走 X-Sandrpod-Token,
     # 个人 MCP token 走 Authorization: Bearer(server 原样透传给 agent 校验)。
-    click.echo("# 连接头(两层鉴权):", err=True)
-    click.echo("#   X-Sandrpod-Token: <平台 token>", err=True)
-    click.echo("#   Authorization: Bearer <个人 mcp_token>   (仅当 agent 以 -mcp-token 启动时需要)", err=True)
+    click.echo("# Connection headers (two-layer auth):", err=True)
+    click.echo("#   X-Sandrpod-Token: <platform token>", err=True)
+    click.echo("#   Authorization: Bearer <personal mcp_token>   (only when the agent runs with -mcp-token)", err=True)
 
 
 @mcp_group.command(name="tools")
 @click.argument("name")
 @click.pass_context
 def mcp_tools(ctx, name):
-    """列出实时聚合的 MCP server 及工具数 (查 /mcp/manifest)"""
+    """List the live aggregated MCP servers and their tool counts (queries /mcp/manifest)."""
     client = ctx.parent.parent.obj["client"]
     try:
         manifest = client.mcp_manifest(name)
