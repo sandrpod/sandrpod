@@ -151,7 +151,7 @@ func mcpTokenMiddleware(expectedToken string, next http.Handler) http.Handler {
 
 ## 三、文档与实现的矛盾
 
-[`docs/MCP_BRIDGE.md` §Authentication](MCP_BRIDGE.md) 当前写：
+[`docs/MCP_BRIDGE.md` §Authentication](../MCP_BRIDGE.md) 当前写：
 
 > The API Server forwards the `Authorization` header verbatim — it does
 > **not** know or validate the secret. So even a compromised API Server
@@ -202,7 +202,7 @@ func mcpTokenMiddleware(expectedToken string, next http.Handler) http.Handler {
 
 - corp 级管理员能调任何员工的任何 MCP 工具（cfg.Token 是 corp 共享的）
 - 完全失去了 `--mcp-token` 设计时想要的 "API Server 被入侵也只能 replay" 的防御纵深
-- 这违反了 sandrpod 自己 [`docs/MCP_BRIDGE.md` 里说的](MCP_BRIDGE.md) "even a compromised API Server cannot forge new MCP calls"
+- 这违反了 sandrpod 自己 [`docs/MCP_BRIDGE.md` 里说的](../MCP_BRIDGE.md) "even a compromised API Server cannot forge new MCP calls"
 
 ---
 

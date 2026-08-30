@@ -42,20 +42,20 @@ per-VM ephemeral keys):
 | Doc | What it covers |
 |---|---|
 | [E2B_COMPAT.md](E2B_COMPAT.md) | Using the unmodified E2B SDK against SandrPod: wire-protocol surface, domain routing, config |
-| [E2B_MCP_COMPAT.md](E2B_MCP_COMPAT.md) **(中文)** | The in-sandbox `mcp-gateway` shim (`:50005`) and how it maps to SandrPod's native MCP bridge |
+| [E2B_MCP_COMPAT.md](E2B_MCP_COMPAT.md) ([中文](E2B_MCP_COMPAT.zh.md)) | The in-sandbox `mcp-gateway` shim (`:50005`) and how it maps to SandrPod's native MCP bridge |
 
 ## MCP (Model Context Protocol)
 
 | Doc | What it covers |
 |---|---|
 | [MCP_BRIDGE.md](MCP_BRIDGE.md) | User guide: aggregate stdio/remote MCP servers from `mcp.json` into one `/mcp` endpoint; hot reload, tool filtering, permission grants |
-| [MCP_AUTH.md](MCP_AUTH.md) **(中文)** | Protecting the bridge: two-layer auth (platform header + `mcp_token`), manifest exemption, and native OAuth for remote servers (Notion-style) |
+| [MCP_AUTH.md](MCP_AUTH.md) ([中文](MCP_AUTH.zh.md)) | Protecting the bridge: two-layer auth (platform header + `mcp_token`), manifest exemption, and native OAuth for remote servers (Notion-style) |
 
 ## Employee-PC mode
 
 | Doc | What it covers |
 |---|---|
-| [PERMISSION_AND_AUDIT.md](PERMISSION_AND_AUDIT.md) **(中文)** | The consent gate (work_dir → hardlock → permanent → session → ask), native dialogs, `sandrpod-tray`, and the decision-audit upload pipeline |
+| [PERMISSION_AND_AUDIT.md](PERMISSION_AND_AUDIT.md) ([中文](PERMISSION_AND_AUDIT.zh.md)) | The consent gate (work_dir → hardlock → permanent → session → ask), native dialogs, `sandrpod-tray`, and the decision-audit upload pipeline |
 
 ## Agent skills
 
