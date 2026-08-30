@@ -113,29 +113,64 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 		return nil, fmt.Errorf("failed to create VM: %w", err)
 	}
 
+	// From here the VM exists and is being billed for. Every failure below has
+	// to give it back: a VM that never finishes bootstrapping never registers a
+	// poder, and every reaper works off the poder store — nothing reconciles
+	// against the provider's own VM list. Left behind it runs until somebody
+	// notices it in the cloud console. Missing AWS_IAM_INSTANCE_PROFILE puts a
+	// first-time AWS user on exactly this path.
+
 	// 4. Wait for VM to be ready
 	log.Printf("[Scheduler] Waiting for VM %s to be ready", vm.ID)
 	if err := s.waitForVMReady(ctx, providerType, vm.ID); err != nil {
-		return nil, fmt.Errorf("VM not ready: %w", err)
+		return nil, fmt.Errorf("VM not ready: %w (%s)", err, s.terminateOrphanVM(providerType, vm.ID))
 	}
 
 	// 5. Install Docker and start Poder on the VM
 	log.Printf("[Scheduler] Setting up poder on VM %s", vm.ID)
 	if err := s.setupPoderOnVM(ctx, providerType, req.Region, vm); err != nil {
-		return nil, fmt.Errorf("failed to setup poder: %w", err)
+		return nil, fmt.Errorf("failed to setup poder: %w (%s)", err, s.terminateOrphanVM(providerType, vm.ID))
 	}
 
 	// 6. Wait for Poder to register and come online
 	log.Printf("[Scheduler] Waiting for poder registration for VM %s", vm.ID)
 	poder = s.waitForPoderRegistration(providerType, req.Region, 5*time.Minute, 5*time.Second)
 	if poder == nil {
-		return nil, fmt.Errorf("poder registration timeout")
+		return nil, fmt.Errorf("poder registration timeout (%s)", s.terminateOrphanVM(providerType, vm.ID))
 	}
 
 	log.Printf("[Scheduler] Poder %s registered successfully", poder.ID)
 
 	// 7. Create the job
 	return s.createJobForPoder(req, poder)
+}
+
+// orphanVMTerminateTimeout bounds the cleanup call. Short: the caller is
+// already reporting a failure and should not be held up further.
+const orphanVMTerminateTimeout = 2 * time.Minute
+
+// terminateOrphanVM gives back a VM that was created but never became a usable
+// poder, and reports what happened in a form fit to append to the failure the
+// caller is already returning — the API caller cannot see the log, and "was I
+// charged for a machine I never got?" is the first thing they will ask.
+//
+// It builds its own context: the caller's is frequently already cancelled or
+// past its deadline by the failure that got us here, and reusing it would make
+// the cleanup fail exactly when it is needed.
+func (s *Scheduler) terminateOrphanVM(providerType, vmID string) string {
+	p, err := provider.GetFactory().Get(providerType)
+	if err != nil {
+		log.Printf("[Scheduler] WARNING: orphan VM %s (%s) left running — provider unavailable: %v", vmID, providerType, err)
+		return fmt.Sprintf("VM %s left running, terminate it by hand", vmID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), orphanVMTerminateTimeout)
+	defer cancel()
+	if err := p.DeleteVM(ctx, vmID); err != nil {
+		log.Printf("[Scheduler] WARNING: orphan VM %s (%s) left running, terminate it by hand: %v", vmID, providerType, err)
+		return fmt.Sprintf("VM %s left running, terminate it by hand", vmID)
+	}
+	log.Printf("[Scheduler] Terminated orphan VM %s (%s)", vmID, providerType)
+	return fmt.Sprintf("VM %s terminated", vmID)
 }
 
 // createVMWithProvider provisions a VM through the specified cloud provider

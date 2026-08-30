@@ -319,11 +319,6 @@ func (p *HetznerProvider) GetHealthStatus(ctx context.Context, vmID string) (*pr
 		return nil, err
 	}
 	status := &provider.HealthStatus{VMReady: vm.State == provider.VMStateRunning}
-	if vm.State == provider.VMStateRunning && vm.PublicIP != "" {
-		if res, err := p.ExecuteCommand(ctx, vmID, "docker ps > /dev/null 2>&1 && echo ok || echo fail"); err == nil && res.ExitCode == 0 {
-			status.DockerReady = true
-		}
-	}
 	return status, nil
 }
 

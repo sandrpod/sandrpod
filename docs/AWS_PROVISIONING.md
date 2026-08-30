@@ -171,8 +171,37 @@ Then tell the server its instance-profile **name** (not ARN):
 AWS_IAM_INSTANCE_PROFILE=sandrpod-vm-ssm
 ```
 
-Without this, `ExecuteCommand` has no managed instance to target and the
-Docker-install / Poder-start steps never run.
+### Two IAM things, and only one of them depends on where the server runs
+
+They are easy to conflate, and getting them the wrong way round wastes an
+afternoon:
+
+| | Attached to | Depends on where the server runs? |
+|---|---|---|
+| Server credentials (`AWS_ACCESS_KEY_ID` / instance role) | the API Server process | **Yes.** On EC2 use an instance role and omit the static keys; anywhere else there is no instance metadata, so static keys are required. |
+| `AWS_IAM_INSTANCE_PROFILE` | **each VM SandrPod launches** | **No.** Always required, wherever the server runs. |
+
+The profile is what makes a launched instance *SSM-managed*, and SSM is the
+only bootstrap path this provider has — there is no user-data script and no SSH
+fallback (GCP, DigitalOcean and Hetzner use SSH instead, which is why they need
+nothing like this). Without it `ExecuteCommand` has no managed instance to
+target and the Docker-install / Poder-start steps never run.
+
+### What it looks like when it is missing
+
+`RunInstances` **succeeds** — the profile is optional at launch — so the
+instance boots and starts costing money. Then `SendCommand` retries
+`InvalidInstanceId` for three minutes and the create fails with:
+
+```
+instance i-0abc… not SSM-ready before timeout
+```
+
+SandrPod terminates that VM before returning, and the error says which one
+(`… (VM i-0abc… terminated)`). If the termination itself fails the message says
+so instead, with the id, because nothing else will ever clean it up: a VM that
+never finishes bootstrapping never registers a Poder, and the idle reapers work
+off the Poder store.
 
 ---
 
@@ -229,8 +258,8 @@ the Poder in turn pulls the **toolbox** image. Point both at a registry the VM
 can reach (e.g. public GHCR):
 
 ```bash
-SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
+SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.9
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.9
 ```
 
 - `SANDRPOD_PODER_IMAGE` is used by the scheduler for the `docker run` on the VM.
@@ -269,15 +298,15 @@ export AWS_SECRET_ACCESS_KEY=...
 export AWS_REGION=us-east-1
 export AWS_IAM_INSTANCE_PROFILE=sandrpod-vm-ssm
 export SANDRPOD_VM_SECURITY_GROUP=sg-0abc123
-export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
-export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
+export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.9
+export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.9
 
 go run ./cmd/server -port 8080 \
   -public-url https://api.example.com \
   -db sqlite:./data/sandrpod.db -token "$SANDRPOD_TOKEN"
 
 # Then create a sandbox on AWS:
-sandrpod-cli create my-box --provider-type aws \
+sandrpod-cli create my-box --provider aws \
   --region us-east-1 --instance-type t3.medium
 ```
 
@@ -326,8 +355,8 @@ Environment=AWS_SECRET_ACCESS_KEY=...
 Environment=AWS_IAM_INSTANCE_PROFILE=sandrpod-vm-ssm
 Environment=SANDRPOD_VM_SUBNET_ID=subnet-0abc123
 Environment=SANDRPOD_VM_SECURITY_GROUP=sg-0abc123
-Environment=SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.0
-Environment=SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.0
+Environment=SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.9
+Environment=SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.9
 ```
 
 ```bash

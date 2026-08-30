@@ -11,6 +11,17 @@ grouped below. Docs marked **(中文)** are written in Chinese.
 | [ARCHITECTURE.md](ARCHITECTURE.md) ([中文](ARCHITECTURE.zh.md)) | The implemented architecture: API Server, Poder workers, Toolbox, reverse tunnel, E2B gateway, permission gate, MCP bridge, state machine, request flows |
 | [ROADMAP.md](ROADMAP.md) | Product-gap analysis vs E2B/Modal/Daytona and the prioritized plan |
 
+## Releasing
+
+Every pinned version in the repo — the reference compose file, the eight
+provider guides, the architecture headers, the Python SDK — is rewritten in one
+pass, and CI fails if any of them disagree:
+
+```bash
+make bump-version VERSION=v0.6.0    # rewrite them all
+make check-versions                 # what CI runs
+```
+
 ## Deployment & operations
 
 | Doc | What it covers |
@@ -25,8 +36,18 @@ grouped below. Docs marked **(中文)** are written in Chinese.
 ## Cloud providers
 
 One guide per provider — credentials, env vars, instance defaults, and the
-remote-exec backend each cloud uses (managed run-command API vs SSH with
-per-VM ephemeral keys):
+remote-exec backend each cloud uses.
+
+That backend decides how much setup you are in for, so it is worth knowing
+before you pick one to try first:
+
+- **SSH, per-VM ephemeral keys** — GCP, DigitalOcean, Hetzner. An API token (or
+  service-account JSON) is the whole credential story.
+- **Managed run-command** — AWS (SSM), Aliyun (CloudAssist), Azure (Run
+  Command), Tencent (TAT), Oracle (Instance Agent). These additionally need the
+  launched VM to carry an identity the run-command service recognises — on AWS
+  that is `AWS_IAM_INSTANCE_PROFILE`, and it is the single most-missed
+  prerequisite.
 
 [AWS](AWS_PROVISIONING.md) ·
 [Aliyun](ALIYUN_PROVISIONING.md) ·

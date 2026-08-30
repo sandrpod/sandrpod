@@ -68,11 +68,14 @@ type VMInfo struct {
 }
 
 // HealthStatus reports the health of a VM and its services.
+// HealthStatus reports whether a VM is usable. It carried DockerReady,
+// PoderReady and APIReachable too; the latter two were never set by any
+// provider, and DockerReady cost a full remote-exec round-trip per readiness
+// poll to fill a field nothing read — on the managed run-command clouds that
+// meant waiting out the agent-registration timeout before the caller could
+// learn what GetVM already knew.
 type HealthStatus struct {
-	VMReady      bool // VM is running
-	DockerReady  bool // Docker is installed and running
-	PoderReady   bool // Poder service is started
-	APIReachable bool // API endpoint is reachable
+	VMReady bool // VM is running
 }
 
 // CommandResult holds the output of a remotely executed command.

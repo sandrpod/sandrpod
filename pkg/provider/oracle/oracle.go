@@ -316,12 +316,11 @@ var agentTerminalStates = map[computeinstanceagent.InstanceAgentCommandExecution
 // ExecuteCommand runs a shell command via the Compute Instance Agent and waits
 // for the result.
 func (p *OracleProvider) ExecuteCommand(ctx context.Context, vmID, command string) (*provider.CommandResult, error) {
-	sendCtx := ctx
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		sendCtx, cancel = context.WithTimeout(ctx, agentRegistrationTimeout)
-		defer cancel()
-	}
+	// Bound the wait for the Instance Agent to register on its own terms. See
+	// the AWS provider: skipping this when the caller has a deadline gives an
+	// agent that will never register the whole provisioning budget.
+	sendCtx, cancel := context.WithTimeout(ctx, agentRegistrationTimeout)
+	defer cancel()
 
 	createReq := computeinstanceagent.CreateInstanceAgentCommandRequest{
 		CreateInstanceAgentCommandDetails: computeinstanceagent.CreateInstanceAgentCommandDetails{
@@ -463,11 +462,6 @@ func (p *OracleProvider) GetHealthStatus(ctx context.Context, vmID string) (*pro
 		return nil, err
 	}
 	status := &provider.HealthStatus{VMReady: vm.State == provider.VMStateRunning}
-	if vm.State == provider.VMStateRunning {
-		if res, err := p.ExecuteCommand(ctx, vmID, "docker ps > /dev/null 2>&1 && echo ok || echo fail"); err == nil && res.ExitCode == 0 {
-			status.DockerReady = true
-		}
-	}
 	return status, nil
 }
 
