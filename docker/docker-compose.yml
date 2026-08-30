@@ -54,4 +54,8 @@ volumes:
 
 networks:
   sandrpod:
+    # Pinned rather than project-prefixed because the worker passes this exact
+    # string to the Docker API when it creates sandbox containers — they have to
+    # join a network it can name. The cost: if a network called `sandrpod`
+    # already exists from another project, Compose removes and recreates it.
     name: sandrpod

@@ -42,10 +42,12 @@ import (
 )
 
 var (
-	port           = flag.Int("port", 8080, "API server port")
-	help           = flag.Bool("help", false, "Show help")
-	token          = flag.String("token", os.Getenv("SANDRPOD_TOKEN"), "API token for authentication (env: SANDRPOD_TOKEN)")
-	offlineTimeout = flag.Duration("offline-timeout", 30*time.Second, "Poder offline timeout")
+	port            = flag.Int("port", 8080, "API server port")
+	help            = flag.Bool("help", false, "Show help")
+	token           = flag.String("token", os.Getenv("SANDRPOD_TOKEN"), "API token for authentication (env: SANDRPOD_TOKEN)")
+	offlineTimeout  = flag.Duration("offline-timeout", 30*time.Second, "Poder offline timeout")
+	localPoderGrace = flag.Duration("local-poder-grace", envDurationOr("SANDRPOD_LOCAL_PODER_GRACE", podpkg.LocalPoderGracePeriod),
+		"How long to wait for a local/docker poder to register before failing a create (env: SANDRPOD_LOCAL_PODER_GRACE)")
 	reapTimeout    = flag.Duration("reap-timeout", 10*time.Minute, "OFFLINE poder reclamation timeout (terminates cloud VM and deletes record)")
 	dbDSN          = flag.String("db", "", `persistence backend: empty=in-memory (default); sqlite:<path> (e.g. sqlite:./data/sandrpod.db); postgres://user:pass@host:5432/db?sslmode=require (production)`)
 	sandboxIdleTTL = flag.Duration("sandbox-idle-timeout", envDuration("SANDRPOD_SANDBOX_IDLE_TIMEOUT"), "Reap sandboxes idle longer than this, e.g. 2h (0 = disabled; env: SANDRPOD_SANDBOX_IDLE_TIMEOUT)")
@@ -79,6 +81,15 @@ func envInt(key string) int {
 		return 0
 	}
 	return n
+}
+
+// envDurationOr is envDuration for knobs where 0 is a meaningful value rather
+// than "disabled" — it falls back to def only when the variable is unset.
+func envDurationOr(key string, def time.Duration) time.Duration {
+	if os.Getenv(key) == "" {
+		return def
+	}
+	return envDuration(key)
 }
 
 // envDuration parses a duration env var, returning 0 (disabled) when unset or
@@ -1359,6 +1370,11 @@ var version = "dev"
 
 func main() {
 	flag.Parse()
+
+	// The scheduler holds this as a package var so the create path can read it
+	// without threading config through every call site. Assigned unconditionally:
+	// an explicit 0 means "do not wait", which is a legitimate choice.
+	podpkg.LocalPoderGracePeriod = *localPoderGrace
 
 	if *help {
 		flag.Usage()

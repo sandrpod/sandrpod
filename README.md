@@ -167,11 +167,23 @@ docker compose up -d
 
 That pulls `ghcr.io/sandrpod/{server,poder,toolbox}` and starts:
 the **control plane** on `localhost:8080` and one **Docker worker** (Poder) that
-dials back over a reverse tunnel — no inbound ports on the worker. Check it:
+dials back over a reverse tunnel — no inbound ports on the worker.
+
+> First run downloads ~210 MB here (server + worker). The sandbox runtime
+> (`toolbox`, ~1.1 GB) is pulled by the worker the first time you create a
+> sandbox, so step 2 below is the slow one. After that, both steps take
+> seconds.
+
+Check it:
 
 ```bash
 curl localhost:8080/health          # {"status":"ok",...}
+curl localhost:8080/api/v1/poders   # wait for one worker to show "state":"ONLINE"
 ```
+
+`/health` answers as soon as the control plane binds, which is before the worker
+has finished registering. The second command is the one that tells you the stack
+is actually ready.
 
 > ⚠️ This dev stack runs with **authentication disabled** (anonymous admin) —
 > fine on localhost. Before exposing it, set `SANDRPOD_TOKEN` (see
@@ -180,7 +192,10 @@ curl localhost:8080/health          # {"status":"ok",...}
 ### 2. Create a sandbox and run code
 
 ```bash
-pip install sandrpod-cli
+pipx install sandrpod-cli              # recommended — isolated, nothing to activate
+# or: uv tool install sandrpod-cli
+# or, inside a virtualenv: pip install sandrpod-cli
+
 sandrpod-cli --api-url http://localhost:8080 create demo --provider local
 sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
 ```
@@ -274,7 +289,7 @@ See [`pkg/sdk/python/langchain_sandrpod/examples/`](pkg/sdk/python/langchain_san
 ## CLI
 
 ```bash
-pip install sandrpod-cli
+pipx install sandrpod-cli    # or: uv tool install sandrpod-cli
 sandrpod-cli config set-url http://localhost:8080
 
 # --provider: local | aws | gcp | azure | aliyun | tencent | digitalocean | hetzner | oracle
