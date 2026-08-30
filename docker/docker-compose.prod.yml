@@ -73,6 +73,14 @@ services:
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # The worker writes its generated ID to /var/lib/sandrpod/poder-id and
+      # reuses it on restart. Without somewhere durable to put it, every
+      # `docker compose up -d` that recreates this container registers a NEW
+      # worker: the old record lingers until the offline reaper takes it, the
+      # sandbox containers it owned are orphaned, and until then the scheduler
+      # can still pick the dead one and answer "poder tunnel not available".
+      # Set PODER_ID instead if you would rather pin it explicitly.
+      - poder-data:/var/lib/sandrpod
     environment:
       API_URL: http://server:8080
       SANDRPOD_TOKEN: ${SANDRPOD_TOKEN:?set SANDRPOD_TOKEN}
@@ -113,6 +121,7 @@ services:
 volumes:
   pgdata:
   caddy-data:
+  poder-data:
 
 networks:
   sandrpod:

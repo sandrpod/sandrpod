@@ -87,6 +87,28 @@ expected and supported).
   [Service]
   Environment=SANDRPOD_SANDBOX_IDLE_TIMEOUT=12h   # reap idle sandboxes
   Environment=SANDRPOD_PODER_IDLE_TIMEOUT=30m     # reclaim empty cloud poders (terminates the VM)
+
+### The worker keeps its identity, or its sandboxes are orphaned
+
+A worker generates an ID once and persists it to `/var/lib/sandrpod/poder-id`.
+Recreating the container without that path on a volume — which is what pulling
+a new image does — registers a **new** worker. The old record stays ONLINE
+until it misses enough heartbeats (~30s), during which the scheduler can still
+choose it and creates fail with `poder tunnel not available`; the sandbox
+containers it owned keep running on the host but no longer belong to any
+worker the control plane knows about.
+
+`docker/docker-compose.prod.yml` mounts a `poder-data` volume for this. If you
+run the worker by hand, either mount that path or pin the identity:
+
+```bash
+docker run -d --name sandrpod-poder \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v sandrpod-poder-data:/var/lib/sandrpod \
+  -e API_URL=… ghcr.io/sandrpod/poder:v0.5.8
+```
+
+`PODER_ID` set explicitly always wins and needs no volume.
   ```
 
 - Sandboxes created before the upgrade have no activity timestamp; their
