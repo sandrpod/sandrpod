@@ -105,7 +105,7 @@ run the worker by hand, either mount that path or pin the identity:
 docker run -d --name sandrpod-poder \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v sandrpod-poder-data:/var/lib/sandrpod \
-  -e API_URL=… ghcr.io/sandrpod/poder:v0.5.9
+  -e API_URL=… ghcr.io/sandrpod/poder:v0.5.10
 ```
 
 `PODER_ID` set explicitly always wins and needs no volume.

@@ -258,8 +258,8 @@ the Poder in turn pulls the **toolbox** image. Point both at a registry the VM
 can reach (e.g. public GHCR):
 
 ```bash
-SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.9
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.9
+SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.10
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.10
 ```
 
 - `SANDRPOD_PODER_IMAGE` is used by the scheduler for the `docker run` on the VM.
@@ -298,8 +298,8 @@ export AWS_SECRET_ACCESS_KEY=...
 export AWS_REGION=us-east-1
 export AWS_IAM_INSTANCE_PROFILE=sandrpod-vm-ssm
 export SANDRPOD_VM_SECURITY_GROUP=sg-0abc123
-export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.9
-export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.9
+export SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.10
+export SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.10
 
 go run ./cmd/server -port 8080 \
   -public-url https://api.example.com \
@@ -355,8 +355,8 @@ Environment=AWS_SECRET_ACCESS_KEY=...
 Environment=AWS_IAM_INSTANCE_PROFILE=sandrpod-vm-ssm
 Environment=SANDRPOD_VM_SUBNET_ID=subnet-0abc123
 Environment=SANDRPOD_VM_SECURITY_GROUP=sg-0abc123
-Environment=SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.9
-Environment=SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.9
+Environment=SANDRPOD_PODER_IMAGE=ghcr.io/sandrpod/poder:v0.5.10
+Environment=SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.5.10
 ```
 
 ```bash
