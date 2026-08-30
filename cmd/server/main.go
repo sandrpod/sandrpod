@@ -727,6 +727,10 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			if req.ProviderType == "" {
 				req.ProviderType = "local"
 			}
+			if reason := validateSandboxName(req.Name); reason != "" {
+				http.Error(w, reason, http.StatusBadRequest)
+				return
+			}
 
 			if _, exists := sandboxStore.Get(req.Name); exists {
 				http.Error(w, fmt.Sprintf("sandbox %s already exists", req.Name), http.StatusConflict)
@@ -960,7 +964,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if action == "logs" {
-				_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
+				_, t, ok := sandboxPoderTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1103,7 +1107,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if action == "start" {
-				sb, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
+				sb, t, ok := sandboxPoderTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1124,7 +1128,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if action == "stop" {
-				sb, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
+				sb, t, ok := sandboxPoderTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1145,7 +1149,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			}
 
 			if action == "snapshot" {
-				_, t, ok := sandboxTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
+				_, t, ok := sandboxPoderTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
 				}
@@ -1681,7 +1685,30 @@ func main() {
 // (owners.NodeFor); this returns ok=false with the response already written. A
 // request already forwarded once (forwardedHeader) is not forwarded again, so a
 // stale owner map degrades to a clean 503 instead of a loop.
+// sandboxTunnel resolves the tunnel for a request that reaches the toolbox
+// INSIDE the sandbox — execute, stream, files, sessions, the PTY. Those cannot
+// succeed unless the container is up, and proxying into a stopped one does not
+// fail: it hangs until the caller gives up, with no response at all. The state
+// is already in hand, so answer with it.
+//
+// Operations that talk to the poder ABOUT a sandbox — logs, start, stop,
+// snapshot — are legitimate while it is stopped and use sandboxPoderTunnel.
+// The checked form is the default so a new call site gets it by omission.
 func sandboxTunnel(name string, r *http.Request, ss podpkg.SandboxRepository, ts, ds *tunnel.TunnelStore, owners podpkg.TunnelOwnerRepository, nodeURL string, w http.ResponseWriter) (*podpkg.SandboxInfo, *tunnel.PoderTunnel, bool) {
+	sb, t, ok := sandboxPoderTunnel(name, r, ss, ts, ds, owners, nodeURL, w)
+	if !ok {
+		return nil, nil, false
+	}
+	if sb.State != podpkg.StateRunning {
+		http.Error(w, fmt.Sprintf("sandbox %s is %s, not RUNNING", name, sb.State), http.StatusConflict)
+		return nil, nil, false
+	}
+	return sb, t, true
+}
+
+// sandboxPoderTunnel resolves a sandbox's tunnel without requiring the
+// container to be running. See sandboxTunnel.
+func sandboxPoderTunnel(name string, r *http.Request, ss podpkg.SandboxRepository, ts, ds *tunnel.TunnelStore, owners podpkg.TunnelOwnerRepository, nodeURL string, w http.ResponseWriter) (*podpkg.SandboxInfo, *tunnel.PoderTunnel, bool) {
 	sb, ok := ss.Get(name)
 	if !ok {
 		http.Error(w, "sandbox not found", http.StatusNotFound)

@@ -389,7 +389,10 @@ func main() {
 			http.Error(w, "Failed to get logs", http.StatusInternalServerError)
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain")
+		// Without the charset a Go/Python client falls back to ISO-8859-1 per
+		// RFC 2616 and double-encodes every non-ASCII byte, so a log line in
+		// Chinese — or one containing an em dash — arrives as mojibake.
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(logs))
 	})

@@ -289,6 +289,14 @@ func (d e2bDeps) toolboxTarget(name, subpath string) (*tunnel.PoderTunnel, strin
 	if !ok {
 		return nil, "", e2bcompat.NotFoundError{Msg: "sandbox not found"}
 	}
+	// envd lives inside the container. Proxying into a stopped or paused one
+	// does not fail, it hangs with no response at all, so report the state
+	// instead — 404 is what an E2B client expects for a sandbox that is not
+	// running, and it comes back immediately.
+	if sb.State != podpkg.StateRunning {
+		return nil, "", e2bcompat.NotFoundError{
+			Msg: fmt.Sprintf("sandbox %s is %s, not running", name, sb.State)}
+	}
 	if strings.HasPrefix(sb.ProxyURL, "direct://") {
 		dt, ok := d.directStore.Get(name)
 		if !ok {

@@ -157,9 +157,9 @@ def config_unset_token():
 
 # ========== Sandbox Commands ==========
 
-@cli.command()
+@cli.command(name="list")
 @click.pass_context
-def list(ctx):
+def list_sandboxes(ctx):
     """List all sandboxes"""
     client = ctx.obj["client"]
     try:
@@ -263,10 +263,10 @@ def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, c
     sys.exit(1)
 
 
-@cli.command()
+@cli.command(name="get")
 @click.argument("name")
 @click.pass_context
-def get(ctx, name):
+def get_sandbox(ctx, name):
     """Get sandbox info"""
     client = ctx.obj["client"]
     try:
@@ -388,6 +388,11 @@ def execute(ctx, name, code, language, timeout):
             click.echo(f"{result.get('stdout')}")
         if exit_code != 0 and result.get("stderr"):
             click.echo(f"Stderr: {result.get('stderr')}", err=True)
+        # Exit with what the command exited with, so `execute … && next-step`
+        # means what it says. Reporting 0 for a failed remote command makes
+        # every shell and CI conditional built on this silently wrong.
+        if exit_code != 0:
+            sys.exit(exit_code)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -835,7 +840,15 @@ def fs_replace(ctx, name, file, pattern, new_value):
     client = ctx.parent.parent.obj["client"]
     try:
         result = client.replace_in_files(name, [file], pattern, new_value)
-        click.echo(f"Replaced in {file}: {result}")
+        # The API answers with a per-file result list; print the outcome, not
+        # the envelope.
+        entry = result[0] if isinstance(result, list) and result else {}
+        if entry.get("success", True):
+            click.echo(f"Replaced in {file}")
+        else:
+            click.echo(f"Failed to replace in {file}: "
+                       f"{entry.get('error', 'unknown error')}", err=True)
+            sys.exit(1)
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
