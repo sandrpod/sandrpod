@@ -169,8 +169,8 @@ That pulls `ghcr.io/sandrpod/{server,poder,toolbox}` and starts:
 the **control plane** on `localhost:8080` and one **Docker worker** (Poder) that
 dials back over a reverse tunnel — no inbound ports on the worker.
 
-> First run downloads ~210 MB here (server + worker). The sandbox runtime
-> (`toolbox`, ~1.1 GB) is pulled by the worker the first time you create a
+> First run downloads ~170 MB here (server + worker). The sandbox runtime
+> (`toolbox`, ~530 MB) is pulled by the worker the first time you create a
 > sandbox, so step 2 below is the slow one. After that, both steps take
 > seconds.
 
@@ -356,6 +356,21 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrp
 docker buildx build --platform linux/amd64 -f docker/Dockerfile.poder   -t ghcr.io/sandrpod/poder:latest   --load .
 docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t ghcr.io/sandrpod/toolbox:latest --load .
 ```
+
+---
+
+## Writing
+
+Longer pieces, with the commands and the failures they were measured from:
+
+- [Self-hosting an E2B-compatible sandbox stack, from an empty server](https://blog.sandrpod.com/e2b-compatible-sandbox-api/)
+  — one VM, one domain, four containers, and the unmodified E2B SDK checked
+  function by function. 48 of 50 calls pass; the two that do not are named.
+- [Two ways to give a deepagents agent a sandbox you own](https://blog.sandrpod.com/deepagents-sandbox-backends/)
+  — `langchain-e2b` and `langchain-sandrpod` down the same twelve assertions.
+  Both pass; testing both is what found three defects.
+
+More at [blog.sandrpod.com](https://blog.sandrpod.com).
 
 ---
 
