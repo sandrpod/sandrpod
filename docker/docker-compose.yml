@@ -1,6 +1,7 @@
 # Copyright 2026 SandrPod Contributors
-# Server + Poder 部署（拉取 GHCR 发布镜像；SQLite 持久化，单实例）。
-# 从源码构建请用 docker-compose.local.yml；生产/多实例(PostgreSQL)用 docker-compose.pg.yml。
+# Server + Poder, single instance. Pulls the published GHCR images; SQLite persistence.
+# To build from source use docker-compose.local.yml; for production / multi-instance
+# (PostgreSQL) use docker-compose.pg.yml.
 
 services:
   server:

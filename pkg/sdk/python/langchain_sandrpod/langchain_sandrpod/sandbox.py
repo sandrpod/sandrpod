@@ -146,17 +146,18 @@ def _try_replace(
 
 
 class SandrPodSandbox(BaseSandbox):
-    """SandrPod sandbox backend，适用于 deepagents / LangChain agents。
+    """SandrPod sandbox backend for deepagents / LangChain agents.
 
-    继承 :class:`deepagents.backends.sandbox.BaseSandbox` 并 **覆盖全部**
-    高层文件操作（``ls / read / write / edit / grep / glob``）——不再
-    依赖父类基于 ``python3 -c "..."`` 的实现，全部走 toolbox 原生 HTTP
-    端点，从而在 Linux / macOS / Windows 沙箱上行为一致。
+    Subclasses :class:`deepagents.backends.sandbox.BaseSandbox` and **overrides
+    every** high-level file operation (``ls / read / write / edit / grep /
+    glob``). Rather than the parent's ``python3 -c "..."`` implementations,
+    these go to the toolbox's native HTTP endpoints, so behaviour is identical
+    on Linux, macOS and Windows sandboxes.
 
-    通过 SandrPod API Server 的隧道代理与沙箱内的 Toolbox 交互，无需
-    直接访问容器 IP。
+    All traffic goes through the SandrPod API Server's tunnel proxy; the
+    container IP is never needed.
 
-    用法示例::
+    Example::
 
         from langchain_sandrpod import SandrPodSandbox
         from deepagents import create_deep_agent
@@ -262,11 +263,12 @@ class SandrPodSandbox(BaseSandbox):
     _DEFAULT_MCP_CONFIG = "/workspace/.sandrpod/mcp.json"
 
     def mcp_manifest(self) -> dict:
-        """实时 MCP 清单：聚合的 server、每个的 state/tool_count、以及 config_path。
+        """Live MCP manifest: aggregated servers, each one's state and tool_count, and config_path.
 
-        ``GET`` 走流式 ``/mcp/manifest``（poder 与 agent 沙箱都适用）。当 agent 以
-        ``--mcp-token`` 守卫 /mcp 面时，把该 token 作 ``Authorization: Bearer``
-        透传（server 用 X-Sandrpod-Token 鉴权，此头原样转给 agent 校验）。
+        ``GET /mcp/manifest``, valid for both poder and agent sandboxes. When
+        the agent guards ``/mcp`` with ``--mcp-token``, that token is sent as
+        ``Authorization: Bearer`` — the server authenticates with
+        X-Sandrpod-Token and passes this header through untouched.
         """
         headers = {}
         if self._mcp_token:
@@ -280,7 +282,7 @@ class SandrPodSandbox(BaseSandbox):
         return resp.json()
 
     def mcp_tools(self) -> list[dict]:
-        """列出实时聚合的 MCP server（含 state、tool_count、last_error）。"""
+        """List the live aggregated MCP servers, with state, tool_count and last_error."""
         return self.mcp_manifest().get("servers", [])
 
     def _mcp_config_path(self, override: str | None = None) -> str:
@@ -336,7 +338,7 @@ class SandrPodSandbox(BaseSandbox):
         resp.raise_for_status()
 
     def mcp_ls(self, *, config_path: str | None = None) -> dict:
-        """已配置的 MCP server（读 mcp.json）。返回 ``{name: server_config}``。"""
+        """The MCP servers configured in the sandbox (reads mcp.json). Returns ``{name: server_config}``."""
         path = self._mcp_config_path(config_path)
         return self._read_mcp_config(path).get("mcpServers", {})
 
@@ -352,7 +354,7 @@ class SandrPodSandbox(BaseSandbox):
         transport: str | None = None,
         config_path: str | None = None,
     ) -> None:
-        """加一个 MCP server 到沙箱原生 bridge（改 mcp.json，bridge 热重载）。
+        """Add an MCP server to the sandbox's native bridge (edits mcp.json; the bridge hot-reloads).
 
         stdio ::
 
@@ -385,7 +387,7 @@ class SandrPodSandbox(BaseSandbox):
         self._write_mcp_config(path, {**cfg, "mcpServers": servers})
 
     def mcp_rm(self, name: str, *, config_path: str | None = None) -> bool:
-        """移除一个 MCP server。返回是否存在并被移除。"""
+        """Remove an MCP server. Returns whether it existed and was removed."""
         path = self._mcp_config_path(config_path)
         cfg = self._read_mcp_config(path)
         if name not in cfg.get("mcpServers", {}):
@@ -408,7 +410,7 @@ class SandrPodSandbox(BaseSandbox):
 
     @property
     def id(self) -> str:
-        """返回 sandbox 名称作为唯一标识符。"""
+        """The sandbox name, used as the unique identifier."""
         return self._sandbox_name
 
     def execute(
@@ -417,15 +419,17 @@ class SandrPodSandbox(BaseSandbox):
         *,
         timeout: int | None = None,
     ) -> ExecuteResponse:
-        """在 sandbox 中执行 shell 命令（同步阻塞）。
+        """Run a shell command in the sandbox, blocking until it finishes.
 
-        命令以独立的 bash / PowerShell 进程执行（无持久 shell 状态）。若
-        需在调用间保持 CWD 或环境变量，请将多条命令用 ``&&`` (POSIX) 或
-        ``;`` (PowerShell) 连接，或通过 :meth:`execute` 运行含状态的脚本。
+        Each command runs in its own bash / PowerShell process, so there is no
+        persistent shell state. To keep a working directory or environment
+        variable across steps, chain the commands with ``&&`` (POSIX) or ``;``
+        (PowerShell), or run a script that carries the state itself.
 
         Args:
-            command: Shell 命令字符串。
-            timeout: 最大等待秒数。``None`` 使用构造时的 default_timeout。
+            command: The shell command.
+            timeout: Seconds to wait. ``None`` uses the default_timeout given
+                at construction.
         """
         effective_timeout = timeout if timeout is not None else self._default_timeout
 
@@ -481,13 +485,14 @@ class SandrPodSandbox(BaseSandbox):
         self,
         paths: list[str],
     ) -> list[FileDownloadResponse]:
-        """从 sandbox 下载文件。
+        """Download files from the sandbox.
 
-        路径必须是 POSIX 绝对（``/foo``）或 Windows 盘符（``C:\\foo``）。
-        服务端的 permission gate 决定是否允许访问。
+        Paths must be POSIX-absolute (``/foo``) or Windows
+        drive-qualified. Whether the read is permitted is decided by
+        the sandbox's permission gate.
 
         Args:
-            paths: sandbox 内的绝对文件路径列表。
+            paths: Absolute file paths inside the sandbox.
         """
         results: list[FileDownloadResponse] = []
         for path in paths:
@@ -536,14 +541,16 @@ class SandrPodSandbox(BaseSandbox):
         self,
         files: list[tuple[str, bytes]],
     ) -> list[FileUploadResponse]:
-        """将文件上传至 sandbox。
+        """Upload files to the sandbox.
 
-        每个文件单独 POST multipart 到 ``/files/upload``，存在则覆盖。
-        用 :func:`_split_dir_basename` 跨平台拆 dir/basename，避免
-        ``posixpath`` 处理 Windows 路径时把整串当成 basename 的 bug。
+        Each file is POSTed as its own multipart request to
+        ``/files/upload`` and overwrites any existing file.
+        :func:`_split_dir_basename` splits dir/basename in a cross-platform
+        way, avoiding the bug where ``posixpath`` treats an entire Windows
+        path as the basename.
 
         Args:
-            files: ``[(绝对路径, 文件内容), ...]``。
+            files: ``[(absolute path, contents), …]``.
         """
         results: list[FileUploadResponse] = []
         for path, content in files:
@@ -579,9 +586,9 @@ class SandrPodSandbox(BaseSandbox):
     # ------------------------------------------------------------------ #
 
     def ls(self, path: str) -> LsResult:
-        """列目录，走 toolbox ``GET /files``。
+        """List a directory via the toolbox's ``GET /files``.
 
-        响应格式：``{"path": "...", "files": [{"name", "path", "is_dir", "size"}]}``。
+        Response shape: ``{"path": "...", "files": [{"name", "path", "is_dir", "size"}]}``.
         """
         if not _is_valid_path(path):
             return LsResult(error=f"Invalid path: {path}")
@@ -621,13 +628,15 @@ class SandrPodSandbox(BaseSandbox):
         offset: int = 0,
         limit: int = 2000,
     ) -> ReadResult:
-        """读文件，走 toolbox ``GET /files/download`` 拿整文件 + 客户端切行。
+        """Read a file: ``GET /files/download`` for the whole file, then slice lines client-side.
 
-        分页策略：toolbox 当前没有原生 offset/limit 端点，所以走「整文件
-        下载 + 客户端切行」。代价是大文件首次访问会全传一次；对一般 LLM
-        编辑场景（几十 KB 到几百 KB 的代码/文档）开销可接受。
+        On paging: the toolbox has no native offset/limit endpoint, so the
+        whole file is fetched and sliced here. The cost is one full transfer
+        on first access; for the usual LLM editing case — code and documents
+        of tens to hundreds of KB — that is acceptable.
 
-        二进制文件（UTF-8 解码失败）按 base64 返回不分页。
+        Binary files (those that fail UTF-8 decoding) come back base64-encoded
+        and unpaged.
         """
         if not _is_valid_path(file_path):
             return ReadResult(error=f"Invalid path: {file_path}")
@@ -690,16 +699,19 @@ class SandrPodSandbox(BaseSandbox):
         file_path: str,
         content: str,
     ) -> WriteResult:
-        """创建或**覆盖**文件（deepagents write 契约：不存在则建、已存在则覆盖）。
+        """Create or **overwrite** a file — the deepagents write contract: create if absent, overwrite if present.
 
-        流程：
-          1. 校验路径形态
-          2. 通过 ``POST /files/folder`` 创建父目录（mkdir -p 语义，幂等）
-          3. 通过 ``POST /files/upload`` 写入内容
+        Three steps:
+          1. validate the path shape
+          2. create parent directories with ``POST /files/folder`` (mkdir -p
+             semantics, idempotent)
+          3. write the contents with ``POST /files/upload``
 
-        历史：早期 deepagents 的 write 是「已存在则报错」，后来契约改为覆盖语义。
-        沙箱 ``/files/upload`` 本就以 ``O_CREATE|O_TRUNC`` 打开（截断已有内容），
-        所以去掉存在预检即得覆盖语义——对新旧 deepagents 都安全、更符合直觉。
+        History: early deepagents made write fail on an existing file; the
+        contract later became overwrite. The sandbox's ``/files/upload``
+        already opens with ``O_CREATE|O_TRUNC``, so dropping the existence
+        pre-check yields overwrite semantics — safe for both the old and new
+        deepagents, and the less surprising behaviour.
         """
         if not _is_valid_path(file_path):
             return WriteResult(error=f"Invalid path: {file_path}")
@@ -753,14 +765,18 @@ class SandrPodSandbox(BaseSandbox):
         return f"server returned {resp.status_code}: {resp.text[:200]}"
 
     def delete(self, file_path: str) -> DeleteResult:
-        """删除文件或目录（原生，走 toolbox ``DELETE /files/delete``）。
+        """Delete a file or directory natively, via the toolbox's ``DELETE /files/delete``.
 
-        覆盖 :class:`BaseSandbox` 默认经 ``execute("rm -rf …")`` 的实现，改用
-        文件 API：请求走沙箱的文件权限门（而非命令门）、不 spawn shell；目录递归删。
+        Overrides :class:`BaseSandbox`, which shells out to
+        ``execute("rm -rf …")``. Going through the file API means the request
+        passes the sandbox's *file* permission gate rather than its command
+        gate, and no shell is spawned. Directories are removed recursively.
 
-        契约对齐 deepagents：不存在的路径返回 not-found 错误。沙箱端的
-        ``/files/delete`` 用 ``os.RemoveAll``（对缺失路径幂等、不报错），所以先用
-        ``GET /files/info`` 判断存在性以匹配契约（破损符号链接是已知边界差异）。
+        Contract-aligned with deepagents: a missing path returns a not-found
+        error. The sandbox's ``/files/delete`` uses ``os.RemoveAll``, which is
+        idempotent and does not fail on a missing path, so existence is
+        checked first with ``GET /files/info`` to match the contract. A broken
+        symlink is a known edge-case difference.
         """
         if not _is_valid_path(file_path):
             return DeleteResult(error=f"Invalid path: {file_path}")
@@ -790,17 +806,20 @@ class SandrPodSandbox(BaseSandbox):
         new_string: str,
         replace_all: bool = False,  # noqa: FBT001, FBT002
     ) -> EditResult:
-        """编辑文件：download → 客户端字符串替换 → upload 覆盖。
+        """Edit a file: download, replace the string client-side, upload the result.
 
-        与 BaseSandbox.edit 语义对齐：
-          - replace_all=False 时若有多个匹配则报错
-          - 0 匹配时报 "String not found"
-          - 尝试 as-is → CRLF 归一两轮，保留原文件行尾风格
+        Semantics match BaseSandbox.edit:
+          - with replace_all=False, more than one match is an error
+          - zero matches reports "String not found"
+          - two passes, as-is then CRLF-normalised, preserving the file's own
+            line endings
 
-        说明：BaseSandbox 用 ``_edit_via_upload`` 把 old/new 字符串当 tmp 文
-        件上传、让服务端脚本就地替换以避免源文件离开沙箱。本实现选择更简
-        单的 download/upload 双向传输——bytes 反正会经过 API server 代理，
-        没有额外隐私损失，换来跨平台彻底解耦。
+        Note: BaseSandbox uses ``_edit_via_upload``, uploading the old and new
+        strings as temp files so a server-side script can replace in place and
+        the source never leaves the sandbox. This implementation takes the
+        simpler download/upload round trip — the bytes traverse the API server
+        proxy either way, so there is no additional exposure, and it decouples
+        the behaviour from the platform entirely.
         """
         if not _is_valid_path(file_path):
             return EditResult(error=f"Invalid path: {file_path}")
@@ -857,13 +876,14 @@ class SandrPodSandbox(BaseSandbox):
         path: str | None = None,
         glob: str | None = None,
     ) -> GrepResult:
-        """在目录下搜文件内容含 pattern 的行，走 toolbox ``GET /files/find``。
+        """Search a directory for lines containing pattern, via the toolbox's ``GET /files/find``.
 
         Args:
-            pattern: 字面量子串（不是正则）。
-            path:    搜索根目录，默认沙箱 work_dir。
-            glob:    可选文件名 glob 过滤（如 ``*.py``）。toolbox 服务端不
-                     支持该参数，本 SDK 在客户端用 ``fnmatch`` 后过滤。
+            pattern: A literal substring — not a regular expression.
+            path:    Search root; defaults to the sandbox's work_dir.
+            glob:    Optional filename filter (e.g. ``*.py``). The toolbox does
+                     not support this server-side, so it is applied here with
+                     ``fnmatch`` after the results come back.
         """
         search_path = path if path is not None else "."
 
@@ -901,13 +921,14 @@ class SandrPodSandbox(BaseSandbox):
         return GrepResult(matches=matches)
 
     def glob(self, pattern: str, path: str = "/") -> GlobResult:
-        """文件名 glob 匹配，走 toolbox ``GET /files/search``。
+        """Match filenames by glob, via the toolbox's ``GET /files/search``.
 
-        Toolbox 用 ``filepath.Glob(filepath.Join(path, pattern))`` 实现，
-        语义与 Go ``filepath.Glob`` 一致（不递归子目录，需要的话 pattern
-        里写 ``**/*.py``——但 Go 的 filepath.Glob 不支持 ``**``；这点跟
-        BaseSandbox 的 pathlib.glob 不完全等价，递归需求建议改用 grep
-        然后取 path 字段去重）。
+        The toolbox implements this as
+        ``filepath.Glob(filepath.Join(path, pattern))``, so the semantics are
+        Go's ``filepath.Glob``: it does not recurse into subdirectories, and
+        Go's implementation does not support ``**`` either. This is not fully
+        equivalent to BaseSandbox's pathlib.glob — for recursive matching, use
+        grep and de-duplicate on the path field.
         """
         try:
             resp = self._http.get(
@@ -937,9 +958,9 @@ class SandrPodSandbox(BaseSandbox):
     # Per-sandbox resource stats (toolbox /metrics)
     # ------------------------------------------------------------------
     def metrics(self) -> dict:
-        """返回该沙箱实时的 CPU/内存/磁盘用量
+        """Live CPU, memory and disk usage for this sandbox.
 
-        {cpu_count, cpu_used_pct, mem_total, mem_used, disk_total, disk_used}。
+        Returns {cpu_count, cpu_used_pct, mem_total, mem_used, disk_total, disk_used}.
         """
         resp = self._http.get(self._toolbox_url("metrics"), timeout=self._FILE_HTTP_TIMEOUT)
         resp.raise_for_status()
@@ -955,11 +976,12 @@ class SandrPodSandbox(BaseSandbox):
         context: str | None = None,
         timeout: int | None = None,
     ) -> dict:
-        """在**有状态**内核里执行代码；同一 context 内变量跨调用保留。
+        """Run code in a **stateful** kernel; variables persist across calls in the same context.
 
-        返回 ``{"stdout", "stderr", "text", "error"}``。与 :meth:`execute`
-        （每次全新进程、无状态）不同，run_code 走持久 Python 内核（Jupyter
-        式）：先 ``x = 1``，之后再调用 ``x + 1`` 能读到 ``x``。
+        Returns ``{"stdout", "stderr", "text", "error"}``. Unlike
+        :meth:`execute`, which starts a fresh process every time and keeps no
+        state, run_code uses a persistent Python kernel in the Jupyter sense:
+        set ``x = 1`` in one call and ``x + 1`` sees it in the next.
         """
         eff = timeout if timeout is not None else self._default_timeout
         body: dict = {"code": code}
@@ -974,7 +996,7 @@ class SandrPodSandbox(BaseSandbox):
         return resp.json() or {}
 
     def create_code_context(self, *, language: str = "python", cwd: str = "") -> dict:
-        """创建一个新的有状态上下文（独立命名空间）；返回 {id, language, cwd}。"""
+        """Create a new stateful context with its own namespace. Returns {id, language, cwd}."""
         resp = self._http.post(
             self._toolbox_url("code-interpreter/contexts"),
             json={"language": language, "cwd": cwd},
@@ -984,7 +1006,7 @@ class SandrPodSandbox(BaseSandbox):
         return resp.json() or {}
 
     def list_code_contexts(self) -> list[dict]:
-        """列出所有有状态上下文。"""
+        """List every stateful context."""
         resp = self._http.get(
             self._toolbox_url("code-interpreter/contexts"),
             timeout=self._FILE_HTTP_TIMEOUT,
@@ -993,7 +1015,7 @@ class SandrPodSandbox(BaseSandbox):
         return resp.json() or []
 
     def restart_code_context(self, context_id: str) -> None:
-        """重启上下文的内核（清空其命名空间，保留 id）。"""
+        """Restart a context's kernel, clearing its namespace but keeping the id."""
         resp = self._http.post(
             self._toolbox_url(f"code-interpreter/contexts/{context_id}/restart"),
             timeout=self._FILE_HTTP_TIMEOUT,
@@ -1001,7 +1023,7 @@ class SandrPodSandbox(BaseSandbox):
         resp.raise_for_status()
 
     def remove_code_context(self, context_id: str) -> None:
-        """销毁一个上下文及其内核。"""
+        """Destroy a context and its kernel."""
         resp = self._http.delete(
             self._toolbox_url(f"code-interpreter/contexts/{context_id}"),
             timeout=self._FILE_HTTP_TIMEOUT,
@@ -1012,9 +1034,9 @@ class SandrPodSandbox(BaseSandbox):
     # Directory watch (toolbox /watch/*)
     # ------------------------------------------------------------------
     def watch_dir(self, path: str, *, recursive: bool = False) -> "WatchHandle":
-        """监视目录，返回一个句柄：``get_new_events()`` 轮询增量事件，``stop()`` 结束。
+        """Watch a directory. Returns a handle: ``get_new_events()`` polls for new events, ``stop()`` ends it.
 
-        也可当上下文管理器用：``with sb.watch_dir("/x") as w: ...``。
+        Also usable as a context manager: ``with sb.watch_dir("/x") as w: …``.
         """
         resp = self._http.post(
             self._toolbox_url("watch/create"),
@@ -1027,10 +1049,11 @@ class SandrPodSandbox(BaseSandbox):
 
 
 class WatchHandle:
-    """目录 watcher 的轮询句柄。
+    """A polling handle for a directory watcher.
 
-    ``get_new_events()`` 返回自上次调用以来累积的文件系统事件；``stop()``
-    结束监视。支持上下文管理器协议（退出时自动 stop）。
+    ``get_new_events()`` returns the filesystem events accumulated since the
+    last call; ``stop()`` ends the watch. Supports the context-manager
+    protocol, stopping automatically on exit.
     """
 
     def __init__(self, sandbox: "SandrPodSandbox", watcher_id: str) -> None:
@@ -1039,7 +1062,7 @@ class WatchHandle:
         self._closed = False
 
     def get_new_events(self) -> list[dict]:
-        """返回自上次调用以来累积的事件 ``[{"name", "type"}]``。"""
+        """The events accumulated since the last call, as ``[{"name", "type"}]``."""
         if self._closed:
             return []
         resp = self._sandbox._http.get(
@@ -1051,7 +1074,7 @@ class WatchHandle:
         return (resp.json() or {}).get("events", []) or []
 
     def stop(self) -> None:
-        """停止 watcher（幂等）。"""
+        """Stop the watcher. Idempotent."""
         if self._closed:
             return
         self._closed = True
