@@ -12,11 +12,8 @@
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/langchain-sandrpod/"><img src="https://img.shields.io/pypi/v/langchain-sandrpod?color=3B82F6&label=langchain-sandrpod" alt="PyPI"/></a>
-  <img src="https://img.shields.io/badge/self--hosted-open%20source-16A34A" alt="Self-hosted"/>
-  <img src="https://img.shields.io/badge/clouds-8%20providers-0EA5E9" alt="Multi-cloud"/>
+  <a href="https://pypi.org/project/sandrpod-cli/"><img src="https://img.shields.io/pypi/v/sandrpod-cli?color=3B82F6&label=sandrpod-cli" alt="PyPI"/></a>
   <img src="https://img.shields.io/badge/E2B%20SDK-drop--in-8B5CF6" alt="E2B compatible"/>
-  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go" alt="Go"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
 </p>
 
