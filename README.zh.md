@@ -364,7 +364,8 @@ docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t ghcr.
 ## 联系
 
 想在公司内部署，或者遇到文档没覆盖的情况？
-[提 issue](https://github.com/sandrpod/sandrpod/issues)，或直接邮件 <zhaochj@126.com>。
+[提 issue](https://github.com/sandrpod/sandrpod/issues)、邮件 <zhaochj@126.com>，
+或者在 X 上找我 [@itscjzhao](https://x.com/itscjzhao)。
 
 ---
 

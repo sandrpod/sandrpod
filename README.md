@@ -401,8 +401,8 @@ Longer pieces, with the commands and the failures they were measured from:
 More at [blog.sandrpod.com](https://blog.sandrpod.com).
 
 Deploying this inside a company, or hitting something the docs don't cover?
-[Open an issue](https://github.com/sandrpod/sandrpod/issues), or reach me
-directly at <zhaochj@126.com>.
+[Open an issue](https://github.com/sandrpod/sandrpod/issues), email me at
+<zhaochj@126.com>, or find me on X as [@itscjzhao](https://x.com/itscjzhao).
 
 ---
 
