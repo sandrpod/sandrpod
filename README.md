@@ -19,6 +19,10 @@
 
 ---
 
+<p align="center">
+  <img src="assets/demo.gif" alt="From an empty directory to code running in a sandbox, on a cold machine" width="900"/>
+</p>
+
 ## Quickstart — 60 seconds to running code
 
 One command brings up the control plane **and** a Docker worker from the
