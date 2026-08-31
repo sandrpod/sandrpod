@@ -161,6 +161,13 @@ migrate nothing.
 
 ## Drop-in E2B compatibility
 
+<p align="center">
+  <img src="assets/e2b-demo.gif" alt="The unmodified E2B SDK creating a sandbox on a self-hosted SandrPod" width="900"/>
+</p>
+
+Recorded live against a SandrPod deployment: the package is the one from PyPI,
+the only change is which host it points at. Source: [`assets/e2b-demo.py`](assets/e2b-demo.py).
+
 One example of "speak any SDK": already have code on the E2B SDK? Point it at your
 SandrPod and it just works — `Sandbox.create`, `files.*`, `commands.*`
 (foreground/background/PTY), `run_code`, `watch_dir`, `get_metrics`, `pause`/`resume`:
