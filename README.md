@@ -69,6 +69,19 @@ sandrpod-cli --api-url http://localhost:8080 create demo --provider local
 sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
 ```
 
+Real output from a cold run (no cached images) against v0.5.10:
+
+```
+Sandbox:  demo
+Job ID:   job-1788150453342465216-7j5di2LP
+Status:   provisioning
+State:    PENDING
+State:    RUNNING
+Sandbox 'demo' is ready
+hello from SandrPod
+42
+```
+
 ---
 
 ## Overview
