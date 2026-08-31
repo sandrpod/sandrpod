@@ -22,6 +22,55 @@
 
 ---
 
+## Quickstart — 60 seconds to running code
+
+One command brings up the control plane **and** a Docker worker from the
+published images — no Go toolchain, no build, no cloning the repo.
+
+### 1. Start the stack
+
+```bash
+curl -O https://raw.githubusercontent.com/sandrpod/sandrpod/main/docker/docker-compose.yml
+docker compose up -d
+```
+
+That pulls `ghcr.io/sandrpod/{server,poder,toolbox}` and starts:
+the **control plane** on `localhost:8080` and one **Docker worker** (Poder) that
+dials back over a reverse tunnel — no inbound ports on the worker.
+
+> First run downloads ~170 MB here (server + worker). The sandbox runtime
+> (`toolbox`, ~530 MB) is pulled by the worker the first time you create a
+> sandbox, so step 2 below is the slow one. After that, both steps take
+> seconds.
+
+Check it:
+
+```bash
+curl localhost:8080/health          # {"status":"ok",...}
+curl localhost:8080/api/v1/poders   # wait for one worker to show "state":"ONLINE"
+```
+
+`/health` answers as soon as the control plane binds, which is before the worker
+has finished registering. The second command is the one that tells you the stack
+is actually ready.
+
+> ⚠️ This dev stack runs with **authentication disabled** (anonymous admin) —
+> fine on localhost. Before exposing it, set `SANDRPOD_TOKEN` (see
+> [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md)).
+
+### 2. Create a sandbox and run code
+
+```bash
+pipx install sandrpod-cli              # recommended — isolated, nothing to activate
+# or: uv tool install sandrpod-cli
+# or, inside a virtualenv: pip install sandrpod-cli
+
+sandrpod-cli --api-url http://localhost:8080 create demo --provider local
+sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
+```
+
+---
+
 ## Overview
 
 **SandrPod** is the control plane for AI agent code execution — open source and
@@ -153,52 +202,8 @@ CLI ───────┘    Poder (Worker) ──→ Toolbox (Sandbox contai
 
 ---
 
-## Getting Started
 
-One command brings up the control plane **and** a Docker worker from the
-published images — no Go toolchain, no build, no cloning the repo.
-
-### 1. Start the stack
-
-```bash
-curl -O https://raw.githubusercontent.com/sandrpod/sandrpod/main/docker/docker-compose.yml
-docker compose up -d
-```
-
-That pulls `ghcr.io/sandrpod/{server,poder,toolbox}` and starts:
-the **control plane** on `localhost:8080` and one **Docker worker** (Poder) that
-dials back over a reverse tunnel — no inbound ports on the worker.
-
-> First run downloads ~170 MB here (server + worker). The sandbox runtime
-> (`toolbox`, ~530 MB) is pulled by the worker the first time you create a
-> sandbox, so step 2 below is the slow one. After that, both steps take
-> seconds.
-
-Check it:
-
-```bash
-curl localhost:8080/health          # {"status":"ok",...}
-curl localhost:8080/api/v1/poders   # wait for one worker to show "state":"ONLINE"
-```
-
-`/health` answers as soon as the control plane binds, which is before the worker
-has finished registering. The second command is the one that tells you the stack
-is actually ready.
-
-> ⚠️ This dev stack runs with **authentication disabled** (anonymous admin) —
-> fine on localhost. Before exposing it, set `SANDRPOD_TOKEN` (see
-> [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md)).
-
-### 2. Create a sandbox and run code
-
-```bash
-pipx install sandrpod-cli              # recommended — isolated, nothing to activate
-# or: uv tool install sandrpod-cli
-# or, inside a virtualenv: pip install sandrpod-cli
-
-sandrpod-cli --api-url http://localhost:8080 create demo --provider local
-sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
-```
+## More ways to run it
 
 <details><summary>…or with plain <code>curl</code> (no install)</summary>
 
