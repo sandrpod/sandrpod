@@ -12,13 +12,63 @@
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/langchain-sandrpod/"><img src="https://img.shields.io/pypi/v/langchain-sandrpod?color=3B82F6&label=langchain-sandrpod" alt="PyPI"/></a>
-  <img src="https://img.shields.io/badge/self--hosted-open%20source-16A34A" alt="Self-hosted"/>
-  <img src="https://img.shields.io/badge/clouds-8%20providers-0EA5E9" alt="Multi-cloud"/>
+  <a href="https://pypi.org/project/sandrpod-cli/"><img src="https://img.shields.io/pypi/v/sandrpod-cli?color=3B82F6&label=sandrpod-cli" alt="PyPI"/></a>
   <img src="https://img.shields.io/badge/E2B%20SDK-drop--in-8B5CF6" alt="E2B compatible"/>
-  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go" alt="Go"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
 </p>
+
+---
+
+<p align="center">
+  <img src="assets/demo.gif" alt="从空目录到沙箱里跑代码，冷机器实录" width="900"/>
+</p>
+
+## 快速开始 —— 60 秒跑出第一个沙箱
+
+一条命令用发布镜像同时拉起**控制平面**和一个 **Docker worker** —— 不需要 Go
+工具链、不用构建、也不用 clone 仓库。
+
+### 1. 启动整套服务
+
+```bash
+curl -O https://raw.githubusercontent.com/sandrpod/sandrpod/main/docker/docker-compose.yml
+docker compose up -d
+```
+
+它会拉取 `ghcr.io/sandrpod/{server,poder,toolbox}` 并启动：`localhost:8080` 上的
+**控制平面** + 一个 **Docker worker（Poder）**，Poder 走反向隧道拨出，worker 上
+无需任何入站端口。验证：
+
+```bash
+curl localhost:8080/health          # {"status":"ok",...}
+```
+
+> ⚠️ 这套开发栈**默认关闭鉴权**（匿名 admin）—— 仅限 localhost 用。对外暴露前
+> 请设置 `SANDRPOD_TOKEN`，详见 [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md)。
+
+### 2. 建沙箱、跑代码
+
+```bash
+pipx install sandrpod-cli              # 推荐 —— 独立环境，无需激活
+# 或：uv tool install sandrpod-cli
+# 或在 virtualenv 里：pip install sandrpod-cli
+
+sandrpod-cli --api-url http://localhost:8080 create demo --provider local
+sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
+```
+
+冷启动实录（无缓存镜像，v0.5.10）：
+
+```
+Sandbox:  demo
+Job ID:   job-1788150453342465216-7j5di2LP
+Status:   provisioning
+State:    PENDING
+State:    RUNNING
+Sandbox 'demo' is ready
+hello from SandrPod
+42
+```
 
 ---
 
@@ -92,6 +142,13 @@ SandrPod 不绑定单一客户端。它同时提供原生 REST API 和 Python/TS
 
 ## E2B SDK 直连兼容
 
+<p align="center">
+  <img src="assets/e2b-demo.gif" alt="未修改的 E2B SDK 在自托管的 SandrPod 上创建沙箱" width="900"/>
+</p>
+
+对着一套自托管的 SandrPod 实录：包是 PyPI 上那个官方包，唯一的改动是指向哪台机器。
+源码见 [`assets/e2b-demo.py`](assets/e2b-demo.py)。
+
 "想说哪套 SDK 就说哪套"的一个例子：已有跑在 E2B SDK 上的代码？把它指向你的 SandrPod
 就能直接用 —— `Sandbox.create`、`files.*`、`commands.*`（前台/后台/PTY）、`run_code`、
 `watch_dir`、`get_metrics`、`pause`/`resume` 全支持：
@@ -142,36 +199,8 @@ CLI ───────┘    Poder (Worker) ──→ Toolbox (Sandbox 容器
 
 ---
 
-## 快速开始
 
-一条命令用发布镜像同时拉起**控制平面**和一个 **Docker worker** —— 不需要 Go
-工具链、不用构建、也不用 clone 仓库。
-
-### 1. 启动整套服务
-
-```bash
-curl -O https://raw.githubusercontent.com/sandrpod/sandrpod/main/docker/docker-compose.yml
-docker compose up -d
-```
-
-它会拉取 `ghcr.io/sandrpod/{server,poder,toolbox}` 并启动：`localhost:8080` 上的
-**控制平面** + 一个 **Docker worker（Poder）**，Poder 走反向隧道拨出，worker 上
-无需任何入站端口。验证：
-
-```bash
-curl localhost:8080/health          # {"status":"ok",...}
-```
-
-> ⚠️ 这套开发栈**默认关闭鉴权**（匿名 admin）—— 仅限 localhost 用。对外暴露前
-> 请设置 `SANDRPOD_TOKEN`，详见 [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md)。
-
-### 2. 建沙箱、跑代码
-
-```bash
-pip install sandrpod-cli
-sandrpod-cli --api-url http://localhost:8080 create demo --provider local
-sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
-```
+## 更多运行方式
 
 <details><summary>…或直接用 <code>curl</code>（免安装）</summary>
 
@@ -329,6 +358,13 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrp
 docker buildx build --platform linux/amd64 -f docker/Dockerfile.poder   -t ghcr.io/sandrpod/poder:latest   --load .
 docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t ghcr.io/sandrpod/toolbox:latest --load .
 ```
+
+---
+
+## 联系
+
+想在公司内部署，或者遇到文档没覆盖的情况？
+[提 issue](https://github.com/sandrpod/sandrpod/issues)，或直接邮件 <zhaochj@126.com>。
 
 ---
 
