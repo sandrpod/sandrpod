@@ -394,9 +394,9 @@ Longer pieces, with the commands and the failures they were measured from:
   function by function. 48 of 50 calls pass; the two that do not are named.
 - [Two ways to give a deepagents agent a sandbox you own](https://blog.sandrpod.com/deepagents-sandbox-backends/)
   — `langchain-e2b` and `langchain-sandrpod` down the same twelve assertions.
-  Both pass. Testing both surfaced two real defects — one in each project — and
-  a third finding that turned out to be a deliberate contract I had misread as
-  a bug.
+  Both pass. Testing both surfaced two real defects — both of them mine to fix —
+  and a third finding that turned out to be a deliberate contract I had misread
+  as a bug.
 
 More at [blog.sandrpod.com](https://blog.sandrpod.com).
 
