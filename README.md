@@ -12,13 +12,76 @@
 </p>
 
 <p align="center">
-  <a href="https://pypi.org/project/langchain-sandrpod/"><img src="https://img.shields.io/pypi/v/langchain-sandrpod?color=3B82F6&label=langchain-sandrpod" alt="PyPI"/></a>
-  <img src="https://img.shields.io/badge/self--hosted-open%20source-16A34A" alt="Self-hosted"/>
-  <img src="https://img.shields.io/badge/clouds-8%20providers-0EA5E9" alt="Multi-cloud"/>
+  <a href="https://pypi.org/project/sandrpod-cli/"><img src="https://img.shields.io/pypi/v/sandrpod-cli?color=3B82F6&label=sandrpod-cli" alt="PyPI"/></a>
   <img src="https://img.shields.io/badge/E2B%20SDK-drop--in-8B5CF6" alt="E2B compatible"/>
-  <img src="https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go" alt="Go"/>
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
 </p>
+
+---
+
+<p align="center">
+  <img src="assets/demo.gif" alt="From an empty directory to code running in a sandbox, on a cold machine" width="900"/>
+</p>
+
+## Quickstart — 60 seconds to running code
+
+One command brings up the control plane **and** a Docker worker from the
+published images — no Go toolchain, no build, no cloning the repo.
+
+### 1. Start the stack
+
+```bash
+curl -O https://raw.githubusercontent.com/sandrpod/sandrpod/main/docker/docker-compose.yml
+docker compose up -d
+```
+
+That pulls `ghcr.io/sandrpod/{server,poder,toolbox}` and starts:
+the **control plane** on `localhost:8080` and one **Docker worker** (Poder) that
+dials back over a reverse tunnel — no inbound ports on the worker.
+
+> First run downloads ~170 MB here (server + worker). The sandbox runtime
+> (`toolbox`, ~530 MB) is pulled by the worker the first time you create a
+> sandbox, so step 2 below is the slow one. After that, both steps take
+> seconds.
+
+Check it:
+
+```bash
+curl localhost:8080/health          # {"status":"ok",...}
+curl localhost:8080/api/v1/poders   # wait for one worker to show "state":"ONLINE"
+```
+
+`/health` answers as soon as the control plane binds, which is before the worker
+has finished registering. The second command is the one that tells you the stack
+is actually ready.
+
+> ⚠️ This dev stack runs with **authentication disabled** (anonymous admin) —
+> fine on localhost. Before exposing it, set `SANDRPOD_TOKEN` (see
+> [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md)).
+
+### 2. Create a sandbox and run code
+
+```bash
+pipx install sandrpod-cli              # recommended — isolated, nothing to activate
+# or: uv tool install sandrpod-cli
+# or, inside a virtualenv: pip install sandrpod-cli
+
+sandrpod-cli --api-url http://localhost:8080 create demo --provider local
+sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
+```
+
+Real output from a cold run (no cached images) against v0.5.10:
+
+```
+Sandbox:  demo
+Job ID:   job-1788150453342465216-7j5di2LP
+Status:   provisioning
+State:    PENDING
+State:    RUNNING
+Sandbox 'demo' is ready
+hello from SandrPod
+42
+```
 
 ---
 
@@ -98,6 +161,13 @@ migrate nothing.
 
 ## Drop-in E2B compatibility
 
+<p align="center">
+  <img src="assets/e2b-demo.gif" alt="The unmodified E2B SDK creating a sandbox on a self-hosted SandrPod" width="900"/>
+</p>
+
+Recorded live against a SandrPod deployment: the package is the one from PyPI,
+the only change is which host it points at. Source: [`assets/e2b-demo.py`](assets/e2b-demo.py).
+
 One example of "speak any SDK": already have code on the E2B SDK? Point it at your
 SandrPod and it just works — `Sandbox.create`, `files.*`, `commands.*`
 (foreground/background/PTY), `run_code`, `watch_dir`, `get_metrics`, `pause`/`resume`:
@@ -153,52 +223,8 @@ CLI ───────┘    Poder (Worker) ──→ Toolbox (Sandbox contai
 
 ---
 
-## Getting Started
 
-One command brings up the control plane **and** a Docker worker from the
-published images — no Go toolchain, no build, no cloning the repo.
-
-### 1. Start the stack
-
-```bash
-curl -O https://raw.githubusercontent.com/sandrpod/sandrpod/main/docker/docker-compose.yml
-docker compose up -d
-```
-
-That pulls `ghcr.io/sandrpod/{server,poder,toolbox}` and starts:
-the **control plane** on `localhost:8080` and one **Docker worker** (Poder) that
-dials back over a reverse tunnel — no inbound ports on the worker.
-
-> First run downloads ~170 MB here (server + worker). The sandbox runtime
-> (`toolbox`, ~530 MB) is pulled by the worker the first time you create a
-> sandbox, so step 2 below is the slow one. After that, both steps take
-> seconds.
-
-Check it:
-
-```bash
-curl localhost:8080/health          # {"status":"ok",...}
-curl localhost:8080/api/v1/poders   # wait for one worker to show "state":"ONLINE"
-```
-
-`/health` answers as soon as the control plane binds, which is before the worker
-has finished registering. The second command is the one that tells you the stack
-is actually ready.
-
-> ⚠️ This dev stack runs with **authentication disabled** (anonymous admin) —
-> fine on localhost. Before exposing it, set `SANDRPOD_TOKEN` (see
-> [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md)).
-
-### 2. Create a sandbox and run code
-
-```bash
-pipx install sandrpod-cli              # recommended — isolated, nothing to activate
-# or: uv tool install sandrpod-cli
-# or, inside a virtualenv: pip install sandrpod-cli
-
-sandrpod-cli --api-url http://localhost:8080 create demo --provider local
-sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
-```
+## More ways to run it
 
 <details><summary>…or with plain <code>curl</code> (no install)</summary>
 
@@ -368,9 +394,15 @@ Longer pieces, with the commands and the failures they were measured from:
   function by function. 48 of 50 calls pass; the two that do not are named.
 - [Two ways to give a deepagents agent a sandbox you own](https://blog.sandrpod.com/deepagents-sandbox-backends/)
   — `langchain-e2b` and `langchain-sandrpod` down the same twelve assertions.
-  Both pass; testing both is what found three defects.
+  Both pass. Testing both surfaced two real defects — one in each project — and
+  a third finding that turned out to be a deliberate contract I had misread as
+  a bug.
 
 More at [blog.sandrpod.com](https://blog.sandrpod.com).
+
+Deploying this inside a company, or hitting something the docs don't cover?
+[Open an issue](https://github.com/sandrpod/sandrpod/issues), or reach me
+directly at <zhaochj@126.com>.
 
 ---
 
