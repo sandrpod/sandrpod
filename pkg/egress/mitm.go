@@ -26,6 +26,7 @@
 package egress
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -39,7 +40,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 )
@@ -287,34 +287,36 @@ func (c *CA) trustBundlePath() (string, error) {
 	if _, err := os.Stat(bundle); err == nil {
 		return bundle, nil
 	}
-	roots, err := x509.SystemCertPool()
-	var body strings.Builder
-	body.Write(c.certPEM)
-	if err == nil {
-		// PEM-encode every system root after ours: a client that uses only this
-		// file must still be able to verify anything not terminated (an
-		// excluded host, or a connection that never went through the proxy).
-		//
-		// On macOS the pool is a keychain view and may not enumerate, in which
-		// case the bundle holds our CA alone; termination then covers every
-		// allowed 443 host, and a host in Exclude needs its own roots. That is
-		// logged at startup rather than left to be discovered.
-		for _, der := range rootsSubjects(roots) {
-			body.Write(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
-		}
+	body := append([]byte{}, c.certPEM...)
+	if roots := platformRoots(); len(roots) > 0 {
+		body = append(body, roots...)
 	}
-	if err := os.WriteFile(bundle, []byte(body.String()), 0o644); err != nil {
+	if err := os.WriteFile(bundle, body, 0o644); err != nil {
 		return "", fmt.Errorf("egress: write trust bundle: %w", err)
 	}
 	return bundle, nil
 }
 
-// rootsSubjects returns the raw DER of every certificate in the pool.
-func rootsSubjects(pool *x509.CertPool) [][]byte {
-	if pool == nil {
-		return nil
+// platformRoots reads the platform's PEM bundle, which is what SSL_CERT_FILE
+// would otherwise have pointed at. x509.SystemCertPool is not usable here: its
+// Subjects() returns subjects, not certificates, so a pool cannot be turned
+// back into PEM.
+//
+// Where no bundle file exists (some macOS setups), the result is empty and the
+// sandbox trusts our CA alone; termination then covers every allowed 443 host,
+// and a host in Exclude needs its own roots. The startup log says so.
+func platformRoots() []byte {
+	for _, path := range []string{
+		"/etc/ssl/certs/ca-certificates.crt", // Debian/Ubuntu, Alpine
+		"/etc/pki/tls/certs/ca-bundle.crt",   // RHEL/Fedora
+		"/etc/ssl/ca-bundle.pem",             // SUSE
+		"/etc/ssl/cert.pem",                  // macOS, *BSD
+	} {
+		if b, err := os.ReadFile(path); err == nil && bytes.Contains(b, []byte("BEGIN CERTIFICATE")) {
+			return b
+		}
 	}
-	return poolSubjects(pool)
+	return nil
 }
 
 // TrustEnv is the environment that makes a sandboxed client trust the CA. Every

@@ -328,9 +328,10 @@ func TestCA_TrustEnvPointsAtABundle(t *testing.T) {
 	if !pool.AppendCertsFromPEM(ca.CertPEM()) {
 		t.Fatal("the CA is not in the bundle")
 	}
-	// Where the platform enumerates its roots, the bundle is a superset of
-	// them; where it does not (macOS keychain), the CA alone is the guarantee.
-	if sys, err := x509.SystemCertPool(); err == nil && len(sys.Subjects()) > 1 {
+	// Where the platform ships a PEM bundle, the file is a superset of it; on a
+	// host without one the CA alone is the guarantee, and termination covers
+	// every allowed 443 host.
+	if len(platformRoots()) > 0 {
 		if len(pool.Subjects()) < 2 {
 			t.Errorf("bundle has %d certificates, expected the CA plus system roots", len(pool.Subjects()))
 		}
