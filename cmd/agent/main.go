@@ -28,6 +28,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
 	"github.com/sandrpod/sandrpod/pkg/audit"
+	"github.com/sandrpod/sandrpod/pkg/egress"
 	"github.com/sandrpod/sandrpod/pkg/notify"
 	"github.com/sandrpod/sandrpod/pkg/permission"
 	"github.com/sandrpod/sandrpod/pkg/toolbox"
@@ -124,6 +125,18 @@ var (
 	auditUploadURL   = flag.String("audit-upload-url", envOr("SANDRPOD_AUDIT_UPLOAD_URL", ""), "Endpoint to POST audit batches to. Empty disables upload (still logs locally).")
 	auditUploadToken = flag.String("audit-upload-token", envOr("SANDRPOD_AUDIT_UPLOAD_TOKEN", ""), "Bearer token sent with audit upload requests. Defaults to -token if empty.")
 
+	// Egress policy — the allow-list every sandboxed process is filtered
+	// through (see docs/EGRESS_POLICY.md). Off by default, like the
+	// permission gate: turning it on without a policy file would deny every
+	// connection, which is a surprise no operator should get from a flag.
+	//
+	//   off      — no proxy; egress is whatever the host allows
+	//   enforce  — start the loopback HTTP+SOCKS5 proxy, hand its address to
+	//              every spawned process, and refuse anything the policy or
+	//              the resolved-address check does not allow
+	egressMode   = flag.String("egress-mode", envOr("SANDRPOD_EGRESS_MODE", "off"), "Egress policy: off | enforce")
+	egressPolicy = flag.String("egress-policy", envOr("SANDRPOD_EGRESS_POLICY", ""), "Path to the egress policy JSON (required with -egress-mode=enforce)")
+
 	// MCP transport bridge — see docs/MCP_BRIDGE.md
 	mcpEnabled       = flag.Bool("mcp-enabled", envBool("SANDRPOD_MCP_ENABLED", true), "Enable MCP transport bridge if mcp.json is present (default true).")
 	mcpConfigPath    = flag.String("mcp-config", envOr("SANDRPOD_MCP_CONFIG", ""), "Path to mcp.json (default: ~/.sandrpod/mcp.json). Empty + missing default disables the bridge.")
@@ -197,6 +210,13 @@ func main() {
 	// permission gate so we can hand the manager the audit sink.
 	if err := installAuditPipeline(ctx, tb); err != nil {
 		log.Fatalf("audit pipeline setup failed: %v", err)
+	}
+
+	// Egress policy. After the audit pipeline (its denials are audited) and
+	// before tbHandler(): every process the toolbox spawns from here on
+	// inherits the proxy, so there is no window where one runs without it.
+	if err := installEgress(); err != nil {
+		log.Fatalf("egress policy setup failed: %v", err)
 	}
 
 	tbHandler := tb.Handler()
@@ -334,6 +354,95 @@ func installPermissionGate(tb *toolbox.Server) error {
 			workDir, len(overlapped), strings.Join(overlapped, ", "))
 	}
 	return nil
+}
+
+// installEgress starts the loopback egress proxy and hands its address to
+// every process the toolbox spawns.
+//
+// What this buys: `curl`, `npm`, `pip`, `git` over HTTP(S) and anything else
+// that honours the proxy variables can only reach hosts the policy names, and
+// the policy names destinations rather than addresses — a permitted name that
+// resolves into loopback, the LAN, a cloud metadata endpoint or this host's
+// own address is refused at dial time. Denials are audited with the rule that
+// caused them, and the refusal the tool sees carries a sentence the model can
+// act on.
+//
+// What this does NOT buy: a process that ignores the proxy variables still
+// reaches the network. This layer is a filter, not a wall. The wall is the
+// kernel (network namespace for containers, a seatbelt/bwrap profile for
+// employee machines) and it is not in this build; docs/EGRESS_POLICY.md is
+// explicit about the boundary so nobody assumes more than it delivers.
+func installEgress() error {
+	mode := strings.ToLower(strings.TrimSpace(*egressMode))
+	if mode == "" || mode == "off" {
+		return nil
+	}
+	if mode != "enforce" {
+		return fmt.Errorf("unknown --egress-mode %q (expected off|enforce)", mode)
+	}
+	if strings.TrimSpace(*egressPolicy) == "" {
+		// Starting with no allow list would deny every connection and read,
+		// from the outside, exactly like a broken network. Refuse instead.
+		return fmt.Errorf("--egress-mode=enforce needs --egress-policy <file>; " +
+			"an empty allow list denies all egress")
+	}
+
+	compiled, err := egress.LoadPolicy(*egressPolicy)
+	if err != nil {
+		return err
+	}
+	srv, err := egress.Start(egress.Options{
+		Policy: compiled,
+		Sink:   egressAuditSink{rec: sharedAuditRecorder},
+	})
+	if err != nil {
+		return err
+	}
+	toolbox.SetChildEnv(srv.ProxyEnv())
+
+	allow, deny := compiled.Strings()
+	log.Printf("egress: enforcing from %s (http=%s socks=%s)", *egressPolicy, srv.HTTPAddr(), srv.SOCKSAddr())
+	log.Printf("egress: allow=%v", allow)
+	if len(deny) > 0 {
+		log.Printf("egress: deny=%v", deny)
+	}
+	if sharedAuditRecorder == nil {
+		log.Printf("egress: no audit recorder — denials are counted but not persisted")
+	}
+	return nil
+}
+
+// egressAuditSink maps an egress event onto the audit record shape. Denials
+// carry the destination, the deciding rule, the reason and the resolved
+// address; the model only ever sees the reason, which names the address class
+// rather than the address.
+type egressAuditSink struct{ rec *audit.Recorder }
+
+func (s egressAuditSink) RecordEgress(e egress.Event) {
+	if s.rec == nil {
+		return
+	}
+	decision := "deny"
+	if e.Code == egress.CodeAllowed {
+		decision = "allow"
+	}
+	if err := s.rec.Record(audit.Event{
+		Source:   audit.SourceEgress,
+		Decision: decision,
+		Caller:   e.Kind,
+		Host:     e.Host,
+		Port:     e.Port,
+		Code:     e.Code,
+		Rule:     e.Rule,
+		Reason:   e.Reason,
+		Address:  e.Address,
+	}); err != nil {
+		// Same posture as the permission audit path: a write failure means
+		// decisions are no longer being recorded, so say so rather than
+		// swallow it.
+		log.Printf("audit: failed to record egress %s decision for %s:%d: %v",
+			decision, e.Host, e.Port, err)
+	}
 }
 
 // installAuditPipeline wires the local NDJSON recorder and (if configured)

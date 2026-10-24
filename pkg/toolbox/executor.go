@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -328,7 +327,7 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 	// Set working directory and environment
 	cmd.Dir = defaultWorkDir()
 	// Inherit the parent process environment so PATH resolves python3, node, etc.
-	cmd.Env = os.Environ()
+	cmd.Env = ChildEnv()
 	// Process group isolation (Unix only; no-op on Windows)
 	setSysProcAttr(cmd)
 

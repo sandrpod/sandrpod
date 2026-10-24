@@ -318,6 +318,13 @@ opt-in，面向"沙箱就是某个人的笔记本"这种员工机部署。用 `-
 就在后台批量投递到中心端点，至少一次送达。它通过 `AuditSink` 接口与
 `pkg/permission` 解耦。
 
+`pkg/egress` 是同一套姿态在网络侧的对应物：`-egress-mode=enforce` 时 agent 在
+loopback 上起 HTTP + SOCKS5 代理，把地址交给每个派生进程。一个连接要被放行，
+必须 allow-list 覆盖该目的地，**并且**该名字没有解析到 loopback / 内网 / 云
+metadata / 本机网卡地址。拒绝会带上写给模型看的原因，并以 `source: "egress"`
+进审计。它过滤的是"认代理变量的工具"，不是内核边界——分界线见
+[EGRESS_POLICY.zh.md](EGRESS_POLICY.zh.md)。
+
 **sandrpod-tray**（`cmd/sandrpod-tray`）是用户会话侧的伴随进程：托盘图标、
 同意对话框、本地设置页。它经 `~/.sandrpod/authz.sock` 与 agent 通信。
 

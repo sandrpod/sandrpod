@@ -35,9 +35,10 @@ import "time"
 type Source string
 
 const (
-	SourcePathCheck Source = "path" // permission.Manager.Check
-	SourceExec      Source = "exec" // permission.Manager.CheckExec
-	SourcePTY       Source = "pty"  // permission.Manager.CheckPTY
+	SourcePathCheck Source = "path"   // permission.Manager.Check
+	SourceExec      Source = "exec"   // permission.Manager.CheckExec
+	SourcePTY       Source = "pty"    // permission.Manager.CheckPTY
+	SourceEgress    Source = "egress" // egress proxy: network connection decision
 )
 
 // Event is the wire-format record. We keep field names short (under 16 chars
@@ -84,6 +85,21 @@ type Event struct {
 	// at registration. Useful for filtering on the server when one user
 	// runs multiple sandboxes.
 	SandboxName string `json:"sandbox_name,omitempty"`
+
+	// Host / Port / Code / Rule / Address are filled for SourceEgress, and
+	// empty for the path-shaped sources. They are additive: an older reader
+	// ignoring them loses the destination of a network decision, nothing else.
+	Host string `json:"host,omitempty"`
+	Port int    `json:"port,omitempty"`
+	// Code is the egress verdict's machine label: allowed | denied_domain |
+	// not_allowed | denied_address.
+	Code string `json:"code,omitempty"`
+	// Rule is the policy entry that decided, as written in the policy file.
+	Rule string `json:"rule,omitempty"`
+	// Address is the resolved address behind a denied_address verdict. It
+	// stays in the audit log and out of the reason shown to the model, which
+	// names only the class (loopback, metadata, this host's own).
+	Address string `json:"address,omitempty"`
 
 	// AgentVersion is the sandrpod-agent build that produced this record.
 	// Helps the server attribute behavior changes to upgrades.

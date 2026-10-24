@@ -246,6 +246,12 @@ ASRT 在这点上的不变量是明确的：**mandatory deny 对 `allowWrite` �
   - 容器模式：`--network none` + 代理 sidecar，或 docker 网络只留代理可达。
 - **验收**：沙箱内 `curl http://example.org` → 403 且带 reason；`curl http://169.254.169.254/` → 拒；白名单域名按 IP 访问 → 拒；非代理感知工具（`ssh`/`git`）也被覆盖。
 - **成本**：2–3 周（Go 版代理约 1.5–2k 行）。
+- **状态：用户态部分已实现（`pkg/egress`）**。HTTP（absolute-form + CONNECT）与
+  SOCKS5（仅 CONNECT）双代理、per-process token、`:port`/`*.`/IPv6 括号条目、
+  解析地址校验（loopback / link-local / multicast / 云 metadata / 本机网卡）、
+  拒绝原因回传（`X-Deny-Reason` + body）、`source: "egress"` 审计事件、
+  `toolbox.SetChildEnv` 把代理注入全部 spawn 点。尚未做：内核兜底（netns /
+  Seatbelt）、控制面按沙箱下发策略、容器模式接线。测试见 `pkg/egress/*_test.go`。
 
 ### P1-2 把 hardlock 下沉成内核事实（仅 agent 模式）
 
@@ -322,7 +328,7 @@ ASRT 在这点上的不变量是明确的：**mandatory deny 对 `allowWrite` �
 | 阶段 | 内容 | 工期 | 关键风险 |
 |---|---|---|---|
 | 0 | ~~修 4.5 的分支顺序（hardlock 先于 work_dir）~~ ✅ 已完成：含启动告警与 4 个回归测试 | 0.5 天 | 已确认 `work_dir` 的静默放行不变 |
-| 1 | P0-1 出网代理 + 地址校验 + 拒绝原因 | 2–3 周 | 非代理感知工具绕过（Linux 需 netns，macOS 需 seatbelt）；DNS rebinding |
+| 1 | P0-1 出网代理 + 地址校验 + 拒绝原因 — 🟡 用户态部分已完成（`pkg/egress`），内核兜底/容器接线未做 | 2–3 周 | 非代理感知工具绕过（Linux 需 netns，macOS 需 seatbelt）；DNS rebinding |
 | 2 | P1-5 mandatory deny + P1-6 违规事件/双文案 | 1 周 | 误伤（`git` 需要 `.git/config` 可读不可写，要精确到 hooks/config） |
 | 3 | P1-2 agent 模式 OS 级强制 | 4–6 周 | 宿主已沙箱化（见 4.1）、两平台语义差异、argv/mount 上限 |
 | 4 | P1-3 decider 中心化 + P1-4 凭据掩码 | 3 周 | CA 分发与合规；性能（每请求一次 RTT） |

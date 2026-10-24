@@ -78,6 +78,7 @@ before you pick one to try first:
 | Doc | What it covers |
 |---|---|
 | [PERMISSION_AND_AUDIT.md](PERMISSION_AND_AUDIT.md) ([中文](PERMISSION_AND_AUDIT.zh.md)) | The consent gate (hardlock → work_dir → permanent → session → ask), native dialogs, `sandrpod-tray`, and the decision-audit upload pipeline |
+| [EGRESS_POLICY.md](EGRESS_POLICY.md) ([中文](EGRESS_POLICY.zh.md)) | What a sandboxed process may connect to: the allow-list format, the resolved-address check that stops an allowed name reaching loopback/metadata, the deny reasons the model sees, and the honest boundary (filter, not wall) |
 
 ## Agent skills
 

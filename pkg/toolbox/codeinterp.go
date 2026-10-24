@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"os/exec"
 	"sync"
 )
@@ -277,7 +276,7 @@ func (m *KernelManager) get(contextID string) (*kernel, error) {
 	cmd := exec.Command(m.python, "-c", pyDriver)
 	// Force matplotlib's non-interactive Agg backend so plt.show() is a no-op
 	// headless and figures stay in memory for us to capture as PNG.
-	cmd.Env = append(os.Environ(), "MPLBACKEND=Agg")
+	cmd.Env = append(ChildEnv(), "MPLBACKEND=Agg")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

@@ -488,12 +488,17 @@ make build-all
 ❌ **shell `eval` / 变量插值**：动态构造的命令绕过字面量匹配
 ❌ **PTY 内员工/AI 实时输入**：会话已开就放手，不实时拦字节
 ❌ **Python `subprocess.Popen(["s"+"cp", ...])`**：动态构造的非 shell 调用
-❌ **网络出口**：当前**没有 egress allowlist**——AI 只要能跑 `curl` 就能外传数据（在路线图上）
+❌ **网络出口**：**开启时**才算覆盖——`-egress-mode=enforce` 会起一个 loopback
+HTTP+SOCKS5 代理（allow-list + 解析地址校验），toolbox 派生的每个进程都继承它，
+详见 [EGRESS_POLICY.zh.md](EGRESS_POLICY.zh.md)。两点如实说明：它只能过滤认
+`HTTP_PROXY` 的工具（直接开 socket 的进程不算），而拦住后者的内核兜底还没做；
+且默认关闭，不带参数启动的 agent 出网仍然完全放行。
 
 ### 安全责任分工
 
 - 路径授权 + 命令策略 + PTY consent 是**摩擦层**和**审计层**，不是**绝对边界**
-- 真正的安全边界是 OS 用户隔离 + 网络出口控制 + 后续要做的 egress allowlist
+- 真正的安全边界是 OS 用户隔离 + 网络出口控制（`pkg/egress` 提供了其中用户态
+  能做到的部分，内核兜底仍在路线图上）
 - 当前层的价值：让"明显坏的"立即被员工看见、拒绝、留证
 
 ### 当前已知工程限制

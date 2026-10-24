@@ -305,11 +305,13 @@ func pumpReader(mp *managedProc, r io.Reader, kind string) {
 
 // mergeEnv overlays the caller-supplied envs on top of the toolbox environment.
 func mergeEnv(extra map[string]string) []string {
-	env := os.Environ()
+	env := make([]string, 0, len(extra))
 	for k, v := range extra {
 		env = append(env, k+"="+v)
 	}
-	return env
+	// mergeEnvList puts the caller's envs on top of the sandbox environment
+	// (egress proxy variables included) without duplicating keys.
+	return mergeEnvList(ChildEnv(), env)
 }
 
 // waitExit waits for a command and returns its exit code (-1 on signal/error).

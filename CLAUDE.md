@@ -66,16 +66,20 @@ go run ./cmd/agent -api-url=http://localhost:8080 -name=my-agent
 # Run sandrpod-agent in employee-PC mode (permission gate + audit)
 go run ./cmd/agent -api-url=http://localhost:8080 -name=my-laptop \
   -permission-mode=prompt \
+  -egress-mode=enforce -egress-policy=~/.sandrpod/egress.json \
   -audit-upload-url=https://your-platform/api/audit/decisions/batch
 
-# sandrpod-agent permission/audit flags:
+# sandrpod-agent permission/audit/egress flags:
 #   -permission-mode   off | prompt | strict  (default: off)
 #   -permission-file   override ~/.sandrpod/permissions.json path
 #   -audit-dir         local NDJSON log dir (default: ~/.sandrpod/audit; empty=disabled)
 #   -audit-upload-url  POST endpoint for audit batch upload (empty=local only)
 #   -audit-upload-token bearer token for upload (defaults to -token)
+#   -egress-mode       off | enforce  (default: off)
+#   -egress-policy     path to the egress allow-list JSON (required with enforce)
 # Env equivalents: SANDRPOD_PERMISSION_MODE, SANDRPOD_PERMISSION_FILE,
-#                  SANDRPOD_AUDIT_DIR, SANDRPOD_AUDIT_UPLOAD_URL, SANDRPOD_AUDIT_UPLOAD_TOKEN
+#                  SANDRPOD_AUDIT_DIR, SANDRPOD_AUDIT_UPLOAD_URL, SANDRPOD_AUDIT_UPLOAD_TOKEN,
+#                  SANDRPOD_EGRESS_MODE, SANDRPOD_EGRESS_POLICY
 
 # Run sandrpod-tray (user-session GUI companion for employee-PC mode)
 sandrpod-tray serve                                      # tray icon + IPC + local settings HTTP
@@ -134,6 +138,7 @@ Client → API Server (Control Plane)
 - `pkg/permission/`: Decision engine for employee-PC mode. 5-branch policy (hardlock → work_dir → permanent → session → ask). Includes `Store` (atomic JSON), `Manager`, `IPCClient/Server`, command policy scanner, and default hardlock seeds.
 - `pkg/notify/`: Cross-platform consent dialog. macOS: `osascript display dialog`; Linux: `zenity`/`kdialog`; Windows: PowerShell `MessageBox`. Fail-close (timeout/error → deny).
 - `pkg/audit/`: Local NDJSON audit log (`Recorder`, auto-rotate at 8 MiB) + background HTTP uploader (`Uploader`, at-least-once delivery). Decoupled from `pkg/permission` via `AuditSink` interface.
+- `pkg/egress/`: Egress policy for agent mode (see `docs/EGRESS_POLICY.md`). `Policy`/`Compiled` match `host[:port]` entries (`*.` wildcards, IPv6 literals); `guard.go` resolves an allowed name once and refuses loopback / link-local / cloud metadata / this host's own addresses before dialing the vetted address; `proxy.go` + `socks.go` serve an HTTP (absolute-form + CONNECT) and SOCKS5 (CONNECT only) proxy bound to `127.0.0.1` behind a per-process token. Denials carry a model-facing reason (`X-Deny-Reason`) and are audited as `source: "egress"`. Wired in by `cmd/agent -egress-mode=enforce`: the proxy env goes to every toolbox-spawned process through `toolbox.SetChildEnv`/`ChildEnv` (`pkg/toolbox/env.go`), never into the agent's own traffic.
 
 ### State Machine
 

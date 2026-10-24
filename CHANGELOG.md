@@ -8,6 +8,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **Egress policy for agent mode** — `pkg/egress`, `-egress-mode=enforce`,
+  `-egress-policy <file>`. The agent starts an HTTP and a SOCKS5 proxy on
+  loopback behind a per-process token, and hands every process the toolbox
+  spawns (one-shot `Execute`, session shells, PTY, the code-interpreter kernel,
+  procmgr starts) the proxy address through the new
+  `toolbox.SetChildEnv`/`ChildEnv` plumbing. A connection is allowed only when
+  an allow-list entry covers the destination **and** the address check passes:
+  an allowed hostname is resolved once and refused if it lands in loopback,
+  link-local, a cloud metadata endpoint or one of this host's own addresses, so
+  allowing `*.example.com` does not also allow `169.254.169.254`. Refusals are
+  a 403 with `X-Deny-Reason` plus a sentence the model can act on, and are
+  audited as `source: "egress"` with the destination, the deciding rule and the
+  resolved address. A policy file that fails to parse, or a typo'd key, is a
+  startup error rather than an empty allow-list. This is a filter over tools
+  that honour `HTTP_PROXY`, not a kernel boundary: `docs/EGRESS_POLICY.md`
+  states where the line is, what is still missing (a network namespace /
+  Seatbelt for processes that ignore the environment), and why TLS
+  interception and credential masking are not in it yet.
+
 ### Fixed
 
 - **A broad `work_dir` silently re-opened every hardlock.** The permission gate

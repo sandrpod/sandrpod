@@ -157,8 +157,14 @@ Specifically not covered:
 - **Shell `eval` and interpolation**, and `subprocess.Popen(["s"+"cp", …])`.
 - **Bytes typed into an already-open PTY.** Consent is per session, not per
   keystroke.
-- **Network egress.** There is no allowlist yet — an agent that can run `curl`
-  can exfiltrate. This is on the roadmap and is currently the largest gap.
+- **Network egress.** Covered *when enabled*: `-egress-mode=enforce` starts a
+  loopback HTTP+SOCKS5 proxy with an allow-list and a resolved-address check,
+  and every process the toolbox spawns inherits it —
+  see [EGRESS_POLICY.md](EGRESS_POLICY.md). Two caveats keep this honest: it
+  filters tools that honour `HTTP_PROXY` (not a process that opens a socket
+  directly), and the kernel floor that would stop the latter is still
+  outstanding. It is off by default, so an agent started without the flag still
+  has unrestricted egress.
 
 ### Known engineering limits
 

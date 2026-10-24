@@ -126,7 +126,7 @@ func (m *SessionManager) Create(sessionId string) (*Session, error) {
 	args := nativeShellSessionArgs()
 	cmd := exec.Command(shell, args...)
 	cmd.Dir = defaultWorkDir()
-	cmd.Env = os.Environ()
+	cmd.Env = ChildEnv()
 
 	// Obtain the stdin pipe before starting the process.
 	stdin, err := cmd.StdinPipe()

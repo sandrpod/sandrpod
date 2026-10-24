@@ -55,7 +55,7 @@ func (m *PtyManager) CreateSession(width, height int) (*PtySession, error) {
 	// Inherit the full process environment so login shells can load profile
 	// scripts correctly (HOME, PATH, USER, etc.). Override TERM so the
 	// terminal behaves consistently regardless of the parent's TERM setting.
-	env := os.Environ()
+	env := ChildEnv()
 	termSet := false
 	for i, e := range env {
 		if strings.HasPrefix(e, "TERM=") {
