@@ -45,13 +45,15 @@ const DefaultPromptDeadline = 30 * time.Second
 // pkg/audit.Recorder satisfies this trivially via a thin adapter the agent
 // main wires in (see cmd/agent/main.go).
 type AuditSink interface {
-	Record(source, decision, path, mode, caller, sessionID, reason, matchedCommand string)
+	// modelReason is the caller-facing English explanation, empty when the
+	// decision has none. reason stays the human one.
+	Record(source, decision, path, mode, caller, sessionID, reason, modelReason, matchedCommand string)
 }
 
 // noopAuditSink is the zero-value behavior when no sink is installed.
 type noopAuditSink struct{}
 
-func (noopAuditSink) Record(string, string, string, string, string, string, string, string) {}
+func (noopAuditSink) Record(string, string, string, string, string, string, string, string, string) {}
 
 // Manager evaluates Requests against the persisted Snapshot and an optional
 // in-process Notifier. It is safe for concurrent use.
@@ -123,7 +125,8 @@ func (m *Manager) recordDecision(source string, dec Decision, req Request) {
 	if decisionStr == "" {
 		decisionStr = "unknown"
 	}
-	m.audit.Record(source, decisionStr, req.Path, string(req.Mode), req.Caller, req.SessionID, dec.Reason, "")
+	m.audit.Record(source, decisionStr, req.Path, string(req.Mode), req.Caller, req.SessionID,
+		dec.Reason, dec.ModelReason, "")
 }
 
 // checkInternal is the original decision logic; Check wraps it to emit one
@@ -151,7 +154,7 @@ func (m *Manager) Check(ctx context.Context, req Request) Decision {
 // failure mode that creeps in when audit is sprinkled inline.
 func (m *Manager) checkBody(ctx context.Context, req Request) Decision {
 	if req.Path == "" {
-		return Decision{Action: ActionDeny, Reason: "empty path"}
+		return Decision{Action: ActionDeny, Reason: "empty path", ModelReason: "the request had no path"}
 	}
 	if canonical, err := canonicalize(req.Path); err == nil {
 		req.Path = canonical
@@ -174,6 +177,8 @@ func (m *Manager) checkBody(ctx context.Context, req Request) Decision {
 		return Decision{
 			Action: ActionDeny,
 			Reason: fmt.Sprintf("path %q is hard-locked (use `sandrpod-tray unlock` to enable)", req.Path),
+			ModelReason: fmt.Sprintf("%s is hard-locked by the operator's policy and cannot be read or written; "+
+				"do not retry, and ask the user to unlock it in the tray if this is genuinely needed", req.Path),
 		}
 	}
 
@@ -190,6 +195,9 @@ func (m *Manager) checkBody(ctx context.Context, req Request) Decision {
 			Action: ActionDeny,
 			Reason: fmt.Sprintf("path %q is protected: agent-writable persistence (git hooks/config, shell startup, "+
 				"MCP config, IDE launch config) is denied even inside the work tree", req.Path),
+			ModelReason: fmt.Sprintf("%s is write-protected: git hooks, shell startup files, MCP config and IDE "+
+				"launch config cannot be modified by the agent even inside the work tree. "+
+				"Write somewhere else, or ask the user to make the change", req.Path),
 		}
 	}
 
@@ -265,13 +273,18 @@ func (m *Manager) askAndPersist(ctx context.Context, req Request) Decision {
 		return Decision{Action: ActionAllow}
 
 	case PromptDeny:
-		return Decision{Action: ActionDeny, Reason: "denied by user"}
+		return Decision{Action: ActionDeny, Reason: "denied by user",
+			ModelReason: fmt.Sprintf("%s was refused by the user; do not retry it, and choose another approach",
+				req.Path)}
 
 	case PromptTimeout:
-		return Decision{Action: ActionDeny, Reason: "permission prompt timed out (fail-close)"}
+		return Decision{Action: ActionDeny, Reason: "permission prompt timed out (fail-close)",
+			ModelReason: fmt.Sprintf("nobody answered the consent prompt for %s in time, so the request was refused; "+
+				"the user may be away", req.Path)}
 
 	default:
-		return Decision{Action: ActionDeny, Reason: fmt.Sprintf("unknown prompt response %q", resp)}
+		return Decision{Action: ActionDeny, Reason: fmt.Sprintf("unknown prompt response %q", resp),
+			ModelReason: "the consent prompt returned an unusable answer, so the request was refused"}
 	}
 }
 
@@ -305,7 +318,7 @@ func (m *Manager) CheckExec(code string) ExecDecision {
 	// risk surface even when the same code is also blocked by a deny.
 	for _, w := range warns {
 		if m.audit != nil {
-			m.audit.Record("exec", "warn", "", "", "", "", w.Token, w.Command)
+			m.audit.Record("exec", "warn", "", "", "", "", w.Token, "", w.Command)
 		}
 	}
 
@@ -317,12 +330,14 @@ func (m *Manager) CheckExec(code string) ExecDecision {
 			Deny:   deny,
 		}
 		if m.audit != nil {
-			m.audit.Record("exec", "deny", "", "", "", "", dec.Reason, deny.Command)
+			m.audit.Record("exec", "deny", "", "", "", "", dec.Reason,
+				fmt.Sprintf("%s is on the command deny list; choose a different tool or ask the user", deny.Command),
+				deny.Command)
 		}
 		return dec
 	}
 	if m.audit != nil {
-		m.audit.Record("exec", "allow", "", "", "", "", "", "")
+		m.audit.Record("exec", "allow", "", "", "", "", "", "", "")
 	}
 	return ExecDecision{Action: ActionAllow, Warns: warns}
 }
@@ -340,13 +355,13 @@ func (m *Manager) AuditExecOnly(code string) {
 	}
 	warns, deny, hasDeny := CheckCommandPolicy(m.store.Snapshot().CommandPolicy, code)
 	for _, w := range warns {
-		m.audit.Record("exec", "warn", "", "", "", "", w.Token, w.Command)
+		m.audit.Record("exec", "warn", "", "", "", "", w.Token, "", w.Command)
 	}
 	if hasDeny && deny != nil {
-		m.audit.Record("exec", "warn", "", "", "", "", "deny-listed token permitted (code-interpreter is audit-only)", deny.Command)
+		m.audit.Record("exec", "warn", "", "", "", "", "deny-listed token permitted (code-interpreter is audit-only)", "", deny.Command)
 		return
 	}
-	m.audit.Record("exec", "allow", "", "", "", "", "", "")
+	m.audit.Record("exec", "allow", "", "", "", "", "", "", "")
 }
 
 // CheckPTY asks the human for consent before opening an interactive PTY

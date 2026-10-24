@@ -279,7 +279,26 @@ sandrpod-tray seed                       # 强制装默认 hardlock + 命令策�
 
 ---
 
-## 六、运行时数据流
+## 双受众：每个拒绝两份说明
+
+每个拒绝都带两份说明，因为有两个受众。`Reason` 是给人在本地看的（进同意对话框）；
+`ModelReason` 是一行英文，写明拒了什么、接下来该怎么做——它随工具返回值进到对话里，
+也是 `Decision.Explanation()` 对任何没有 locale 的调用方返回的内容。
+
+```
+Reason:      路径 "/Users/me/.ssh/id_rsa" 被 hardlock 锁定（可用 sandrpod-tray unlock 解锁）
+ModelReason: /Users/me/.ssh/id_rsa is hard-locked by the operator's policy and cannot be
+             read or written; do not retry, and ask the user to unlock it in the tray if
+             this is genuinely needed
+```
+
+两份都写进审计（`reason`、`model_reason`），所以事后能同时看到"用户看到了什么"和
+"模型被告知了什么"——当问题变成"agent 为什么一直在重试"时，这个差别很值钱。
+
+这个拆分不是装饰：把本地化的 UI 文案丢给模型，是它无法行动的噪音；把英文祈使句塞进
+对话框，是让人点按钮时觉得"这是个 bug"。
+
+## 审计运行时数据流
 
 ### 路径访问
 

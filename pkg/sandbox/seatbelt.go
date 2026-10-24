@@ -97,8 +97,18 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 	b.WriteString("(allow mach-lookup)\n")
 	b.WriteString("(allow ipc-posix-shm)\n")
 
-	// Network: the proxy is the policy, unless the caller asked for none.
-	if !policy.NetworkNone {
+	// Network. Three cases, and the middle one is the interesting one:
+	//   - nothing: outbound is allowed (the egress proxy is a filter anyway);
+	//   - ProxyOnlyPort: outbound is allowed to that one loopback port, so a
+	//     process that ignores the proxy variables has nowhere to go;
+	//   - NetworkNone: no outbound at all.
+	switch {
+	case policy.NetworkNone:
+		// nothing
+	case policy.ProxyOnlyPort > 0:
+		b.WriteString(fmt.Sprintf("(allow network-outbound (remote ip %s))\n",
+			sbplString(fmt.Sprintf("localhost:%d", policy.ProxyOnlyPort))))
+	default:
 		b.WriteString("(allow network-outbound)\n")
 	}
 

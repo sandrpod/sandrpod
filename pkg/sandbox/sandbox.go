@@ -66,6 +66,11 @@ type Policy struct {
 	// config, IDE launch config). Unlike ReadDeny they remain readable — a
 	// build may need to read .git/config — and only writes are refused.
 	WriteDeny []string
+	// ProxyOnlyPort, when set, is the only outbound destination the sandbox may
+	// reach: 127.0.0.1:<port>, the egress proxy. macOS has no network namespace
+	// to remove, so this is what narrows the network there — a process that
+	// ignores HTTP_PROXY can still open a socket, but only to the proxy.
+	ProxyOnlyPort int
 	// NetworkNone removes the network namespace where the platform allows it.
 	// Linux only, and off by default: the egress proxy lives on the host's
 	// loopback, so taking the network away would also take the proxy away —

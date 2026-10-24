@@ -8,13 +8,16 @@ import (
 	"bufio"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -483,3 +486,90 @@ func TestUpdatePolicy_TakesEffectWithoutRestart(t *testing.T) {
 		t.Error("UpdatePolicy(nil) must be rejected")
 	}
 }
+
+// A decider replaces the local policy for verdicts: the answer comes from the
+// callback, and a callback that fails is a denial, not an allow.
+func TestDecider_AnswersReplaceThePolicy(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+	upURL, _ := url.Parse(upstream.URL)
+	_, upPort, _ := net.SplitHostPort(upURL.Host)
+
+	var calls atomic.Int64
+	// The compiled policy is not the verdict source here — it only feeds the
+	// address check, which still refuses loopback for a name and honours an
+	// explicit literal. The test server is a literal, so it must be listed.
+	compiled, err := Parse(Policy{AllowedDomains: []string{"127.0.0.1:" + upPort}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := Start(Options{
+		Policy: compiled,
+		Decide: func(ctx context.Context, host string, port int) (Verdict, error) {
+			calls.Add(1)
+			if host == "127.0.0.1" && port == atoi(upPort) {
+				return Verdict{Allow: true, Code: CodeAllowed, Reason: "decider said yes"}, nil
+			}
+			return Verdict{Code: CodeNotAllowed, Reason: "decider said no"}, nil
+		},
+		DecideCacheTTL: 0,
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	client := proxyClient(t, srv)
+	resp, err := client.Get(upstream.URL)
+	if err != nil {
+		t.Fatalf("allowed request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("decider-allowed request: status=%d", resp.StatusCode)
+	}
+
+	resp, err = client.Get("http://example.org/")
+	if err != nil {
+		t.Fatalf("denied request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("decider-denied request: status=%d, want 403", resp.StatusCode)
+	}
+	if calls.Load() < 2 {
+		t.Errorf("the decider was called %d times, expected one per connection", calls.Load())
+	}
+}
+
+// No answer is no permission.
+func TestDecider_ErrorIsADenial(t *testing.T) {
+	compiled, _ := Parse(Policy{})
+	srv, err := Start(Options{
+		Policy: compiled,
+		Decide: func(ctx context.Context, host string, port int) (Verdict, error) {
+			return Verdict{}, errors.New("control plane is down")
+		},
+	})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+
+	client := proxyClient(t, srv)
+	resp, err := client.Get("http://example.org/")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403 when the decider fails", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Deny-Reason"); got != CodeDeciderUnavailable {
+		t.Errorf("X-Deny-Reason = %q, want %q", got, CodeDeciderUnavailable)
+	}
+}
+
+func atoi(s string) int { n, _ := strconv.Atoi(s); return n }

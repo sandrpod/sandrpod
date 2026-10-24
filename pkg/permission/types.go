@@ -105,7 +105,23 @@ type Request struct {
 // Decision is what the manager returns to the executor.
 type Decision struct {
 	Action Action
-	Reason string // populated on Deny so the executor can surface a meaningful error
+	// Reason is written for the person at the machine: it is what the consent
+	// dialog shows and what the audit trail keeps as the human explanation.
+	Reason string
+	// ModelReason is the same refusal written for the agent: one line of
+	// English, what was refused and what to do instead. They are different
+	// audiences on purpose — a localized UI string surfaced to a model reads as
+	// noise, and an English imperative shown in a dialog reads as a bug.
+	ModelReason string
+}
+
+// Explanation returns the text to surface to a caller that has no locale: the
+// model-facing reason when there is one, the human one otherwise.
+func (d Decision) Explanation() string {
+	if d.ModelReason != "" {
+		return d.ModelReason
+	}
+	return d.Reason
 }
 
 // PromptResponse is what a Notifier returns from Ask().

@@ -12,6 +12,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -19,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	neturl "net/url"
 	"os"
@@ -62,7 +64,7 @@ type auditAdapter struct {
 	rec *audit.Recorder
 }
 
-func (a *auditAdapter) Record(source, decision, path, mode, caller, sessionID, reason, matchedCommand string) {
+func (a *auditAdapter) Record(source, decision, path, mode, caller, sessionID, reason, modelReason, matchedCommand string) {
 	if a == nil || a.rec == nil {
 		return
 	}
@@ -74,6 +76,7 @@ func (a *auditAdapter) Record(source, decision, path, mode, caller, sessionID, r
 		Caller:         caller,
 		SessionID:      sessionID,
 		Reason:         reason,
+		ModelReason:    modelReason,
 		MatchedCommand: matchedCommand,
 	}); err != nil {
 		// Audit is a compliance control, not best-effort telemetry: a write
@@ -470,6 +473,21 @@ func installEgress() error {
 		}
 		return nil
 
+	case "decider":
+		// Per-connection decisions from the control plane. The agent holds no
+		// policy of its own: the proxy asks, the server answers, and a tightened
+		// rule applies to the next connection instead of the next poll.
+		empty, err := egress.Parse(egress.Policy{})
+		if err != nil {
+			return err
+		}
+		srv, err := startDeciderEgress(empty)
+		if err != nil {
+			return err
+		}
+		log.Printf("egress: decisions come from the control plane (%s); deny-all until it answers", describeEgressListen(srv))
+		return nil
+
 	case "server":
 		// Policy from the control plane, refreshed in the background.
 		//
@@ -496,7 +514,7 @@ func installEgress() error {
 		return nil
 
 	default:
-		return fmt.Errorf("unknown --egress-mode %q (expected off|enforce|server)", mode)
+		return fmt.Errorf("unknown --egress-mode %q (expected off|enforce|server|decider)", mode)
 	}
 }
 
@@ -542,26 +560,84 @@ func startEgressServer(compiled *egress.Compiled) (*egress.Server, error) {
 	}
 	startedEgress = srv
 
-	if srv.UnixSocket() != "" {
-		// Inside the sandbox the proxy is 127.0.0.1:<relay port>, reached
-		// through the relay the sandbox wrapper starts.
-		env := relayProxyEnv(srv.Token(), relayListenAddr)
-		toolbox.SetChildEnv(env)
-		egressRelay = &sandbox.Relay{
-			Binary:             selfBinary(),
-			BinaryInSandbox:    relayBinaryPath,
-			SocketDir:          filepath.Dir(srv.UnixSocket()),
-			SocketDirInSandbox: relaySocketDir,
-			SocketName:         filepath.Base(srv.UnixSocket()),
-			Listen:             relayListenAddr,
-		}
-	} else {
-		toolbox.SetChildEnv(srv.ProxyEnv())
-	}
+	applyEgressChildEnv(srv)
 	if sharedAuditRecorder == nil {
 		log.Printf("egress: no audit recorder — denials are counted but not persisted")
 	}
 	return srv, nil
+}
+
+// startDeciderEgress starts the proxy with a decider instead of a local policy.
+//
+// The compiled policy passed in is deliberately empty: it is only consulted for
+// the address check (which IP literals are explicitly allowed), and every real
+// verdict comes from the server. An empty policy there means "no literal is
+// special-cased", which is the conservative direction.
+func startDeciderEgress(guard *egress.Compiled) (*egress.Server, error) {
+	target := egressTarget{apiURL: *apiURL, token: *token, sandbox: *name}
+	opts := egress.Options{
+		Policy: guard,
+		Sink:   egressAuditSink{rec: sharedAuditRecorder},
+		Decide: func(ctx context.Context, host string, port int) (egress.Verdict, error) {
+			return fetchEgressDecision(ctx, target, host, port)
+		},
+		// A short cache: a page load opens many connections to the same host,
+		// and one round trip per connection would make the proxy the bottleneck
+		// it is not meant to be. Ten seconds is short enough that "tighten now"
+		// still means now.
+		DecideCacheTTL: 10 * time.Second,
+	}
+	if netnsWanted() {
+		dir, err := egressSocketDir()
+		if err != nil {
+			return nil, err
+		}
+		opts.UnixSocketPath = filepath.Join(dir, "proxy.sock")
+	}
+	srv, err := egress.Start(opts)
+	if err != nil {
+		return nil, err
+	}
+	startedEgress = srv
+	applyEgressChildEnv(srv)
+	return srv, nil
+}
+
+// fetchEgressDecision asks the control plane about one destination.
+func fetchEgressDecision(ctx context.Context, target egressTarget, host string, port int) (egress.Verdict, error) {
+	base := strings.TrimRight(target.apiURL, "/")
+	if base == "" {
+		return egress.Verdict{}, fmt.Errorf("no -api-url configured")
+	}
+	body, _ := json.Marshal(map[string]any{
+		"sandbox": target.sandbox, "host": host, "port": port, "kind": "connect",
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/api/v1/policy/decide", bytes.NewReader(body))
+	if err != nil {
+		return egress.Verdict{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if target.token != "" {
+		req.Header.Set("Authorization", "Bearer "+target.token)
+	}
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return egress.Verdict{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return egress.Verdict{}, fmt.Errorf("control plane answered %s", resp.Status)
+	}
+	var out struct {
+		Allow  bool   `json:"allow"`
+		Code   string `json:"code"`
+		Rule   string `json:"rule"`
+		Reason string `json:"reason"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
+		return egress.Verdict{}, err
+	}
+	return egress.Verdict{Allow: out.Allow, Code: out.Code, Rule: out.Rule, Reason: out.Reason, Host: host, Port: port}, nil
 }
 
 // syncEgressPolicy keeps the running proxy in step with the control plane.
@@ -780,6 +856,27 @@ func runRelay(args []string) {
 	}
 }
 
+// applyEgressChildEnv hands the sandbox the proxy's address: the relay's
+// loopback when the network will be taken away, the proxy itself otherwise.
+func applyEgressChildEnv(srv *egress.Server) {
+	if srv.UnixSocket() != "" {
+		// Inside the sandbox the proxy is 127.0.0.1:<relay port>, reached
+		// through the relay the sandbox wrapper starts.
+		toolbox.SetChildEnv(relayProxyEnv(srv.Token(), relayListenAddr))
+		egressRelay = &sandbox.Relay{
+			Binary:             selfBinary(),
+			BinaryInSandbox:    relayBinaryPath,
+			SocketDir:          filepath.Dir(srv.UnixSocket()),
+			SocketDirInSandbox: relaySocketDir,
+			SocketName:         filepath.Base(srv.UnixSocket()),
+			Listen:             relayListenAddr,
+		}
+		return
+	}
+	egressRelay = nil
+	toolbox.SetChildEnv(srv.ProxyEnv())
+}
+
 // installOSSandbox wraps every spawned process in the platform's OS sandbox.
 //
 // This is the layer the other two cannot be: the permission gate covers the
@@ -821,6 +918,15 @@ func installOSSandbox(tb *toolbox.Server) error {
 		policy.NetworkNone = true
 		policy.Relay = egressRelay
 		log.Printf("os sandbox: network namespace removed — the relay at %s is the only route out", relayListenAddr)
+	} else if startedEgress != nil && startedEgress.HTTPAddr() != "" {
+		// No network namespace (macOS), so narrow instead of remove: the only
+		// outbound destination is the proxy's loopback port.
+		if _, portStr, err := net.SplitHostPort(startedEgress.HTTPAddr()); err == nil {
+			if port, perr := strconv.Atoi(portStr); perr == nil {
+				policy.ProxyOnlyPort = port
+				log.Printf("os sandbox: outbound narrowed to 127.0.0.1:%d (the egress proxy)", port)
+			}
+		}
 	}
 	toolbox.SetSandbox(w, policy)
 

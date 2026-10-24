@@ -89,7 +89,7 @@ func (s *Server) handleSOCKS(conn net.Conn) {
 		return
 	}
 
-	verdict := s.policy.Load().Decide(host, port)
+	verdict := s.decide(context.Background(), host, port)
 	if !verdict.Allow {
 		s.record(Event{Kind: CodeSOCKS, Host: verdict.Host, Port: verdict.Port,
 			Code: verdict.Code, Rule: verdict.Rule, Reason: verdict.Reason, Method: "CONNECT"})

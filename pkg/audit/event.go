@@ -73,6 +73,11 @@ type Event struct {
 	// SessionID is the sandbox session id when known.
 	SessionID string `json:"session_id,omitempty"`
 
+	// ModelReason is the same refusal written for the agent: one line of
+	// English with what was refused and what to do instead. Reason is what the
+	// person at the machine saw; this is what the model is told.
+	ModelReason string `json:"model_reason,omitempty"`
+
 	// Reason — for deny events, the human-readable explanation.
 	// For warn events, the matched command name. For allow, usually empty.
 	Reason string `json:"reason,omitempty"`

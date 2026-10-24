@@ -10,6 +10,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
+- **Decider mode: per-connection verdicts from the control plane**
+  (`-egress-mode=decider`, `POST /api/v1/policy/decide`). `-egress-mode=server`
+  polls a copy of the policy; this one holds no rules at all and asks for every
+  destination, so a tightened rule applies to the next connection instead of the
+  next sync, and the server sees each decision as it happens. A decider that
+  cannot answer is a denial (`X-Deny-Reason: decider_unavailable`), never an
+  allow — an unreachable policy server must not become an open proxy — and a
+  10-second per-destination cache keeps a page load from becoming a round trip
+  per socket. The address check (loopback, link-local, cloud metadata, own
+  addresses) stays local: name resolution is not a policy question and should
+  not depend on the network.
+
+- **Every refusal now carries two explanations.** `Reason` stays the localized
+  string the person sees in the consent dialog; `ModelReason` is one line of
+  English with what was refused and what to do instead, and it is what the tool
+  result hands back to the agent (`Decision.Explanation()`). Both land in the
+  audit record (`reason`, `model_reason`), so "why did the agent keep retrying"
+  has an answer. A localized UI string surfaced to a model is noise it cannot
+  act on; an English imperative in a dialog reads as a bug to the human.
+
+- **macOS egress is narrowed to the proxy.** No network namespace exists there,
+  so with egress enforcing the Seatbelt profile allows outbound to exactly one
+  destination, `localhost:<proxy port>`. A process that ignores `HTTP_PROXY` can
+  still open a socket — to the proxy, and nowhere else.
+
 - **Mandatory deny: the persistence paths inside a work tree stay write-only
   protected, whatever was granted.** Granting `work_dir` used to mean "write
   anything under it", which included `.git/hooks/pre-commit` — a file that

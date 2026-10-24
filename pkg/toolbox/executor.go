@@ -125,7 +125,9 @@ func (e *Executor) resolveAndAuthorize(ctx context.Context, p string, mode permi
 		SessionID: sessionFromContext(ctx),
 	})
 	if decision.Action == permission.ActionDeny {
-		return "", fmt.Errorf("%w: %s", ErrAccessDenied, decision.Reason)
+		// Explanation() prefers the model-facing text; the human one is for the
+		// dialog and the audit log.
+		return "", fmt.Errorf("%w: %s", ErrAccessDenied, decision.Explanation())
 	}
 	return safe, nil
 }

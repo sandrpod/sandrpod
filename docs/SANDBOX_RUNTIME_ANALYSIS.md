@@ -278,7 +278,7 @@ SBPL 则是后置 deny）。策略直接读 permission store，避免两份清�
 - **验收**：`python3 -c "print(open('$HOME/.ssh/id_rsa').read())"` → `PermissionError`；`echo x >> .git/hooks/pre-commit` → `EPERM`。
 - **成本**：4–6 周（两平台），必须单独立项。
 
-### P1-3 decider 协议 → 中心化策略
+### P1-3 decider 协议 → 中心化策略 — ✅ 已实现（逐连接决策 + 10s 缓存 + 失败即拒）
 
 - **做什么**：把 `pkg/permission` 变成可远程调用的 decider，控制面持有 org 级 allowlist。
 - **为什么**：ASRT 已经把协议、超时、fail-closed、拒绝码定死了，直接对齐能省一轮设计；多租户产品本来就不该把策略放本机 JSON。
@@ -304,7 +304,7 @@ SBPL 则是后置 deny）。策略直接读 permission store，避免两份清�
 - **注意**：4.5 的分支顺序修复已把「危险路径不受 work_dir 放行」这条不变量立住了，本项要把 mandatory deny 接到同一个位置（hardlock 之前）。
 - **成本**：3 天。
 
-### P1-6 违规事件 + 双受众文案
+### P1-6 违规事件 + 双受众文案 — 🟡 双受众（Reason/ModelReason）已实现；内核侧违规事件未做
 
 - **做什么**：① 把"被拒的操作"也记进审计（今天只记决策）；② `Reason` 拆成 `UserReason`（中文弹窗）与 `ModelReason`（英文、一句话、带替代方案）。
 - **为什么**：ASRT 证明了"告诉模型为什么被拒 + 该怎么办"能显著减少重试循环；我们现在 `CheckPTY` 的 `Reason` 是中文 UI 文案（`manager.go`），会一路进审计和工具返回值。

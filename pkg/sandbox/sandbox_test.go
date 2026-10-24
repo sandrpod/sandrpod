@@ -218,3 +218,27 @@ func TestBwrapCommand_RelayWrap(t *testing.T) {
 		t.Errorf("the command's argument was rewritten: %q", args[len(args)-1])
 	}
 }
+
+// macOS has no network namespace, so the profile narrows instead: the only
+// outbound destination is the proxy's loopback port.
+func TestBuildSeatbeltProfile_ProxyOnlyPort(t *testing.T) {
+	work := t.TempDir()
+	profile, err := BuildSeatbeltProfile(Policy{WorkDir: work, ProxyOnlyPort: 3128})
+	if err != nil {
+		t.Fatalf("BuildSeatbeltProfile: %v", err)
+	}
+	if !strings.Contains(profile, `(allow network-outbound (remote ip "localhost:3128"))`) {
+		t.Errorf("outbound should be narrowed to the proxy port:\n%s", profile)
+	}
+	if strings.Contains(profile, "(allow network-outbound)\n") {
+		t.Errorf("the broad outbound allow must not survive narrowing:\n%s", profile)
+	}
+
+	none, err := BuildSeatbeltProfile(Policy{WorkDir: work, NetworkNone: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(none, "(allow network-outbound") {
+		t.Error("NetworkNone must allow no outbound at all")
+	}
+}

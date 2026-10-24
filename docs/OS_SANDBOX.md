@@ -111,11 +111,12 @@ os sandbox:   masked /home/alice/.sandrpod/permissions.json
 
 ## 4. What it does not do
 
-- **On macOS the network is not taken away.** Linux has network namespaces;
-  macOS has no equivalent, so there the egress proxy stays a filter for a
-  process that ignores its environment. The Seatbelt profile could be narrowed
-  to `localhost:<proxy port>`, and that is the next step for this platform —
-  but it is not something this build can verify (§2).
+- **On macOS the network is narrowed, not removed.** There is no network
+  namespace to take away, so the profile restricts outbound to the proxy's
+  loopback port instead: `(allow network-outbound (remote ip "localhost:3128"))`.
+  A process that ignores `HTTP_PROXY` can still open a socket — to the proxy,
+  which is the point; it cannot reach anything else. This only runs when the
+  probe passes (§2), and the profile itself is unverified here.
 - **The network namespace only exists with egress enforcing.** `--unshare-net`
   without a way back to the proxy would leave a sandbox that cannot resolve or
   fetch anything, so the two are switched on together (§4a).

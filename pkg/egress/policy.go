@@ -120,6 +120,10 @@ const (
 	CodeDeniedDomain  = "denied_domain"
 	CodeNotAllowed    = "not_allowed"
 	CodeDeniedAddress = "denied_address"
+	// CodeDeciderUnavailable is reported when a remote decider could not answer
+	// in time. It is a denial, and it says so: a client must be able to tell
+	// "policy said no" from "policy did not answer" when it reads the log.
+	CodeDeciderUnavailable = "decider_unavailable"
 )
 
 // Parse validates and compiles a policy. It returns an error rather than a

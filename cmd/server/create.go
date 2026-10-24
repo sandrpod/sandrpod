@@ -215,6 +215,29 @@ func validateSandboxName(name string) string {
 	return ""
 }
 
+// decideForSandbox evaluates one destination against a sandbox's stored policy.
+//
+// No record, no policy, or a policy that no longer parses all deny: this is the
+// per-connection gate, and the safe reading of "I cannot tell" is no. The reason
+// says which of the three it was, because an operator reading the agent's log
+// needs to know whether to create the sandbox, set a policy, or fix a typo.
+func decideForSandbox(sb *podpkg.SandboxInfo, found bool, host string, port int) egress.Verdict {
+	switch {
+	case !found:
+		return egress.Verdict{Code: egress.CodeNotAllowed, Host: host, Port: port,
+			Reason: "this sandbox is not registered with the control plane; egress is denied"}
+	case sb.Network == nil:
+		return egress.Verdict{Code: egress.CodeNotAllowed, Host: host, Port: port,
+			Reason: "the sandbox has no egress policy; add one with PUT /api/v1/sandboxes/{name}/egress"}
+	}
+	compiled, err := egress.Parse(*sb.Network)
+	if err != nil {
+		return egress.Verdict{Code: egress.CodeNotAllowed, Host: host, Port: port,
+			Reason: "the sandbox's egress policy is invalid; egress is denied until it is fixed"}
+	}
+	return compiled.Decide(host, port)
+}
+
 // validateEgressPolicy compiles a policy without starting anything. It is the
 // create-time and PUT-time gate: a malformed entry, an unknown wildcard shape,
 // an unbracketed IPv6 literal with a port — all of it is reported here, while

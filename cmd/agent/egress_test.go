@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -456,5 +457,67 @@ func TestSandboxPolicyFor(t *testing.T) {
 	}
 	if p.NetworkNone {
 		t.Error("network isolation must not be on without an egress relay")
+	}
+}
+
+// ─── decider mode (per-connection decisions) ────────────────────────────────
+
+func TestFetchEgressDecision(t *testing.T) {
+	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/policy/decide" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		var body struct {
+			Sandbox string `json:"sandbox"`
+			Host    string `json:"host"`
+			Port    int    `json:"port"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body.Sandbox != "sb-egress" || body.Host != "example.com" || body.Port != 443 {
+			t.Errorf("unexpected decide body: %+v", body)
+		}
+		_, _ = io.WriteString(w, `{"allow":false,"code":"not_allowed","reason":"nope"}`)
+	})
+
+	v, err := fetchEgressDecision(context.Background(), egressTarget{apiURL: *apiURL, token: *token, sandbox: *name}, "example.com", 443)
+	if err != nil {
+		t.Fatalf("fetchEgressDecision: %v", err)
+	}
+	if v.Allow || v.Reason != "nope" || v.Code != "not_allowed" {
+		t.Fatalf("verdict = %+v", v)
+	}
+}
+
+// An unreachable control plane must not become an open proxy: the proxy refuses
+// what it cannot decide, with a code that says which of the two it was.
+func TestInstallEgress_DeciderModeDeniesWhenThePlaneIsDown(t *testing.T) {
+	// Point at a server that closes immediately: every decision fails.
+	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	})
+	withEgressFlags(t, "decider", "")
+
+	if err := installEgress(); err != nil {
+		t.Fatalf("installEgress: %v", err)
+	}
+	if startedEgress == nil {
+		t.Fatal("decider mode should have started a proxy")
+	}
+
+	proxyURL, err := url.Parse(startedEgress.ProxyURL())
+	if err != nil {
+		t.Fatalf("parse proxy url: %v", err)
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}, Timeout: 5 * time.Second}
+	resp, err := client.Get("http://example.org/")
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("status=%d, want 403", resp.StatusCode)
+	}
+	if got := resp.Header.Get("X-Deny-Reason"); got != "decider_unavailable" {
+		t.Errorf("X-Deny-Reason = %q, want decider_unavailable", got)
 	}
 }

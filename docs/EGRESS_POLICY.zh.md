@@ -122,6 +122,36 @@ sandrpod-agent -api-url=https://api.example.com -name=sb-1 -token=… \
 - PUT 改的是策略，不是已经建立的连接。代理在**建连时**过滤目的地，已建立的 CONNECT
   隧道会一直carry到关闭。要"立刻全停"，删掉沙箱——它会连同隧道和容器一起关。
 
+### 2.4 decider 模式：agent 手里没有规则
+
+`-egress-mode=decider` 是给"规则只能存在一处"的部署用的。agent 完全不持有策略，
+**每个目标**都问控制面：
+
+```
+POST /api/v1/policy/decide   {"sandbox":"my-laptop","host":"api.example.com","port":443}
+     -> {"allow":true,"code":"allowed","reason":"api.example.com matches allowed_domains"}
+```
+
+它和 `-egress-mode=server`（轮询一份副本）为什么并存：
+
+| | `server`（轮询） | `decider`（逐连接） |
+|---|---|---|
+| 规则在哪 | 两端 | 只在服务端 |
+| 收紧的规则何时生效 | 下次同步（<= `-egress-sync`） | 下一个连接（<= 10s 缓存） |
+| 服务端能否看到每次决策 | 否 | 能 |
+| 代价 | 每个周期一次轮询 | 每个新目标每 10s 一次往返 |
+| 控制面挂掉 | 继续用最后一份副本 | **拒绝** |
+
+最后一行既是重点也是代价：问不到的 decider 等于拒绝（`X-Deny-Reason:
+decider_unavailable`），绝不是放行——连不上策略服务绝不能变成开放代理。按目标缓
+10 秒（`DecideCacheTTL`）是为了不让一次页面加载变成每个 socket 一次往返。
+
+编译后的策略仍然负责**地址检查**：loopback、link-local、云元数据、"本机自己的地址"
+无论 decider 说什么都拒绝——解析地址不是策略问题，不该依赖一次网络往返。
+
+服务端规则很短且刻意保守：未知沙箱、没有策略、策略解析失败，三种都拒绝，且原因里
+写明是哪种。
+
 ### 2.3 在容器里（poder）
 
 容器沙箱执行同一份策略，而且 Docker 提供了代理给不了的那一半：**把容器出去的

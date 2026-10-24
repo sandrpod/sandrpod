@@ -19,13 +19,13 @@ type recordingSink struct {
 }
 
 type auditRecord struct {
-	source, decision, path, mode, caller, sessionID, reason, matchedCommand string
+	source, decision, path, mode, caller, sessionID, reason, modelReason, matchedCommand string
 }
 
-func (r *recordingSink) Record(source, decision, path, mode, caller, sessionID, reason, matchedCommand string) {
+func (r *recordingSink) Record(source, decision, path, mode, caller, sessionID, reason, modelReason, matchedCommand string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.records = append(r.records, auditRecord{source, decision, path, mode, caller, sessionID, reason, matchedCommand})
+	r.records = append(r.records, auditRecord{source, decision, path, mode, caller, sessionID, reason, modelReason, matchedCommand})
 }
 
 func (r *recordingSink) byDecision(d string) []auditRecord {

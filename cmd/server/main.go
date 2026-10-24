@@ -701,6 +701,57 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		http.NotFound(w, r)
 	}))
 
+	// === Policy API ===
+	//
+	// The per-connection decision point for a control-plane-decided sandbox:
+	// an agent with `-egress-mode=decider` asks here for every destination
+	// instead of holding a copy of the rules, so a policy change applies to the
+	// next connection and the server sees every decision as it happens.
+	//
+	// It answers 200 with a verdict in both the allow and the deny case: an
+	// HTTP error would reach the proxy as "decider unavailable", which is a
+	// different fact from "the policy says no" and the proxy reports it
+	// differently on purpose.
+	mux.HandleFunc("/api/v1/policy/decide", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 16<<10)
+		var req struct {
+			Sandbox string `json:"sandbox"`
+			Host    string `json:"host"`
+			Port    int    `json:"port"`
+			Kind    string `json:"kind,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Sandbox == "" || req.Host == "" || req.Port <= 0 {
+			http.Error(w, "sandbox, host and port are required", http.StatusBadRequest)
+			return
+		}
+		ident := identityFrom(r)
+		sb, ok := sandboxStore.Get(req.Sandbox)
+		if ok && !canAccessSandbox(ident, sb) {
+			http.Error(w, "sandbox not found", http.StatusNotFound)
+			return
+		}
+
+		verdict := decideForSandbox(sb, ok, req.Host, req.Port)
+		if verdict.Code != egress.CodeAllowed {
+			log.Printf("policy: deny egress %s:%d for %s (%s)", req.Host, req.Port, req.Sandbox, verdict.Code)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"allow":  verdict.Allow,
+			"code":   verdict.Code,
+			"rule":   verdict.Rule,
+			"reason": verdict.Reason,
+		})
+	}))
+
 	// === Sandbox API ===
 	mux.HandleFunc("/api/v1/sandboxes", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		ident := identityFrom(r)

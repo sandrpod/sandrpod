@@ -171,3 +171,68 @@ func TestValidateEgressPolicy(t *testing.T) {
 		}
 	}
 }
+
+// The per-connection decision endpoint: an agent with -egress-mode=decider
+// asks here instead of holding the rules.
+func TestPolicyDecide(t *testing.T) {
+	handler := newEgressTestHandler(t, &podpkg.SandboxInfo{
+		Name: "sb-decide", State: podpkg.StateRunning, CreatedAt: nowUTC(), LastActivity: nowUTC(),
+		Network: &egress.Policy{AllowedDomains: []string{"api.example.com", "*.npmjs.org"}},
+	})
+
+	decide := func(body string) (code int, out struct {
+		Allow  bool   `json:"allow"`
+		Code   string `json:"code"`
+		Reason string `json:"reason"`
+	}) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/policy/decide", strings.NewReader(body))
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		json.NewDecoder(w.Body).Decode(&out)
+		return w.Code, out
+	}
+
+	code, out := decide(`{"sandbox":"sb-decide","host":"api.example.com","port":443}`)
+	if code != http.StatusOK || !out.Allow {
+		t.Fatalf("allow-listed host: code=%d allow=%v reason=%q", code, out.Allow, out.Reason)
+	}
+
+	code, out = decide(`{"sandbox":"sb-decide","host":"example.org","port":443}`)
+	if code != http.StatusOK || out.Allow {
+		t.Fatalf("unlisted host must be refused in-band: code=%d allow=%v", code, out.Allow)
+	}
+	if out.Reason == "" {
+		t.Error("a refusal must carry a reason the model can read")
+	}
+
+	// A sandbox with no policy denies — and says how to add one.
+	code, out = decide(`{"sandbox":"sb-nopolicy","host":"example.org","port":443}`)
+	if code != http.StatusOK || out.Allow {
+		t.Fatalf("no policy must deny in-band: code=%d allow=%v", code, out.Allow)
+	}
+
+	// Unknown sandbox: still a verdict, not an HTTP error.
+	code, out = decide(`{"sandbox":"nobody","host":"example.org","port":443}`)
+	if code != http.StatusOK || out.Allow {
+		t.Fatalf("unknown sandbox must deny in-band: code=%d allow=%v", code, out.Allow)
+	}
+
+	// Malformed requests are errors.
+	if code, _ := decide(`{"sandbox":"sb-decide"}`); code != http.StatusBadRequest {
+		t.Errorf("missing host/port: code=%d, want 400", code)
+	}
+}
+
+func TestDecideForSandbox_InvalidPolicyDenies(t *testing.T) {
+	sb := &podpkg.SandboxInfo{
+		Name:    "sb-bad",
+		Network: &egress.Policy{AllowedDomains: []string{"http://not-an-entry"}},
+	}
+	v := decideForSandbox(sb, true, "example.com", 443)
+	if v.Allow {
+		t.Fatalf("an unparsable stored policy must deny: %+v", v)
+	}
+	if !strings.Contains(v.Reason, "invalid") {
+		t.Errorf("the reason should say the policy is broken: %q", v.Reason)
+	}
+}

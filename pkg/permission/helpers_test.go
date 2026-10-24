@@ -6,6 +6,7 @@ package permission
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -124,7 +125,7 @@ func TestMatchSessionAllow_ScopedGrantDoesNotLeakToSessionless(t *testing.T) {
 
 func TestNoopAuditSink_RecordDoesNothing(t *testing.T) {
 	// Just exercise the noop sink; must not panic and is a no-op.
-	noopAuditSink{}.Record("s", "d", "p", "m", "c", "sid", "r", "mc")
+	noopAuditSink{}.Record("s", "d", "p", "m", "c", "sid", "r", "mr", "mc")
 }
 
 // recordDecision with an empty action must default to "unknown".
@@ -153,5 +154,49 @@ func TestCheckInternal_DelegatesToCheckBody(t *testing.T) {
 	})
 	if dec.Action != ActionAllow {
 		t.Errorf("checkInternal should allow inside work_dir, got %+v", dec)
+	}
+}
+
+// Every refusal carries two explanations: one for the person (localized, shown
+// in the dialog) and one for the agent (English, actionable). Explanation()
+// is what a caller with no locale surfaces.
+func TestDecision_ExplanationPrefersModelReason(t *testing.T) {
+	d := Decision{Action: ActionDeny, Reason: "路径被锁", ModelReason: "/root/.ssh is hard-locked; ask the user"}
+	if got := d.Explanation(); got != "/root/.ssh is hard-locked; ask the user" {
+		t.Errorf("Explanation = %q", got)
+	}
+	if got := (Decision{Action: ActionDeny, Reason: "only human"}).Explanation(); got != "only human" {
+		t.Errorf("Explanation fallback = %q", got)
+	}
+}
+
+// The audit record keeps both, so a reviewer sees what the user saw and what
+// the model was told.
+func TestGateDenialRecordsBothReasons(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	hook := filepath.Join(root, ".git", "hooks", "pre-commit")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	mgr, _ := newTestManager(t, root, NopNotifier{})
+	sink := &recordingSink{}
+	mgr.SetAuditSink(sink)
+
+	dec := mgr.Check(context.Background(), Request{Path: hook, Mode: ModeWrite})
+	if dec.Action != ActionDeny {
+		t.Fatalf("expected a denial, got %+v", dec)
+	}
+	if dec.ModelReason == "" {
+		t.Error("a denial must carry a model-facing reason")
+	}
+	if len(sink.records) != 1 {
+		t.Fatalf("expected one audit record, got %d", len(sink.records))
+	}
+	if sink.records[0].reason == "" {
+		t.Error("the human reason must be recorded")
 	}
 }

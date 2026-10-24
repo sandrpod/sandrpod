@@ -103,9 +103,11 @@ os sandbox:   masked /home/alice/.sandrpod/permissions.json
 
 ## 4. 它不做什么
 
-- **macOS 上不拿走网络。** Linux 有 network namespace，macOS 没有对应物，所以那边
-  对"无视代理变量的进程"仍然是过滤器。Seatbelt profile 可以收窄到只允许
-  `localhost:<代理端口>`，这是这个平台下一步要做的事——但这版没法验证（见 §2）。
+- **macOS 上网络是收窄，不是拿走。** 没有 network namespace 可拿，所以 profile 改为
+  只允许出站到一个地方：代理的 loopback 端口
+  `(allow network-outbound (remote ip "localhost:3128"))`。无视 `HTTP_PROXY` 的进程
+  还能开 socket——只能开向代理，这正是目的；别处都到不了。这条只在探测通过时生效
+  （见 §2），profile 本身在本机未经验证。
 - **network namespace 只在 egress 生效时才有。** `--unshare-net` 却没有回到代理的
   路，会得到一个既不能解析也不能取任何东西的沙箱，所以两者是一起打开的（见 §4a）。
 - **它不管 toolbox 自己的文件 API。** `fs/*` 是 toolbox 进程里的 Go 代码，不是派生

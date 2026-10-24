@@ -85,6 +85,29 @@ startup, different context. Merging them breaks one or the other.
 - **strict** — `work_dir` silent, everything else **silently denied**. For
   headless machines where nobody is there to answer.
 
+## Two audiences for every refusal
+
+Every refusal carries two explanations, because it has two audiences. `Reason`
+is localized for the person and appears in the consent dialog. `ModelReason` is
+one line of English: what was refused, and what to do instead. It is what the
+tool result carries back into the conversation, and what `Decision.Explanation()`
+returns for any caller that has no locale.
+
+```
+Reason:      路径 "/Users/me/.ssh/id_rsa" 被 hardlock 锁定（可用 sandrpod-tray unlock 解锁）
+ModelReason: /Users/me/.ssh/id_rsa is hard-locked by the operator's policy and cannot be
+             read or written; do not retry, and ask the user to unlock it in the tray if
+             this is genuinely needed
+```
+
+Both go into the audit record (`reason`, `model_reason`), so a reviewer can see
+what the user saw *and* what the model was told — a difference that matters when
+the question is "why did the agent keep trying".
+
+The split is not cosmetic: a localized UI string handed to a model reads as
+noise it cannot act on, and an English imperative shown in a dialog reads as a
+bug to the person clicking it.
+
 ## Audit
 
 Every decision is written to a local NDJSON log (`~/.sandrpod/audit/`,

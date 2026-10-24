@@ -135,6 +135,42 @@ Two storage-level notes, because they are the parts that surprise people:
   carrying bytes until it closes. For "stop everything now", delete the
   sandbox — that closes the tunnel and the container with it.
 
+### 2.4 Decider mode: the agent holds no rules
+
+`-egress-mode=decider` is for the deployment that wants the rules to live in
+exactly one place. The agent starts with no policy at all and asks the control
+plane for **every destination**:
+
+```
+POST /api/v1/policy/decide   {"sandbox":"my-laptop","host":"api.example.com","port":443}
+     -> {"allow":true,"code":"allowed","reason":"api.example.com matches allowed_domains"}
+```
+
+Why it exists next to `-egress-mode=server` (which polls a copy of the policy):
+
+| | `server` (poll) | `decider` (per connection) |
+|---|---|---|
+| Where the rules live | both ends | only the server |
+| A tightened rule lands | at the next sync (<= `-egress-sync`) | at the next connection (<= 10s cache) |
+| Server sees each decision | no | yes |
+| Cost | one poll per interval | one round trip per new destination per 10s |
+| Control plane down | keeps the last copy | **denies** |
+
+The last row is both the point and the cost. A decider that cannot answer is a
+denial (`X-Deny-Reason: decider_unavailable`), never an allow: an unreachable
+policy server must not turn into an open proxy. The 10-second per-destination
+cache (`DecideCacheTTL`) is what keeps a page load from becoming a round trip
+per socket.
+
+The compiled policy still applies to the **address check** — loopback,
+link-local, cloud metadata and this host's own addresses are refused on the
+resolved address no matter what a decider says. Name resolution is not a policy
+question, and it should not depend on a network round trip.
+
+The server-side rule is small and deliberately paranoid: an unknown sandbox, a
+sandbox with no policy, and a policy that no longer parses all deny, each with a
+reason that says which of the three it was.
+
 ### 2.3 In a container (poder)
 
 A container sandbox enforces the same policy, and Docker supplies the part a

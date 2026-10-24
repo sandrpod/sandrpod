@@ -23,6 +23,7 @@
 package egress
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -33,6 +34,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -86,6 +88,25 @@ type Options struct {
 	// read the port back from the server.
 	HTTPPort  int
 	SOCKSPort int
+	// Decide, when set, replaces the local policy as the *verdict* source: the
+	// proxy asks it per connection instead of consulting the compiled policy.
+	// That is what a control-plane-decided sandbox is — the rules live at the
+	// server, the agent holds none, and a tightened policy applies to the next
+	// connection rather than the next poll.
+	//
+	// The compiled Policy still applies to the address check (which IP literals
+	// are explicitly allowed, which CIDRs are refused), because that part is
+	// about what a name may resolve to and needs no round trip.
+	//
+	// An error or a timeout is a denial. A decider that cannot answer must not
+	// be a decider that allows.
+	Decide func(ctx context.Context, host string, port int) (Verdict, error)
+	// DecideTimeout bounds one decider call. Default 5s.
+	DecideTimeout time.Duration
+	// DecideCacheTTL caches verdicts per destination. Zero disables caching.
+	// A small TTL keeps a loop of requests from becoming a loop of round
+	// trips, at the cost of a policy change landing up to that much later.
+	DecideCacheTTL time.Duration
 	// UnixSocketPath makes the HTTP proxy listen on a unix socket instead of
 	// TCP. That is what a sandbox with its own network namespace needs: it has
 	// loopback and nothing else, so a TCP listener on the host is unreachable,
@@ -117,6 +138,9 @@ type Server struct {
 	// unixSocket is set when the HTTP proxy listens on a unix socket instead of
 	// TCP (a sandbox with its own network namespace).
 	unixSocket string
+	// verdicts caches decider answers when Decide is set.
+	verdictMu sync.Mutex
+	verdicts  map[string]cachedVerdict
 
 	// policy is the live allow-list. Start installs the first one; a
 	// control-plane sync calls UpdatePolicy later, and every decision reads
@@ -145,10 +169,16 @@ func Start(opts Options) (*Server, error) {
 		opts.DialTimeout = 30 * time.Second
 	}
 
+	if opts.Decide != nil {
+		if opts.DecideTimeout <= 0 {
+			opts.DecideTimeout = 5 * time.Second
+		}
+	}
 	s := &Server{
-		opts:   opts,
-		token:  token,
-		dialer: newDialer(opts.Policy, opts.DialTimeout),
+		opts:     opts,
+		token:    token,
+		dialer:   newDialer(opts.Policy, opts.DialTimeout),
+		verdicts: make(map[string]cachedVerdict),
 	}
 	s.policy.Store(opts.Policy)
 	s.transport = s.newTransport()
@@ -197,6 +227,52 @@ func Start(opts Options) (*Server, error) {
 
 	return s, nil
 }
+
+// cachedVerdict is one decider answer held for DecideCacheTTL.
+type cachedVerdict struct {
+	verdict Verdict
+	until   time.Time
+}
+
+// decide returns the verdict for a destination: the decider's when one is
+// installed, the compiled policy's otherwise. Every failure path is a denial
+// with a reason, because "the decider timed out" must not read as "allowed".
+func (s *Server) decide(ctx context.Context, host string, port int) Verdict {
+	if s.opts.Decide == nil {
+		return s.policy.Load().Decide(host, port)
+	}
+	key := host + ":" + itoa(port)
+	if ttl := s.opts.DecideCacheTTL; ttl > 0 {
+		s.verdictMu.Lock()
+		if c, ok := s.verdicts[key]; ok && time.Now().Before(c.until) {
+			s.verdictMu.Unlock()
+			return c.verdict
+		}
+		s.verdictMu.Unlock()
+	}
+
+	dctx, cancel := context.WithTimeout(ctx, s.opts.DecideTimeout)
+	defer cancel()
+	v, err := s.opts.Decide(dctx, host, port)
+	if err != nil {
+		return Verdict{Code: CodeDeciderUnavailable, Host: host, Port: port,
+			Reason: "the policy decider did not answer; the connection is refused rather than allowed"}
+	}
+	if v.Host == "" {
+		v.Host = host
+	}
+	if v.Port == 0 {
+		v.Port = port
+	}
+	if s.opts.DecideCacheTTL > 0 {
+		s.verdictMu.Lock()
+		s.verdicts[key] = cachedVerdict{verdict: v, until: time.Now().Add(s.opts.DecideCacheTTL)}
+		s.verdictMu.Unlock()
+	}
+	return v
+}
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 // UpdatePolicy replaces the allow-list of a running server.
 //
