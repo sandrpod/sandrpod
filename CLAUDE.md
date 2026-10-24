@@ -131,7 +131,7 @@ Client → API Server (Control Plane)
 - `pkg/store/`: Repository implementations — in-memory adapter (`memory.go`) and a dialect-parameterised SQL backend (`sqldb/`) that targets **either SQLite or PostgreSQL from one codebase** (a thin `Dialect` handles placeholder rebinding, DDL types, and the `FOR UPDATE SKIP LOCKED` job claim). A given server instance uses exactly one backend, chosen at startup by the `-db` DSN scheme (`sqlite:` / `postgres://`) — not both simultaneously. Plug-in via `store.Stores` aggregate.
 - `pkg/tunnel/`: WebSocket + yamux reverse tunnel (`PoderTunnel`, `TunnelStore`). Used by both Poder and sandrpod-agent.
 - `pkg/toolbox/`: Code execution engine with PTY, file operations, and process management.
-- `pkg/permission/`: Decision engine for employee-PC mode. 5-branch policy (work_dir → hardlock → permanent → session → ask). Includes `Store` (atomic JSON), `Manager`, `IPCClient/Server`, command policy scanner, and default hardlock seeds.
+- `pkg/permission/`: Decision engine for employee-PC mode. 5-branch policy (hardlock → work_dir → permanent → session → ask). Includes `Store` (atomic JSON), `Manager`, `IPCClient/Server`, command policy scanner, and default hardlock seeds.
 - `pkg/notify/`: Cross-platform consent dialog. macOS: `osascript display dialog`; Linux: `zenity`/`kdialog`; Windows: PowerShell `MessageBox`. Fail-close (timeout/error → deny).
 - `pkg/audit/`: Local NDJSON audit log (`Recorder`, auto-rotate at 8 MiB) + background HTTP uploader (`Uploader`, at-least-once delivery). Decoupled from `pkg/permission` via `AuditSink` interface.
 

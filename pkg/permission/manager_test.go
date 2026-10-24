@@ -31,6 +31,11 @@ func (s *stubNotifier) Ask(ctx context.Context, req Request) (PromptResponse, er
 
 func newTestManager(t *testing.T, workDir string, notifier Notifier) (*Manager, *Store) {
 	t.Helper()
+	return newTestManagerWithHome(t, workDir, "/Users/test", notifier)
+}
+
+func newTestManagerWithHome(t *testing.T, workDir, homeDir string, notifier Notifier) (*Manager, *Store) {
+	t.Helper()
 	storePath := filepath.Join(t.TempDir(), "permissions.json")
 	store, err := LoadStore(storePath)
 	if err != nil {
@@ -40,7 +45,7 @@ func newTestManager(t *testing.T, workDir string, notifier Notifier) (*Manager, 
 		Store:    store,
 		Notifier: notifier,
 		WorkDir:  workDir,
-		HomeDir:  "/Users/test",
+		HomeDir:  homeDir,
 	})
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)

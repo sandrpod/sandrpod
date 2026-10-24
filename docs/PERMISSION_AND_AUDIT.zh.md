@@ -99,7 +99,7 @@ SandrPod 的核心场景从"AI agent 跑在隔离容器里"扩展到"AI agent �
 |---|---|---|
 | `types.go` | ~130 | `Mode` / `RuleScope` / `Action` / `Rule` / `Snapshot` 等数据模型 |
 | `store.go` | ~195 | `permissions.json` 原子读写（tmp+rename），chmod 0600 |
-| `manager.go` | ~330 | 5-分支决策引擎：work_dir → hardlock → permanent → session → ask |
+| `manager.go` | ~330 | 5-分支决策引擎：hardlock → work_dir → permanent → session → ask |
 | `notifier.go` | ~55 | `Notifier` 接口 + `NopNotifier`（fail-close）/ `AlwaysAllowNotifier`（headless test） |
 | `ipc.go` | ~280 | `IPCClient` + `IPCServer`，跨进程 Notifier |
 | `seeds.go` | ~100 | `DefaultHardlockSeeds()` (~13 条) + `DefaultCommandPolicy()` |
@@ -132,13 +132,13 @@ ptyDec := mgr.CheckPTY(ctx, sandboxName, sessionID)
 
 **决策优先级**（必须不可跳）：
 
-1. `work_dir` 内 → silent allow（无 audit）
-2. hardlock 命中 → silent deny（仅 audit）
+1. hardlock 命中 → silent deny（仅 audit）
+2. `work_dir` 内 → silent allow（无 audit）
 3. permanent rule 命中 → allow
 4. session grant 未过期 → allow
 5. 全部不命中 → 调 `Notifier.Ask()` 弹同意框
 
-**重要不变量**：hardlock **永远赢过** permanent（即使有人手工编辑 `permissions.json` 把 hardlock 覆盖成 permanent，`upsertRule` 会拒绝）。
+**重要不变量**：hardlock **永远赢过** permanent 与 `work_dir`（前者由 `upsertRule` 守住，即使有人手工编辑 `permissions.json` 把 hardlock 覆盖成 permanent 也会被拒绝；后者由分支顺序守住——`work_dir` 默认是 agent 的启动目录，从 `~` 启动时它就等于 home，若 work_dir 分支先跑，`~/.ssh`、`~/.aws` 乃至 `~/.sandrpod/permissions.json` 都会被静默放行）。work_dir 里含有 hardlock 路径时，agent 启动会打一条 WARNING。
 
 ---
 
@@ -290,8 +290,8 @@ resolveAndAuthorize(ctx, path, ModeRead, "files.list")
     │
     └─► permMgr.Check(ctx, req)
             │
-            ├─► 1. work_dir 内? → ALLOW（无 audit）
-            ├─► 2. hardlock?    → DENY (audit, no prompt)
+            ├─► 1. hardlock?    → DENY (audit, no prompt)
+            ├─► 2. work_dir 内? → ALLOW（无 audit）
             ├─► 3. permanent?   → ALLOW (audit)
             ├─► 4. session?     → ALLOW (audit)
             └─► 5. 都没命中     → IPCClient.Ask()

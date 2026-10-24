@@ -33,16 +33,22 @@ Five branches, first match wins, in `pkg/permission/manager.go`:
 
 | | Branch | Outcome |
 |---|---|---|
-| 1 | Inside the agent's `work_dir` | allow, silently |
-| 2 | **Hardlock** (`~/.ssh`, `~/.aws`, Keychain, IM databases) | **deny** |
+| 1 | **Hardlock** (`~/.ssh`, `~/.aws`, Keychain, IM databases) | **deny** |
+| 2 | Inside the agent's `work_dir` | allow, silently |
 | 3 | Standing permanent grant | allow |
 | 4 | Live session grant (with TTL) | allow |
 | 5 | Otherwise | ask the human |
 
-The hardlock check runs **before** any allow-rule lookup. That ordering is the
-point: an accidentally-permanent rule on `~/.ssh` can never take effect, and a
-hardlock can only be lifted from the CLI (`sandrpod-tray unlock <path>
---i-understand-the-risk`), never from the GUI.
+The hardlock check runs **before** every allow path, `work_dir` included. That
+ordering is the point: an accidentally-permanent rule on `~/.ssh` can never take
+effect, and neither can a broad `work_dir`. It used to run second, which was a
+real hole — `work_dir` defaults to the directory the agent was started from
+(`-work-dir` unset → the process's cwd), so launching the agent from `~` made
+`work_dir` the home directory and silently re-opened every seeded hardlock,
+including `~/.sandrpod/permissions.json`. A hardlock can only be lifted from the
+CLI (`sandrpod-tray unlock <path> --i-understand-the-risk`), never from the GUI
+and never by widening `work_dir`. The agent logs a warning when its `work_dir`
+contains hardlocked paths.
 
 The prompt is a native dialog — `osascript` on macOS, `zenity`/`kdialog` on
 Linux, PowerShell `MessageBox` on Windows — and it **fails closed**: a timeout

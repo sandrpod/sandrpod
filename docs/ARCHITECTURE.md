@@ -320,9 +320,11 @@ deployments.
 
 **Five-branch decision** (`pkg/permission/manager.go`), first match wins:
 
-1. **work_dir** — inside the agent's working directory, allow silently
-2. **hardlock** — deny. Checked *before* any allow-rule lookup, so an
-   accidentally-permanent rule on `~/.ssh` can never take effect
+1. **hardlock** — deny. Checked *before* any allow path, `work_dir` included,
+   so neither an accidentally-permanent rule on `~/.ssh` nor a `work_dir` that
+   happens to contain it (the default is the directory the agent was started
+   from, often `$HOME`) can take effect
+2. **work_dir** — inside the agent's working directory, allow silently
 3. **permanent rule** — a standing grant the user added
 4. **session grant** — a time-limited grant with a TTL
 5. **ask the human** — native dialog, and persist the answer if the user chose

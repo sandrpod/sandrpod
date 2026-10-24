@@ -320,8 +320,19 @@ func installPermissionGate(tb *toolbox.Server) error {
 	}
 	exec.SetPermissionManager(mgr)
 
+	workDir := exec.GetWorkDirForPermission()
 	log.Printf("Permission gate enabled (mode=%s, store=%s, work_dir=%s)",
-		mode, storePath, exec.GetWorkDirForPermission())
+		mode, storePath, workDir)
+
+	// A work_dir that swallows hardlocked paths is a policy smell, not a
+	// breach: checkBody tests hardlocks first, so ~/.ssh stays denied even
+	// when the agent was started from $HOME. Say so anyway — the operator
+	// probably meant to scope the agent to a project directory, and they
+	// would rather learn it here than from a denial in the audit log.
+	if overlapped := permission.HardlocksUnder(workDir, store.Snapshot().Rules, ""); len(overlapped) > 0 {
+		log.Printf("WARNING: work_dir %s contains %d hardlocked path(s) (%s); they remain denied — pass -work-dir to scope the agent to a project directory",
+			workDir, len(overlapped), strings.Join(overlapped, ", "))
+	}
 	return nil
 }
 

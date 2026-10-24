@@ -10,6 +10,7 @@ grouped below. Docs marked **(中文)** are written in Chinese.
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) ([中文](ARCHITECTURE.zh.md)) | The implemented architecture: API Server, Poder workers, Toolbox, reverse tunnel, E2B gateway, permission gate, MCP bridge, state machine, request flows |
 | [ROADMAP.md](ROADMAP.md) | Product-gap analysis vs E2B/Modal/Daytona and the prioritized plan |
+| [SANDBOX_RUNTIME_ANALYSIS.md](SANDBOX_RUNTIME_ANALYSIS.md) (中文) | Anthropic Sandbox Runtime (srt) 拆解、与 SandrPod 的差异矩阵、实测记录，以及按优先级/工期排好的可借鉴清单 |
 
 ## Releasing
 
@@ -76,7 +77,7 @@ before you pick one to try first:
 
 | Doc | What it covers |
 |---|---|
-| [PERMISSION_AND_AUDIT.md](PERMISSION_AND_AUDIT.md) ([中文](PERMISSION_AND_AUDIT.zh.md)) | The consent gate (work_dir → hardlock → permanent → session → ask), native dialogs, `sandrpod-tray`, and the decision-audit upload pipeline |
+| [PERMISSION_AND_AUDIT.md](PERMISSION_AND_AUDIT.md) ([中文](PERMISSION_AND_AUDIT.zh.md)) | The consent gate (hardlock → work_dir → permanent → session → ask), native dialogs, `sandrpod-tray`, and the decision-audit upload pipeline |
 
 ## Agent skills
 

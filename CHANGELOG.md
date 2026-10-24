@@ -8,7 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
-_Nothing yet._
+### Fixed
+
+- **A broad `work_dir` silently re-opened every hardlock.** The permission gate
+  tested `work_dir` before the hardlock list, and `work_dir` defaults to the
+  directory `sandrpod-agent` was started from (`-work-dir` unset →
+  `os.Getwd()`). Launched from a home directory — the ordinary double-click or
+  launchd case — `work_dir` was `$HOME`, so `~/.ssh`, `~/.aws` and
+  `~/.sandrpod/permissions.json` all matched the silent-allow branch first: none
+  of the seeded hardlocks ever ran, and the gate could rewrite its own rules
+  through the file API. The hardlock branch now runs before every allow path,
+  and the agent logs a warning when its `work_dir` contains hardlocked paths
+  (with the advice to scope it with `-work-dir`). Regression tests pin the
+  order: `TestCheck_HardlockBeatsWorkDir`,
+  `TestCheck_HardlockBeatsWorkDir_PolicyFileNotWritable` and
+  `TestHardlocksUnder`. Found while comparing our boundary with Anthropic's
+  [sandbox-runtime](https://github.com/anthropics/sandbox-runtime), which makes
+  the same invariant explicit — a mandatory deny applies inside an allowed
+  root. See `docs/SANDBOX_RUNTIME_ANALYSIS.md` §4.5.
 
 ## [0.5.5] — 2026-08
 

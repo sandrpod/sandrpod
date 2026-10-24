@@ -17,6 +17,10 @@
 *-windows
 
 # Go build cache
+# `.gocache/` is what `GOCACHE=$PWD/.gocache go test ./...` leaves behind when
+# the default cache dir under $HOME is not writable (sandboxed CI, EDR'd
+# laptops). It is 100 MB+ of compiled artifacts, never source.
+.gocache/
 *.test
 *.out
 coverage.out

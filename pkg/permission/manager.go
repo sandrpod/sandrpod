@@ -4,11 +4,15 @@
 // Check() is the single entry point called by Executor.resolveSafePath after
 // the existing system-path blacklist passes. The flow is:
 //
-//   1. Path under work_dir?      → ALLOW (silent, no prompt)
-//   2. Path under hardlock entry? → DENY  (silent, audit only)
+//   1. Path under hardlock entry? → DENY  (silent, audit only)
+//   2. Path under work_dir?      → ALLOW (silent, no prompt)
 //   3. Permanent rule covers it?  → ALLOW
 //   4. Live session grant covers? → ALLOW
 //   5. Otherwise                  → ASK the notifier; persist on grant
+//
+// The hardlock branch is first on purpose: work_dir is a convenience, and a
+// broad one (it defaults to the directory the agent was started from, often
+// $HOME) must never widen a hardlock. See the note in checkBody.
 //
 // This mirrors macOS's TCC model: most things are quietly allowed inside the
 // sandbox root, sensitive paths require explicit consent, and a small
@@ -153,19 +157,30 @@ func (m *Manager) checkBody(ctx context.Context, req Request) Decision {
 		req.Path = canonical
 	}
 
-	// 1. work_dir is the silent-allow zone.
-	if m.workDir != "" && pathInside(req.Path, m.workDir) {
-		return Decision{Action: ActionAllow}
-	}
-
-	// 2. Hardlock check — must run before any allow-rule lookup so that an
-	//    accidentally-permanent rule on a hardlocked path can never sneak in.
+	// 1. Hardlock check — first, ahead of EVERY allow path, work_dir included.
+	//
+	//    The work_dir shortcut used to run first, and that was a hole. work_dir
+	//    defaults to the directory the agent was started from (`-work-dir`
+	//    unset → os.Getwd(), see toolbox.defaultWorkDir), which for the
+	//    ordinary double-click / launchd / "run it from my home folder" install
+	//    IS $HOME. With work_dir == ~, every hardlock under the home directory
+	//    — ~/.ssh, ~/.aws, and ~/.sandrpod/permissions.json itself — matched
+	//    the work_dir branch and was silently allowed, so the gate could
+	//    re-grant its own rules. A hardlock is an invariant of the sandbox, not
+	//    something a broad work_dir may widen. The ordering is load-bearing:
+	//    do not move this below the work_dir branch.
 	snap := m.store.Snapshot()
 	if hit := matchHardlock(req.Path, snap.Rules, m.homeDir); hit != nil {
 		return Decision{
 			Action: ActionDeny,
 			Reason: fmt.Sprintf("path %q is hard-locked (use `sandrpod-tray unlock` to enable)", req.Path),
 		}
+	}
+
+	// 2. work_dir is the silent-allow zone — everything beneath it that no
+	//    hardlock covers.
+	if m.workDir != "" && pathInside(req.Path, m.workDir) {
+		return Decision{Action: ActionAllow}
 	}
 
 	// 3. Permanent rule check.
@@ -530,6 +545,41 @@ func matchHardlock(path string, rules []Rule, home string) *Rule {
 		}
 	}
 	return nil
+}
+
+// HardlocksUnder reports the hardlock entries that live inside dir, in their
+// stored (unexpanded) form, e.g. ["~/.ssh", "~/.sandrpod/permissions.json"].
+//
+// It exists to make a policy smell visible at startup rather than only in a
+// denial an hour later: when work_dir is the employee's home directory (the
+// default once `-work-dir` is left unset and the agent is launched from `~`),
+// every seeded hardlock sits under it. Since checkBody tests hardlocks before
+// work_dir this is no longer a hole — those paths are denied as they should
+// be, and that is exactly what makes the case worth printing: the operator
+// thinks they handed the agent their whole home directory, and ~/.ssh
+// silently behaves differently. The fix is a narrower `-work-dir`.
+//
+// home expands a leading "~" in stored rules; pass "" to use the current
+// user's home directory.
+func HardlocksUnder(dir string, rules []Rule, home string) []string {
+	root, err := canonicalize(dir)
+	if err != nil || root == "" {
+		return nil
+	}
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	var out []string
+	for _, r := range rules {
+		if r.Scope != ScopeHardlock {
+			continue
+		}
+		rp := ruleAbsPath(r.Path, home)
+		if pathInside(rp, root) {
+			out = append(out, r.Path)
+		}
+	}
+	return out
 }
 
 // matchAllow reports whether any permanent allow-rule covers req.
