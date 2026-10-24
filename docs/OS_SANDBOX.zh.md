@@ -99,17 +99,43 @@ os sandbox:   masked /home/alice/.sandrpod/permissions.json
 
 ## 4. 它不做什么
 
-- **它不拿走网络。** Linux 上 `--unshare-net` 已实现（`Policy.NetworkNone`）但默认
-  关闭：egress 代理听在宿主 loopback 上，没有桥接的沙箱连代理都够不着。补上它需要
-  sandbox-runtime 那套中继（unix socket bind 进沙箱 + 里面一个极小的 relay），是
-  另一件事。在那之前，笔记本上的出网仍是**过滤器**（见
-  [EGRESS_POLICY.zh.md](EGRESS_POLICY.zh.md)）；容器里已经是墙。
+- **macOS 上不拿走网络。** Linux 有 network namespace，macOS 没有对应物，所以那边
+  对"无视代理变量的进程"仍然是过滤器。Seatbelt profile 可以收窄到只允许
+  `localhost:<代理端口>`，这是这个平台下一步要做的事——但这版没法验证（见 §2）。
+- **network namespace 只在 egress 生效时才有。** `--unshare-net` 却没有回到代理的
+  路，会得到一个既不能解析也不能取任何东西的沙箱，所以两者是一起打开的（见 §4a）。
 - **它不管 toolbox 自己的文件 API。** `fs/*` 是 toolbox 进程里的 Go 代码，不是派生
   命令；那是 permission gate 的边界，照旧生效。
 - **它挡不住恶意的工具链设计。** profile 是策略，不是证明：漏一个遮蔽、或某条
   allow 比预期宽，就是洞。hardlock 用显式挂载遮蔽而不是靠规则"排除"，所以失败方式
   是可见的（一个路径要么被盖住，要么没有）。
 - **macOS 的语义没被验证。** 见上表。
+
+### 4a. 网络（Linux）
+
+egress 代理生效时，沙箱同时拿到自己的 network namespace，代理改听 unix socket：
+
+```
+sandbox netns（只有 loopback）
+   127.0.0.1:3128  ←  relay  ──→  host: /tmp/sandrpod-egress-*/proxy.sock
+                                     （egress 代理，带策略）
+```
+
+- `--unshare-net` 让沙箱只剩 loopback——没有路由、没有 DNS、够不着宿主服务；
+- 代理改听 **unix socket** 而不是端口（`egress.Options.UnixSocketPath`）；
+- socket 目录和 agent 二进制（它自己兼作 relay：`sandrpod-agent relay …`）以只读
+  方式 bind 进沙箱；
+- wrapper 先起 relay、等就绪文件，再 `exec "$@"`——真正的 argv 走 `$@`，绝不做字符串
+  拼接，因为那个参数可能是任意代码；
+- 沙箱内的代理变量指向 `127.0.0.1:3128`，也就是 relay。
+
+无视代理变量的进程现在什么都到不了。已在特权容器里端到端验证
+（`pkg/sandbox/netns_linux_test.go`）：不走代理完全没路由；白名单主机经
+relay → 代理取到；不在名单的主机经同一条路被拒。
+
+为什么非要 relay：没有网络的沙箱够不着宿主上的 TCP 监听，而 `curl` 又不会说 unix
+socket。relay 是桥接两者的最小东西，它自己没有任何策略——每个字节都交给代理，由代理
+决定。
 
 ---
 
@@ -124,8 +150,9 @@ docker run --rm --privileged -v /tmp:/mnt alpine:3.20 \
 ```
 
 它对一个真实的沙箱化进程断言：允许的文件能读；hardlock 文件读不到（也不泄漏内容）；
-hardlock 目录列不出来；工作树内可写；工作树外的写永远到不了宿主；`--unshare-net`
-真的拿掉了网络。
+hardlock 目录列不出来；工作树内可写；工作树外的写永远到不了宿主。
+`-test.run NetnsRelay` 再补网络那半：不走代理完全没路由；白名单主机经 relay → 代理
+取到；不在名单的主机被拒。
 
 macOS 上，在一台本身没有被沙箱化的机器上：
 

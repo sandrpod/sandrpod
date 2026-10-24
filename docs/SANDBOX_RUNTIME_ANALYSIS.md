@@ -266,7 +266,10 @@ SBPL 则是后置 deny）。策略直接读 permission store，避免两份清�
 **Linux 已实测**（特权容器里跑真实沙箱化命令：hardlock 读不到、目录列不出、树外写
 落不了盘、`--unshare-net` 真的断网）；**macOS 未验证**——`sandbox-exec` 不能在已沙箱化
 的进程里嵌套，只能靠启动探测把关，文档里标了 experimental。
-未做：把网络也拿走（需要 unix socket + relay 那套桥接）。
+**Linux 上网络也拿走了**：`--unshare-net` + 代理改听 unix socket + 沙箱内 relay
+（`sandrpod-agent relay`）——无视代理变量的进程什么都到不了，已在特权容器里端到端
+验证。仍未做：macOS 的网络收窄（Seatbelt 可只放行 localhost:代理端口，但本机无法
+验证）。
 
 - **做什么**：由 `permissions.json` 生成强制层——macOS 生成 SBPL 跑 `sandbox-exec`；Linux 用 bwrap 把 hardlock 路径 tmpfs/ro-bind 覆盖掉。
 - **为什么**：`open("~/.ssh/id_rsa")` 目前直达 syscall，hardlock 对"跑代码"无效；这是把"consent gate"升级成"沙箱"的唯一途径。

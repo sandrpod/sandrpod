@@ -10,6 +10,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
+- **The network namespace on Linux, with a relay so the proxy survives it.**
+  With `-os-sandbox=bwrap|auto` and egress enforcing, a sandboxed process now
+  runs in its own network namespace (`--unshare-net`): loopback and nothing
+  else — no route, no DNS, no host services. The egress proxy moves to a unix
+  socket for that mode (`egress.Options.UnixSocketPath`), the socket directory
+  and the agent binary (which doubles as the relay, `sandrpod-agent relay …`)
+  are bound into the sandbox read-only, and a shell wrapper starts the relay,
+  waits for its ready file, then `exec "$@"` — the argv travels through `$@` so
+  arbitrary code is never re-parsed. Proxy variables inside point at
+  `127.0.0.1:3128`, the relay. A process that ignores them now reaches nothing
+  at all: on Linux with this on, the laptop's egress is a wall, not a filter.
+  Verified end to end in a privileged container
+  (`TestNetnsRelay_ProxyIsTheOnlyWayOut`): no route without the proxy, an
+  allow-listed host through relay → proxy, an unlisted host refused. macOS has
+  no equivalent and stays a filter for proxy-unaware processes.
+
 - **An OS sandbox for spawned processes** (`pkg/sandbox`, `-os-sandbox`,
   `SANDRPOD_OS_SANDBOX`). The gate covers the file API and the egress proxy
   covers proxy-aware clients; neither sees a process that calls `open(2)` or

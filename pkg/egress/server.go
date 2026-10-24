@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -85,6 +86,12 @@ type Options struct {
 	// read the port back from the server.
 	HTTPPort  int
 	SOCKSPort int
+	// UnixSocketPath makes the HTTP proxy listen on a unix socket instead of
+	// TCP. That is what a sandbox with its own network namespace needs: it has
+	// loopback and nothing else, so a TCP listener on the host is unreachable,
+	// while a socket bind-mounted into the namespace is a file the sandbox can
+	// open. SOCKS stays off in this mode (SOCKS clients dial TCP).
+	UnixSocketPath string
 	// ListenHost is the interface both proxies bind to. Empty means 127.0.0.1,
 	// which is what an agent wants. A container pod binds the gateway address
 	// of its per-pod internal network instead, because that is the only
@@ -107,6 +114,9 @@ type Server struct {
 	httpLn  net.Listener
 	socksLn net.Listener
 	httpSrv *http.Server
+	// unixSocket is set when the HTTP proxy listens on a unix socket instead of
+	// TCP (a sandbox with its own network namespace).
+	unixSocket string
 
 	// policy is the live allow-list. Start installs the first one; a
 	// control-plane sync calls UpdatePolicy later, and every decision reads
@@ -147,18 +157,32 @@ func Start(opts Options) (*Server, error) {
 	if listenHost == "" {
 		listenHost = "127.0.0.1"
 	}
-	httpLn, err := net.Listen("tcp", net.JoinHostPort(listenHost, strconv.Itoa(opts.HTTPPort)))
-	if err != nil {
-		return nil, fmt.Errorf("egress: listen http: %w", err)
-	}
-	s.httpLn = httpLn
+	if opts.UnixSocketPath != "" {
+		// Remove a stale socket left by a previous process; a live one will still
+		// be in use, and net.Listen will report that below.
+		if err := os.Remove(opts.UnixSocketPath); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("egress: clear %s: %w", opts.UnixSocketPath, err)
+		}
+		httpLn, err := net.Listen("unix", opts.UnixSocketPath)
+		if err != nil {
+			return nil, fmt.Errorf("egress: listen on %s: %w", opts.UnixSocketPath, err)
+		}
+		s.httpLn = httpLn
+		s.unixSocket = opts.UnixSocketPath
+	} else {
+		httpLn, err := net.Listen("tcp", net.JoinHostPort(listenHost, strconv.Itoa(opts.HTTPPort)))
+		if err != nil {
+			return nil, fmt.Errorf("egress: listen http: %w", err)
+		}
+		s.httpLn = httpLn
 
-	socksLn, err := net.Listen("tcp", net.JoinHostPort(listenHost, strconv.Itoa(opts.SOCKSPort)))
-	if err != nil {
-		httpLn.Close()
-		return nil, fmt.Errorf("egress: listen socks: %w", err)
+		socksLn, err := net.Listen("tcp", net.JoinHostPort(listenHost, strconv.Itoa(opts.SOCKSPort)))
+		if err != nil {
+			httpLn.Close()
+			return nil, fmt.Errorf("egress: listen socks: %w", err)
+		}
+		s.socksLn = socksLn
 	}
-	s.socksLn = socksLn
 
 	s.httpSrv = &http.Server{
 		Handler:           http.HandlerFunc(s.serveHTTP),
@@ -166,8 +190,10 @@ func Start(opts Options) (*Server, error) {
 		// No read/write timeout on the whole connection: a CONNECT tunnel and
 		// a long-poll response are both legitimately idle for a long time.
 	}
-	go func() { _ = s.httpSrv.Serve(httpLn) }()
-	go s.acceptSOCKS()
+	go func() { _ = s.httpSrv.Serve(s.httpLn) }()
+	if s.socksLn != nil {
+		go s.acceptSOCKS()
+	}
 
 	return s, nil
 }
@@ -210,6 +236,10 @@ func (s *Server) Close() error {
 			first = err
 		}
 	}
+	// The socket file is not removed by closing the listener.
+	if s.unixSocket != "" {
+		_ = os.Remove(s.unixSocket)
+	}
 	if s.transport != nil {
 		s.transport.CloseIdleConnections()
 	}
@@ -219,8 +249,17 @@ func (s *Server) Close() error {
 // HTTPAddr is the host:port of the HTTP proxy.
 func (s *Server) HTTPAddr() string { return s.httpLn.Addr().String() }
 
-// SOCKSAddr is the host:port of the SOCKS5 proxy.
-func (s *Server) SOCKSAddr() string { return s.socksLn.Addr().String() }
+// SOCKSAddr is the host:port of the SOCKS5 proxy, or "" when the proxy listens
+// on a unix socket (SOCKS v1 has no unix-socket form).
+func (s *Server) SOCKSAddr() string {
+	if s.socksLn == nil {
+		return ""
+	}
+	return s.socksLn.Addr().String()
+}
+
+// UnixSocket is the HTTP proxy's socket path, when it listens on one.
+func (s *Server) UnixSocket() string { return s.unixSocket }
 
 // Token is the credential both proxies require. It is generated per server
 // and never written to disk.

@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 )
@@ -64,12 +65,38 @@ func (b *Bwrap) binary() string {
 }
 
 // Command rewrites path/args to run under bwrap.
+//
+// With NetworkNone the command is started by a shell that first puts the relay
+// on the sandbox's loopback, so the proxy stays reachable in a namespace that
+// has nothing else. The real argv travels through "$@" rather than being
+// quoted into the script: the argument may be arbitrary code, and a quoting
+// bug there would be a command-injection bug in the process launcher.
 func (b *Bwrap) Command(policy Policy, path string, args []string) (string, []string, error) {
 	bwrapArgs, err := BuildBwrapArgs(policy)
 	if err != nil {
 		return "", nil, err
 	}
-	full := append(bwrapArgs, "--", path)
+	if !policy.NetworkNone {
+		full := append(bwrapArgs, "--", path)
+		full = append(full, args...)
+		return b.binary(), full, nil
+	}
+
+	r := policy.Relay
+	// Start the relay, wait until it is actually listening, then run the
+	// command. The wait matters: without it a command can lose the race and
+	// see "connection refused" from a proxy that is about to exist, which is
+	// indistinguishable from a refusal.
+	// Next to the relay binary, which sits on the writable tmpfs /run — the
+	// socket directory is mounted read-only and would refuse the file.
+	ready := strings.TrimSuffix(filepath.Dir(r.BinaryInSandbox), "/") + "/relay.ready"
+	script := fmt.Sprintf(
+		`"%s" relay --listen %s --unix "%s" --ready "%s" & `+
+			`i=0; while [ ! -e "%s" ]; do i=$((i+1)); [ $i -gt 500 ] && break; sleep 0.01; done; exec "$@"`,
+		r.BinaryInSandbox, r.Listen,
+		strings.TrimSuffix(r.SocketDirInSandbox, "/")+"/"+r.SocketName,
+		ready, ready)
+	full := append(bwrapArgs, "--", "/bin/sh", "-c", script, "sh", path)
 	full = append(full, args...)
 	return b.binary(), full, nil
 }
@@ -86,7 +113,23 @@ func BuildBwrapArgs(policy Policy) ([]string, error) {
 		"--new-session",
 	}
 	if policy.NetworkNone {
-		args = append(args, "--unshare-net")
+		if !policy.Relay.Complete() {
+			// Taking the network away without a way back to the proxy would
+			// leave the sandbox unable to resolve or fetch anything, including
+			// the proxy itself. That is a configuration bug, not a policy.
+			return nil, fmt.Errorf("NetworkNone requires a Relay (the sandbox would have no way to reach the proxy)")
+		}
+		// The relay's mount points live under /run, which the read-only root
+		// has already sealed: bwrap would have to mkdir there and cannot.
+		// A private tmpfs at /run gives it somewhere to create them, and takes
+		// nothing away — a sandboxed command has no business talking to the
+		// host's runtime sockets anyway.
+		args = append(args, "--unshare-net",
+			"--tmpfs", "/run",
+			// The relay binary and the proxy's socket directory, read-only.
+			"--ro-bind", policy.Relay.Binary, policy.Relay.BinaryInSandbox,
+			"--ro-bind", policy.Relay.SocketDir, policy.Relay.SocketDirInSandbox,
+		)
 	}
 
 	// Writable trees: the work_dir, the temp dirs every toolchain assumes.

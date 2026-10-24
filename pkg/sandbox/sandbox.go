@@ -63,8 +63,40 @@ type Policy struct {
 	WriteAllow []string
 	// NetworkNone removes the network namespace where the platform allows it.
 	// Linux only, and off by default: the egress proxy lives on the host's
-	// loopback, so taking the network away would also take the proxy away.
+	// loopback, so taking the network away would also take the proxy away —
+	// unless Relay says how to get back to it.
 	NetworkNone bool
+	// Relay is how the sandbox reaches the egress proxy once its network is
+	// gone: a unix socket bind-mounted in, and a tiny relay on the sandbox's
+	// loopback that forwards to it. Required when NetworkNone is set; without
+	// it the sandbox would have no network at all, including no proxy.
+	Relay *Relay
+}
+
+// Relay describes the in-sandbox bridge to the host-side proxy.
+type Relay struct {
+	// Binary is the host path of the relay executable (the agent binary
+	// itself), bind-mounted read-only at BinaryInSandbox.
+	Binary string
+	// BinaryInSandbox is where the relay appears inside, e.g.
+	// "/run/sandrpod/relay".
+	BinaryInSandbox string
+	// SocketDir is the host directory holding the proxy's unix socket; the
+	// whole directory is bound so the socket file comes with it.
+	SocketDir string
+	// SocketDirInSandbox is where that directory appears inside.
+	SocketDirInSandbox string
+	// SocketName is the socket's file name inside SocketDir.
+	SocketName string
+	// Listen is the address the relay listens on inside the sandbox, e.g.
+	// "127.0.0.1:3128". Proxy-aware tools are pointed here.
+	Listen string
+}
+
+// Complete reports whether the relay has everything it needs.
+func (r *Relay) Complete() bool {
+	return r != nil && r.Binary != "" && r.BinaryInSandbox != "" &&
+		r.SocketDir != "" && r.SocketDirInSandbox != "" && r.SocketName != "" && r.Listen != ""
 }
 
 // Wrapper is one platform's implementation.

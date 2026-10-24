@@ -312,8 +312,11 @@ loopback address"），审计日志留下具体地址。这个拆分是有意的
   网络，而那里除代理外没有别人——但在 Linux 宿主机上，宿主自己暴露在 bridge 网段
   上的服务仍然可达。堵这一条需要宿主级 `iptables`（`DOCKER-USER` 链，root 权限），
   不在本版本。
-- **员工机仍然是过滤器，不是墙。** 笔记本上没有可以拿走的 network namespace，
-  无视代理变量的进程照样能出去——那正是 §1 里"内核兜底"要解决的。
+- **笔记本上只有开 OS 沙箱才是墙。** Linux 上开 `-os-sandbox=bwrap|auto` 后，沙箱
+  有自己的 network namespace，经 loopback 上的 relay 访问代理——无视代理变量的进程
+  什么都到不了（见 [OS_SANDBOX.zh.md](OS_SANDBOX.zh.md) §4a）。不开这个开关，或者在
+  macOS 上，无视代理变量的进程照样能出去：内核兜底才是把过滤器变成墙的东西，而
+  macOS 那边还没有网络这一半。
 - **`-egress-mode=server` 会刷新，`enforce` 不会。** server 模式下 agent 每
   `-egress-sync`（默认 60s）重读一次并热替换；文件模式只在启动时读一次。两者都只
   对**下一次连接**生效，不会切断已在跑的隧道（见 2.2）。

@@ -23,6 +23,7 @@ import (
 	neturl "net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -34,6 +35,7 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/egress"
 	"github.com/sandrpod/sandrpod/pkg/notify"
 	"github.com/sandrpod/sandrpod/pkg/permission"
+	"github.com/sandrpod/sandrpod/pkg/relay"
 	"github.com/sandrpod/sandrpod/pkg/sandbox"
 	"github.com/sandrpod/sandrpod/pkg/toolbox"
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
@@ -194,6 +196,15 @@ var (
 var version = "dev"
 
 func main() {
+	// `sandrpod-agent relay …` is the in-sandbox half of the network-isolated
+	// mode: the agent binary is bind-mounted into the sandbox read-only and
+	// started there to bridge TCP-on-loopback to the proxy's unix socket. It
+	// is dispatched before flag.Parse so the relay sees only its own flags.
+	if len(os.Args) > 1 && os.Args[1] == "relay" {
+		runRelay(os.Args[2:])
+		return
+	}
+
 	flag.Parse()
 
 	if *help {
@@ -435,7 +446,7 @@ func installEgress() error {
 			return err
 		}
 		allow, deny := compiled.Strings()
-		log.Printf("egress: enforcing from %s (http=%s socks=%s)", *egressPolicy, srv.HTTPAddr(), srv.SOCKSAddr())
+		log.Printf("egress: enforcing from %s (%s)", *egressPolicy, describeEgressListen(srv))
 		log.Printf("egress: allow=%v", allow)
 		if len(deny) > 0 {
 			log.Printf("egress: deny=%v", deny)
@@ -460,7 +471,7 @@ func installEgress() error {
 		if err != nil {
 			return err
 		}
-		log.Printf("egress: policy from control plane (http=%s socks=%s); deny-all until the first sync", srv.HTTPAddr(), srv.SOCKSAddr())
+		log.Printf("egress: policy from control plane (%s); deny-all until the first sync", describeEgressListen(srv))
 		target := egressTarget{apiURL: *apiURL, token: *token, sandbox: *name}
 		ctx, cancel := context.WithCancel(context.Background())
 		egressSyncStop = cancel
@@ -493,15 +504,43 @@ type egressTarget struct {
 // startEgressServer starts the proxies and hands their address to every
 // process the toolbox will spawn.
 func startEgressServer(compiled *egress.Compiled) (*egress.Server, error) {
-	srv, err := egress.Start(egress.Options{
+	opts := egress.Options{
 		Policy: compiled,
 		Sink:   egressAuditSink{rec: sharedAuditRecorder},
-	})
+	}
+	// If the OS sandbox is going to take the network away, the proxy must be
+	// reachable over a file instead of a port: nothing on the host's loopback
+	// is visible from inside a fresh network namespace.
+	if netnsWanted() {
+		dir, err := egressSocketDir()
+		if err != nil {
+			return nil, err
+		}
+		opts.UnixSocketPath = filepath.Join(dir, "proxy.sock")
+	}
+
+	srv, err := egress.Start(opts)
 	if err != nil {
 		return nil, err
 	}
 	startedEgress = srv
-	toolbox.SetChildEnv(srv.ProxyEnv())
+
+	if srv.UnixSocket() != "" {
+		// Inside the sandbox the proxy is 127.0.0.1:<relay port>, reached
+		// through the relay the sandbox wrapper starts.
+		env := relayProxyEnv(srv.Token(), relayListenAddr)
+		toolbox.SetChildEnv(env)
+		egressRelay = &sandbox.Relay{
+			Binary:             selfBinary(),
+			BinaryInSandbox:    relayBinaryPath,
+			SocketDir:          filepath.Dir(srv.UnixSocket()),
+			SocketDirInSandbox: relaySocketDir,
+			SocketName:         filepath.Base(srv.UnixSocket()),
+			Listen:             relayListenAddr,
+		}
+	} else {
+		toolbox.SetChildEnv(srv.ProxyEnv())
+	}
 	if sharedAuditRecorder == nil {
 		log.Printf("egress: no audit recorder — denials are counted but not persisted")
 	}
@@ -627,6 +666,103 @@ func fetchEgressPolicy(ctx context.Context, target egressTarget) (*egress.Policy
 	return body.Policy, nil
 }
 
+// Network-isolated egress: the constants and helpers shared by the proxy side
+// and the sandbox side.
+const (
+	// relayListenAddr is where the relay listens *inside* the sandbox. Proxy
+	// variables point here; nothing else in the sandbox opens a port.
+	relayListenAddr = "127.0.0.1:3128"
+	// relayBinaryPath is where the agent binary appears inside the sandbox.
+	relayBinaryPath = "/run/sandrpod/relay"
+	// relaySocketDir is where the proxy's socket directory appears inside.
+	relaySocketDir = "/run/sandrpod/egress"
+)
+
+// egressRelay is set by startEgressServer when the proxy listens on a unix
+// socket, and consumed by installOSSandbox to build the sandbox policy.
+var egressRelay *sandbox.Relay
+
+// netnsWanted reports whether this run should put sandboxed processes in their
+// own network namespace: only Linux, only with bubblewrap actually usable, and
+// only when an OS sandbox was asked for. Every other combination keeps the
+// proxy on TCP and the network in place.
+func netnsWanted() bool {
+	if runtime.GOOS != "linux" {
+		return false
+	}
+	if strings.ToLower(strings.TrimSpace(*osSandbox)) == "" ||
+		strings.ToLower(strings.TrimSpace(*osSandbox)) == string(sandbox.ModeOff) {
+		return false
+	}
+	if _, err := sandbox.Resolve(sandbox.ModeBwrap, "", ""); err != nil {
+		return false
+	}
+	return true
+}
+
+// egressSocketDir makes a short, private directory for the proxy socket and
+// the relay. Short because a unix socket path has to fit in sun_path (108 bytes
+// on Linux), and private because the socket is the proxy: anyone who can open
+// it can use the sandbox's allow-list.
+func egressSocketDir() (string, error) {
+	dir, err := os.MkdirTemp("/tmp", "sandrpod-egress-")
+	if err != nil {
+		return "", fmt.Errorf("egress socket dir: %w", err)
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		return "", fmt.Errorf("egress socket dir: %w", err)
+	}
+	return dir, nil
+}
+
+// relayProxyEnv is the proxy environment a network-isolated sandbox gets: the
+// relay's loopback address, never the host's.
+func relayProxyEnv(token, listen string) []string {
+	url := "http://sandbox:" + token + "@" + listen
+	return []string{
+		"HTTP_PROXY=" + url, "http_proxy=" + url,
+		"HTTPS_PROXY=" + url, "https_proxy=" + url,
+		// No ALL_PROXY: SOCKS needs a TCP listener on the host, and this
+		// sandbox has no route to one.
+		"NODE_USE_ENV_PROXY=1",
+	}
+}
+
+// describeEgressListen renders where the proxy listens, for the startup log.
+func describeEgressListen(srv *egress.Server) string {
+	if s := srv.UnixSocket(); s != "" {
+		return "unix=" + s + " relay=" + relayListenAddr
+	}
+	return "http=" + srv.HTTPAddr() + " socks=" + srv.SOCKSAddr()
+}
+
+// selfBinary is the path of the running agent binary, which doubles as the
+// in-sandbox relay.
+func selfBinary() string {
+	p, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	return p
+}
+
+// runRelay is the `sandrpod-agent relay` entry point. It runs inside the
+// sandbox, has no policy of its own, and exits when its listener dies.
+func runRelay(args []string) {
+	fs := flag.NewFlagSet("relay", flag.ExitOnError)
+	listen := fs.String("listen", relayListenAddr, "TCP address to accept proxy connections on (loopback)")
+	unix := fs.String("unix", "", "path of the egress proxy's unix socket")
+	ready := fs.String("ready", "", "write this file once the listener is up")
+	_ = fs.Parse(args)
+	if *unix == "" {
+		log.Fatalf("relay: --unix is required")
+	}
+	log.Printf("relay: %s -> %s", *listen, *unix)
+	if err := relay.Serve(context.Background(), *listen, *unix, *ready); err != nil {
+		log.Fatalf("relay: %v", err)
+	}
+}
+
 // installOSSandbox wraps every spawned process in the platform's OS sandbox.
 //
 // This is the layer the other two cannot be: the permission gate covers the
@@ -662,6 +798,13 @@ func installOSSandbox(tb *toolbox.Server) error {
 
 	workDir := tb.Executor().GetWorkDirForPermission()
 	policy := sandbox.Policy{WorkDir: workDir, ReadDeny: hardlockPaths()}
+	if egressRelay != nil {
+		// Egress is enforcing and the proxy is on a unix socket: take the
+		// sandbox's network away and let the relay be its only way out.
+		policy.NetworkNone = true
+		policy.Relay = egressRelay
+		log.Printf("os sandbox: network namespace removed — the relay at %s is the only route out", relayListenAddr)
+	}
 	toolbox.SetSandbox(w, policy)
 
 	log.Printf("os sandbox: %s active — work_dir=%s writable, %d hard-locked path(s) masked",

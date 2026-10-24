@@ -351,9 +351,13 @@ Listed because a security boundary that overstates itself is worse than none:
   proxy — but on a Linux host the host's own services on the bridge subnet are
   reachable too. Closing that needs host-level `iptables` (a `DOCKER-USER`
   chain, root) and is not in this build.
-- **A laptop is still a filter, not a wall.** On an employee machine there is
-  no network namespace to take away; a process that ignores the proxy variables
-  still gets out. That is what the kernel floor (§1) is for.
+- **On a laptop it is a wall only with the OS sandbox on.** With
+  `-os-sandbox=bwrap|auto` on Linux, the sandbox gets its own network namespace
+  and reaches the proxy through a relay on loopback — a process that ignores the
+  proxy variables then reaches nothing (see
+  [OS_SANDBOX.md](OS_SANDBOX.md) §4a). Without that flag, or on macOS, a process
+  that ignores the proxy variables still gets out: the kernel floor is what
+  turns this filter into a wall, and on macOS it has no network half yet.
 - **`-egress-mode=server` refreshes, `-egress-mode=enforce` does not.** In
   server mode the agent re-reads the policy every `-egress-sync` (60s by
   default) and swaps it into the running proxy; a file-based policy is read

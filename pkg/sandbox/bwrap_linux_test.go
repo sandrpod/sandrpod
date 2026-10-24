@@ -117,22 +117,5 @@ func TestBwrap_RunsSandboxed(t *testing.T) {
 	}
 }
 
-// Removing the network is available but off by default; this pins that the
-// flag actually takes the namespace away when asked.
-func TestBwrap_NetworkNone(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("bubblewrap is Linux-only")
-	}
-	w := &Bwrap{Path: "bwrap"}
-	if err := w.Available(); err != nil {
-		t.Skipf("bubblewrap unavailable: %v", err)
-	}
-	path, args, err := w.Command(Policy{WorkDir: t.TempDir(), NetworkNone: true},
-		"/bin/sh", []string{"-c", "ip link 2>/dev/null | grep -q 'state UP' && exit 1 || exit 0"})
-	if err != nil {
-		t.Fatalf("Command: %v", err)
-	}
-	if out, err := exec.Command(path, args...).CombinedOutput(); err != nil {
-		t.Errorf("expected no interfaces up inside an unnamed network namespace: %v\n%s", err, out)
-	}
-}
+// The network-namespace half lives in netns_linux_test.go: it needs a relay to
+// be useful, so it is tested through the whole chain rather than alone.

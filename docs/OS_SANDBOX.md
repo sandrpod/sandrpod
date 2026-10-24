@@ -106,13 +106,14 @@ os sandbox:   masked /home/alice/.sandrpod/permissions.json
 
 ## 4. What it does not do
 
-- **It does not take the network away.** On Linux `--unshare-net` is implemented
-  (`Policy.NetworkNone`) but off: the egress proxy listens on the host's
-  loopback, so a sandbox without a bridge cannot reach the proxy either. Closing
-  that needs the relay sandbox-runtime builds — a unix socket bind-mounted into
-  the sandbox plus a tiny relay inside — and that is its own change. Until then,
-  egress on a laptop stays a **filter** (see
-  [EGRESS_POLICY.md](EGRESS_POLICY.md)); in a container it is already a wall.
+- **On macOS the network is not taken away.** Linux has network namespaces;
+  macOS has no equivalent, so there the egress proxy stays a filter for a
+  process that ignores its environment. The Seatbelt profile could be narrowed
+  to `localhost:<proxy port>`, and that is the next step for this platform —
+  but it is not something this build can verify (§2).
+- **The network namespace only exists with egress enforcing.** `--unshare-net`
+  without a way back to the proxy would leave a sandbox that cannot resolve or
+  fetch anything, so the two are switched on together (§4a).
 - **It does not cover the toolbox's own file API.** `fs/*` calls are Go code in
   the toolbox process, not a spawned command; the permission gate is their
   boundary, and it still applies.
@@ -121,6 +122,37 @@ os sandbox:   masked /home/alice/.sandrpod/permissions.json
   The hardlocked paths are masked explicitly rather than kept out by a rule, so
   the failure mode is visible (a path is either mounted over or it is not).
 - **macOS semantics are unverified.** See the table above.
+
+### 4a. The network, on Linux
+
+When the egress proxy is enforcing, the sandbox also gets its own network
+namespace and the proxy moves to a unix socket:
+
+```
+sandbox netns (loopback only)
+   127.0.0.1:3128  ←  relay  ──→  host: /tmp/sandrpod-egress-*/proxy.sock
+                                     (the egress proxy, with the policy)
+```
+
+- `--unshare-net` gives the sandbox a loopback and nothing else — no route, no
+  DNS server, no host services;
+- the proxy listens on a **unix socket** instead of a port (`egress.Options.UnixSocketPath`);
+- the socket directory and the agent binary (which doubles as the relay,
+  `sandrpod-agent relay …`) are bind-mounted read-only into the sandbox;
+- the wrapper starts the relay, waits for its ready file, then `exec "$@"` — the
+  real argv travels through `$@`, never through string interpolation, because
+  the argument may be arbitrary code;
+- proxy variables inside point at `127.0.0.1:3128`, the relay.
+
+A process that ignores the proxy variables now reaches nothing at all. Verified
+end to end in a privileged container (`pkg/sandbox/netns_linux_test.go`): no
+route without the proxy, an allow-listed host fetched through relay → proxy,
+and an unlisted host refused through the same path.
+
+Why a relay at all: a sandbox with no network cannot reach a TCP listener on the
+host, and a unix socket is not something `curl` speaks. The relay is the
+smallest thing that bridges the two, and it has no policy of its own — every
+byte goes to the proxy, which decides.
 
 ---
 
@@ -136,8 +168,9 @@ docker run --rm --privileged -v /tmp:/mnt alpine:3.20 \
 
 It asserts, against a real sandboxed process: an allowed file reads, a
 hard-locked file does not (and leaks nothing), a hard-locked directory does not
-list, a write inside `work_dir` works, a write outside it never reaches the
-host, and `--unshare-net` really removes the network.
+list, a write inside `work_dir` works, and a write outside it never reaches the
+host. `-test.run NetnsRelay` adds the network case: no route at all without the
+proxy, an allowed host through relay → proxy, an unlisted host refused.
 
 On macOS, on a machine that is not already sandboxed:
 

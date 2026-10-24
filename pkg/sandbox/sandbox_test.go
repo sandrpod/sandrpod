@@ -50,12 +50,30 @@ func TestBuildBwrapArgs_Shape(t *testing.T) {
 		t.Error("the network must stay unless NetworkNone is set")
 	}
 
-	withNet, err := BuildBwrapArgs(Policy{WorkDir: work, NetworkNone: true})
-	if err != nil {
-		t.Fatalf("BuildBwrapArgs: %v", err)
+	// NetworkNone without a relay is a configuration error: the sandbox would
+	// have no way to reach the proxy at all.
+	if _, err := BuildBwrapArgs(Policy{WorkDir: work, NetworkNone: true}); err == nil {
+		t.Fatal("NetworkNone without a Relay must be rejected")
 	}
-	if !strings.Contains(strings.Join(withNet, " "), "--unshare-net") {
-		t.Error("NetworkNone should add --unshare-net")
+
+	relay := &Relay{
+		Binary: "/usr/local/bin/sandrpod-agent", BinaryInSandbox: "/run/sandrpod/relay",
+		SocketDir: dir, SocketDirInSandbox: "/run/sandrpod/egress",
+		SocketName: "proxy.sock", Listen: "127.0.0.1:3128",
+	}
+	withNet, err := BuildBwrapArgs(Policy{WorkDir: work, NetworkNone: true, Relay: relay})
+	if err != nil {
+		t.Fatalf("BuildBwrapArgs with relay: %v", err)
+	}
+	netPlan := strings.Join(withNet, " ")
+	for _, want := range []string{
+		"--unshare-net",
+		"--ro-bind /usr/local/bin/sandrpod-agent /run/sandrpod/relay",
+		"--ro-bind " + dir + " /run/sandrpod/egress",
+	} {
+		if !strings.Contains(netPlan, want) {
+			t.Errorf("netns plan is missing %q:\n%s", want, netPlan)
+		}
 	}
 }
 
@@ -165,5 +183,38 @@ func TestExpanded(t *testing.T) {
 	got := expanded([]string{f, f, filepath.Join(dir, "missing"), "relative/path", ""})
 	if len(got) != 1 || got[0] != f {
 		t.Errorf("expanded = %v, want just %q", got, f)
+	}
+}
+
+// The netns wrapper starts the relay before the command, and passes the real
+// argv through "$@" rather than quoting it into the script.
+func TestBwrapCommand_RelayWrap(t *testing.T) {
+	relay := &Relay{
+		Binary: "/bin/true", BinaryInSandbox: "/run/sandrpod/relay",
+		SocketDir: t.TempDir(), SocketDirInSandbox: "/run/sandrpod/egress",
+		SocketName: "proxy.sock", Listen: "127.0.0.1:3128",
+	}
+	w := &Bwrap{Path: "bwrap"}
+	path, args, err := w.Command(Policy{WorkDir: t.TempDir(), NetworkNone: true, Relay: relay},
+		"/usr/bin/python3", []string{"-c", `print("hi; rm -rf /")`})
+	if err != nil {
+		t.Fatalf("Command: %v", err)
+	}
+	if path != "bwrap" {
+		t.Errorf("path = %q", path)
+	}
+	joined := strings.Join(args, "\x00")
+	if !strings.Contains(joined, "/bin/sh\x00-c") {
+		t.Fatalf("expected a shell wrapper, got %v", args)
+	}
+	if !strings.Contains(joined, `exec "$@"`) {
+		t.Error("the wrapper must exec \"$@\" so argv is not re-parsed")
+	}
+	if !strings.Contains(joined, "relay --listen 127.0.0.1:3128 --unix \"/run/sandrpod/egress/proxy.sock\"") {
+		t.Errorf("relay invocation missing:\n%s", joined)
+	}
+	// The dangerous argument must appear as an argv element, untouched.
+	if args[len(args)-1] != `print("hi; rm -rf /")` {
+		t.Errorf("the command's argument was rewritten: %q", args[len(args)-1])
 	}
 }
