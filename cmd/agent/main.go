@@ -100,6 +100,16 @@ func envIntOr(key string, defaultVal int) int {
 
 // envDurationOr parses a duration from the environment, falling back to the
 // default when the variable is unset or unparsable.
+// envBoolOr parses a boolean from the environment.
+func envBoolOr(key string, defaultVal bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+	}
+	return defaultVal
+}
+
 func envDurationOr(key string, defaultVal time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
@@ -190,6 +200,17 @@ var (
 	// How deep below work_dir to look for the write-protected paths (git
 	// hooks/config, shell startup files, MCP config, IDE launch config). The
 	// scan needs concrete paths to mount over, so it costs a walk of the tree.
+	credentialMask = flag.String("credential-mask", envOr("SANDRPOD_CREDENTIAL_MASK", ""),
+		"Comma-separated credential names to mask (values read from the agent's own environment)")
+	credentialMaskFiles = flag.String("credential-mask-files", envOr("SANDRPOD_CREDENTIAL_MASK_FILES", ""),
+		"Comma-separated credential files to mask inside the sandbox (e.g. ~/.aws/credentials)")
+	credentialCA = flag.String("credential-ca-dir", envOr("SANDRPOD_CREDENTIAL_CA_DIR", ""),
+		"Directory holding the egress CA used to terminate TLS (default ~/.sandrpod/egress-ca)")
+	credentialExclude = flag.String("credential-terminate-exclude", envOr("SANDRPOD_CREDENTIAL_TERMINATE_EXCLUDE", ""),
+		"Domains whose TLS is never terminated (mTLS upstreams, certificate pinning)")
+	credentialPlaintext = flag.Bool("credential-allow-plaintext",
+		envBoolOr("SANDRPOD_CREDENTIAL_ALLOW_PLAINTEXT", false),
+		"Allow a masked credential over plain HTTP (not recommended: it exposes the real value)")
 	mandatoryDenyDepth = flag.Int("mandatory-deny-depth", envIntOr("SANDRPOD_MANDATORY_DENY_DEPTH", 3),
 		"How deep below work_dir to protect against agent-written persistence (0-10)")
 
@@ -543,6 +564,20 @@ func startEgressServer(compiled *egress.Compiled) (*egress.Server, error) {
 		Policy: compiled,
 		Sink:   egressAuditSink{rec: sharedAuditRecorder},
 	}
+	if masker := credentialMasker(); masker != nil {
+		ca, err := loadEgressCA()
+		if err != nil {
+			return nil, err
+		}
+		opts.Mask = masker
+		opts.CA = ca
+		opts.Terminate = &egress.TerminateOptions{
+			CADir:   *credentialCA,
+			Exclude: splitList(*credentialExclude),
+		}
+		log.Printf("egress: credential masking on for %v; TLS is terminated for allowed hosts except %v",
+			masker.Names(), splitList(*credentialExclude))
+	}
 	// If the OS sandbox is going to take the network away, the proxy must be
 	// reachable over a file instead of a port: nothing on the host's loopback
 	// is visible from inside a fresh network namespace.
@@ -561,6 +596,16 @@ func startEgressServer(compiled *egress.Compiled) (*egress.Server, error) {
 	startedEgress = srv
 
 	applyEgressChildEnv(srv)
+	if srv.Masker() != nil {
+		env := srv.Masker().Env()
+		trust, err := srv.CA().TrustEnv()
+		if err != nil {
+			return nil, err
+		}
+		// Masked names replace the real values; the trust env points every
+		// runtime at the CA bundle so a terminated host verifies.
+		toolbox.SetChildEnv(append(env, trust...))
+	}
 	if sharedAuditRecorder == nil {
 		log.Printf("egress: no audit recorder — denials are counted but not persisted")
 	}
@@ -775,6 +820,119 @@ const (
 // socket, and consumed by installOSSandbox to build the sandbox policy.
 var egressRelay *sandbox.Relay
 
+// credentialMasker builds the sentinel registry from the agent's environment.
+// Nil when masking is off. The values are read once at startup and never
+// re-read: a credential that changes under the proxy would need a sentinel
+// rotation, and silently using a stale value is worse than requiring a restart.
+func credentialMasker() *egress.Masker {
+	names := splitList(*credentialMask)
+	if len(names) == 0 {
+		return nil
+	}
+	values := make(map[string]string, len(names))
+	for _, name := range names {
+		if v := os.Getenv(name); v != "" {
+			values[name] = v
+		}
+	}
+	if len(values) == 0 {
+		log.Printf("credential masking: none of %v is set in the agent's environment", names)
+		return nil
+	}
+	m, err := egress.NewMasker(values)
+	if err != nil {
+		log.Printf("credential masking: %v", err)
+		return nil
+	}
+	if *credentialPlaintext {
+		m.SetAllowPlaintext(true)
+		log.Printf("credential masking: plaintext injection is ALLOWED — the real value can travel in the clear")
+	}
+	// AWS needs its three values linked to re-sign SigV4 requests.
+	for _, trio := range [][3]string{
+		{"AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"},
+	} {
+		if _, ok := os.LookupEnv(trio[0]); !ok {
+			continue
+		}
+		if _, masked := values[trio[0]]; !masked {
+			continue
+		}
+		if err := m.LinkAWS(trio[0], trio[1], trio[2]); err != nil {
+			log.Printf("credential masking: aws: %v", err)
+		}
+	}
+	return m
+}
+
+// loadEgressCA loads or creates the CA used to terminate TLS.
+func loadEgressCA() (*egress.CA, error) {
+	dir := *credentialCA
+	if dir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("credential masking requires -credential-ca-dir: %w", err)
+		}
+		dir = filepath.Join(home, ".sandrpod", "egress-ca")
+	}
+	*credentialCA = dir
+	return egress.LoadOrCreateCA(dir)
+}
+
+// maskedFiles rewrites the configured credentials files into private copies
+// whose contents are sentinels, and returns the pairs the sandbox binds over
+// the originals. A file that holds no masked value is skipped.
+func maskedFiles(m *egress.Masker) []*egress.MaskedFile {
+	if m == nil {
+		return nil
+	}
+	paths := splitList(*credentialMaskFiles)
+	if len(paths) == 0 {
+		return nil
+	}
+	dir, err := os.MkdirTemp("", "sandrpod-masked-")
+	if err != nil {
+		log.Printf("credential masking: %v", err)
+		return nil
+	}
+	if err := os.Chmod(dir, 0o700); err != nil {
+		log.Printf("credential masking: %v", err)
+	}
+	var out []*egress.MaskedFile
+	for _, raw := range paths {
+		path := raw
+		if strings.HasPrefix(path, "~/") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				continue
+			}
+			path = filepath.Join(home, strings.TrimPrefix(path, "~/"))
+		}
+		mf, err := m.MaskFile(path, dir)
+		if err != nil {
+			log.Printf("credential masking: %s: %v", path, err)
+			continue
+		}
+		if mf.FakePath == "" {
+			continue
+		}
+		out = append(out, mf)
+		log.Printf("credential masking: %s masked (%v)", path, mf.Names)
+	}
+	return out
+}
+
+// splitList parses a comma-separated flag value, trimming blanks.
+func splitList(s string) []string {
+	var out []string
+	for _, part := range strings.Split(s, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 // netnsWanted reports whether this run should put sandboxed processes in their
 // own network namespace: only Linux, only with bubblewrap actually usable, and
 // only when an OS sandbox was asked for. Every other combination keeps the
@@ -950,6 +1108,13 @@ func sandboxPolicyFor(workDir string, denyDepth int) sandbox.Policy {
 	p := sandbox.Policy{WorkDir: workDir, ReadDeny: hardlockPaths()}
 	if workDir != "" {
 		p.WriteDeny = permission.MandatoryDenyPaths(workDir, denyDepth)
+	}
+	if startedEgress != nil {
+		for _, m := range maskedFiles(startedEgress.Masker()) {
+			p.ReadSubstitute = append(p.ReadSubstitute, sandbox.ReadSubstitution{
+				RealPath: m.RealPath, FakePath: m.FakePath,
+			})
+		}
 	}
 	return p
 }

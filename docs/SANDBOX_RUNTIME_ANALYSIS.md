@@ -286,7 +286,7 @@ SBPL 则是后置 deny）。策略直接读 permission store，避免两份清�
 - **验收**：decider 超时 5 s → 全部 503 且不转发；decider 崩溃 → 代理退出；非法帧 → 链路断开。
 - **成本**：1–2 周。
 
-### P1-4 凭据掩码
+### P1-4 凭据掩码 — ✅ 已实现（sentinel + TLS 终止 + SigV4 重签 + 文件掩码）
 
 - **做什么**：agent 只拿到 `fake_value_<uuid4>`，真值由代理在出网时按主机注入。
 - **为什么**：employee-PC 场景里 agent 一定需要公司 key（模型 API、内部服务），而现在它明文可见、可写进日志、可被 prompt injection 带出。

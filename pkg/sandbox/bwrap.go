@@ -147,6 +147,19 @@ func BuildBwrapArgs(policy Policy) ([]string, error) {
 		args = append(args, "--bind", dir, dir)
 	}
 
+	// Masked files: the fake is bound read-only over the real path, so the
+	// sandbox reads sentinels and the real bytes are not in its namespace.
+	// Mounted after the writable binds, which is what makes it win.
+	for _, m := range policy.ReadSubstitute {
+		if _, err := os.Stat(m.RealPath); err != nil {
+			continue
+		}
+		if _, err := os.Stat(m.FakePath); err != nil {
+			continue
+		}
+		args = append(args, "--ro-bind", m.FakePath, m.RealPath)
+	}
+
 	// Read-only islands inside the writable tree. Applied after the writable
 	// binds above, which is what makes them win: a later mount at the same
 	// path replaces the earlier one. The source and target are the same path,

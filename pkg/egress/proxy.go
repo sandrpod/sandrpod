@@ -81,6 +81,23 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Cleartext with a masked credential: refuse. Substituting here would put
+	// the real value on the wire in the clear; forwarding the sentinel would
+	// send a bogus credential and teach the caller the wrong lesson. The
+	// operator can opt in to plaintext injection explicitly, and then the
+	// refusal becomes a substitution with a documented cost.
+	if s.masker() != nil {
+		if s.masker().AllowsPlaintext() {
+			// Opted in: substitute in place on the cleartext request.
+			s.masker().substituteHeaders(r.Header)
+		} else if carriesSentinel(r) {
+			s.writeDeny(w, http.StatusForbidden, CodeMaskedPlaintext,
+				"the request carries a masked credential over plain HTTP; a masked credential is only "+
+					"sent over HTTPS, because cleartext would expose the real value to the network")
+			return
+		}
+	}
+
 	out := r.Clone(r.Context())
 	out.RequestURI = "" // client-side requests carry none
 	out.URL.Scheme = "http"
@@ -115,6 +132,16 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	verdict := s.decide(r.Context(), host, port)
 	if !verdict.Allow {
 		s.deny(w, CodeConnect, r, verdict, "")
+		return
+	}
+
+	// A terminated destination never gets an opaque tunnel: the proxy
+	// re-originates the TLS itself so it can see the request. That is the only
+	// place a sentinel can be swapped for a real credential.
+	if s.terminating(host, port) {
+		s.record(Event{Kind: CodeConnect, Host: host, Port: port, Code: CodeAllowed,
+			Rule: verdict.Rule, Method: r.Method, Terminated: true})
+		s.terminate(w, r, host, port)
 		return
 	}
 

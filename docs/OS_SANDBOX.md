@@ -184,6 +184,11 @@ On macOS, on a machine that is not already sandboxed:
 sandrpod-agent -os-sandbox=seatbelt …     # refuses to start if the profile cannot be applied
 ```
 
+Credential masking adds one more kind of substitution to this layer: a masked
+file is bound over its real path inside the sandbox (`Policy.ReadSubstitute`),
+so the sandbox reads a file full of sentinels. See
+[CREDENTIALS.md](CREDENTIALS.md).
+
 See also: [PERMISSION_AND_AUDIT.md](PERMISSION_AND_AUDIT.md) (the gate this
 enforces), [EGRESS_POLICY.md](EGRESS_POLICY.md) (the network half), and
 [SANDBOX_RUNTIME_ANALYSIS.md](SANDBOX_RUNTIME_ANALYSIS.md) (where the model came

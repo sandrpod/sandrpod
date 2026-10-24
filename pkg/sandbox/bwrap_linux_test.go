@@ -187,3 +187,52 @@ func TestBwrap_WriteDenyIslands(t *testing.T) {
 		t.Errorf("ordinary files must stay writable: err=%v out=%q", err, out)
 	}
 }
+
+// A masked file: the sandbox reads a fake bound over the real path, so the real
+// bytes are not in its namespace at all.
+func TestBwrap_ReadSubstitution(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is Linux-only")
+	}
+	w := &Bwrap{Path: "bwrap"}
+	if err := w.Available(); err != nil {
+		t.Skipf("bubblewrap unavailable: %v", err)
+	}
+
+	base, err := os.MkdirTemp("/var/tmp", "sandrpod-sub-")
+	if err != nil {
+		t.Skipf("no scratch dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(base) })
+	work := filepath.Join(base, "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	realFile := filepath.Join(work, "credentials")
+	if err := os.WriteFile(realFile, []byte("aws_secret_access_key = REAL\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fakeFile := filepath.Join(base, "fake-credentials")
+	if err := os.WriteFile(fakeFile, []byte("aws_secret_access_key = fake_value_xyz\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	policy := Policy{
+		WorkDir:        work,
+		ReadSubstitute: []ReadSubstitution{{RealPath: realFile, FakePath: fakeFile}},
+	}
+	path, args, err := w.Command(policy, "/bin/sh", []string{"-c", "cat " + realFile})
+	if err != nil {
+		t.Fatalf("Command: %v", err)
+	}
+	out, err := exec.Command(path, args...).CombinedOutput()
+	if err != nil {
+		t.Fatalf("cat: %v\n%s", err, out)
+	}
+	if strings.Contains(string(out), "REAL") {
+		t.Fatalf("the sandbox read the real file: %q", out)
+	}
+	if !strings.Contains(string(out), "fake_value_xyz") {
+		t.Fatalf("the sandbox did not see the substitute: %q", out)
+	}
+}

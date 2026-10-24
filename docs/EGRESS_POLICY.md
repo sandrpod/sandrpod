@@ -213,6 +213,16 @@ laptop case.
 
 ---
 
+### 2.5 Credentials, masked
+
+`-credential-mask` turns on TLS termination for allow-listed hosts and
+substitutes sentinels for real values on the way out. It is a different feature
+with a different cost — the sandbox's TLS no longer ends at the upstream — so it
+has its own document: [CREDENTIALS.md](CREDENTIALS.md). What belongs here is the
+interaction: masking rides on this allow-list (a destination that is not allowed
+is never terminated either), and a credential is only ever substituted on the
+terminated path, never on a plain-HTTP request.
+
 ## 3. The policy file
 
 JSON, snake_case, unknown keys rejected (a typo'd key otherwise yields an empty

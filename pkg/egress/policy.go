@@ -124,6 +124,10 @@ const (
 	// in time. It is a denial, and it says so: a client must be able to tell
 	// "policy said no" from "policy did not answer" when it reads the log.
 	CodeDeciderUnavailable = "decider_unavailable"
+	// CodeMaskedPlaintext is reported when a request carries a masked
+	// credential over plain HTTP. Substituting there would expose the real
+	// value to the network, and forwarding it would send a bogus credential.
+	CodeMaskedPlaintext = "masked_credential_cleartext"
 )
 
 // Parse validates and compiles a policy. It returns an error rather than a
@@ -441,4 +445,18 @@ func (c *Compiled) Strings() (allow, deny []string) {
 	sort.Strings(allow)
 	sort.Strings(deny)
 	return allow, deny
+}
+
+// matchDomain reports whether a bare domain pattern (no port) covers host.
+// Exclude lists use this: they name destinations, not ports, because "do not
+// re-originate this upstream" is about the upstream, not one of its ports.
+func matchDomain(pattern, host string) bool {
+	r, err := compileRule(pattern)
+	if err != nil {
+		return false
+	}
+	if r.Port != 0 {
+		return false
+	}
+	return r.matches(host, 0)
 }

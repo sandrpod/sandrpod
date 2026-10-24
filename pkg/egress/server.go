@@ -59,6 +59,13 @@ type Event struct {
 	Reason  string
 	Address string // resolved address, set when the address check refused
 	Method  string
+	// Terminated marks a CONNECT whose TLS the proxy terminated (credential
+	// masking). An operator reading the log needs to see which connections had
+	// their end-to-end TLS broken, because that is a deliberate loss.
+	Terminated bool
+	// Credentials names the credentials used on this request. Values are never
+	// recorded: the audit trail says which secret was sent, not what it was.
+	Credentials []string
 }
 
 // Sink receives egress events. Implemented by the agent's audit adapter; a
@@ -88,6 +95,19 @@ type Options struct {
 	// read the port back from the server.
 	HTTPPort  int
 	SOCKSPort int
+	// CA is the certificate authority used by the terminating path. Required
+	// when Terminate is set.
+	CA *CA
+	// Mask, when set, substitutes sentinels for real credentials on the
+	// terminated-TLS path and re-signs AWS SigV4 requests. It implies TLS
+	// termination: a masked credential is only ever sent over a connection the
+	// proxy re-originated with a verified certificate.
+	Mask *Masker
+	// Terminate, when set, enables the TLS-terminating path for every allowed
+	// destination except the Exclude patterns. Without it there is no place to
+	// substitute a credential, so Mask without Terminate is a configuration
+	// error.
+	Terminate *TerminateOptions
 	// Decide, when set, replaces the local policy as the *verdict* source: the
 	// proxy asks it per connection instead of consulting the compiled policy.
 	// That is what a control-plane-decided sandbox is — the rules live at the
@@ -173,6 +193,17 @@ func Start(opts Options) (*Server, error) {
 		if opts.DecideTimeout <= 0 {
 			opts.DecideTimeout = 5 * time.Second
 		}
+	}
+	// A masked credential is only ever placed on a connection the proxy
+	// re-originated: substitution into cleartext, or into a tunnel nobody
+	// inspected, would hand the real value to the network. This is a
+	// configuration error, not something to warn about and continue.
+	if opts.Mask != nil && opts.Terminate == nil {
+		return nil, fmt.Errorf("egress: credential masking requires TLS termination " +
+			"(substitution only runs over a verified connection)")
+	}
+	if opts.Terminate != nil && opts.CA == nil {
+		return nil, fmt.Errorf("egress: TLS termination requires a CA")
 	}
 	s := &Server{
 		opts:     opts,
@@ -429,3 +460,9 @@ func newToken() (string, error) {
 	}
 	return base64.RawURLEncoding.EncodeToString(b[:]), nil
 }
+
+// Masker is the credential registry, or nil when masking is off.
+func (s *Server) Masker() *Masker { return s.opts.Mask }
+
+// CA is the certificate authority used by the terminating path, or nil.
+func (s *Server) CA() *CA { return s.opts.CA }

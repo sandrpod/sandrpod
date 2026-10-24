@@ -137,6 +137,13 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 	if len(rules) > 0 {
 		b.WriteString("(allow file-write* " + strings.Join(rules, " ") + ")\n")
 	}
+	// Masked files degrade to a read deny on macOS: there is no mount to
+	// substitute under, so the honest fallback is "you cannot read it", which
+	// breaks the tool rather than handing it the real value.
+	for _, m := range policy.ReadSubstitute {
+		b.WriteString(fmt.Sprintf("(deny file-read* (literal %s))\n", sbplString(m.RealPath)))
+	}
+
 	// Mandatory-deny paths inside the writable tree: readable (the allow of
 	// file-read* stands), not writable. Later rules win, so these come last.
 	for _, p := range expanded(policy.WriteDeny) {

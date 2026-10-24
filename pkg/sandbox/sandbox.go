@@ -61,6 +61,11 @@ type Policy struct {
 	// WriteAllow are extra writable paths (defaults cover /tmp, $TMPDIR and
 	// the work_dir).
 	WriteAllow []string
+	// ReadSubstitute replaces a file's contents for the sandbox: FakePath is
+	// bound read-only over RealPath. That is how a masked credentials file
+	// works — the sandbox reads a file that looks right and holds sentinels,
+	// while the real bytes never enter the sandbox at all.
+	ReadSubstitute []ReadSubstitution
 	// WriteDeny are paths inside the writable area that must stay read-only:
 	// the mandatory-deny set (git hooks/config, shell startup files, MCP
 	// config, IDE launch config). Unlike ReadDeny they remain readable — a
@@ -81,6 +86,13 @@ type Policy struct {
 	// loopback that forwards to it. Required when NetworkNone is set; without
 	// it the sandbox would have no network at all, including no proxy.
 	Relay *Relay
+}
+
+// ReadSubstitution is one masked file: the sandbox sees FakePath's content at
+// RealPath.
+type ReadSubstitution struct {
+	RealPath string
+	FakePath string
 }
 
 // Relay describes the in-sandbox bridge to the host-side proxy.

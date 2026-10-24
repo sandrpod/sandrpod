@@ -521,3 +521,91 @@ func TestInstallEgress_DeciderModeDeniesWhenThePlaneIsDown(t *testing.T) {
 		t.Errorf("X-Deny-Reason = %q, want decider_unavailable", got)
 	}
 }
+
+// ─── credential masking wiring ──────────────────────────────────────────────
+
+func TestCredentialMasker_ReadsTheAgentsEnvironment(t *testing.T) {
+	withCredentialFlags(t, "OPENAI_API_KEY,GITHUB_TOKEN", "", false)
+	t.Setenv("OPENAI_API_KEY", "sk-real-1")
+	t.Setenv("GITHUB_TOKEN", "ghp-real-2")
+
+	m := credentialMasker()
+	if m == nil {
+		t.Fatal("no masker was built")
+	}
+	if m.Len() != 2 {
+		t.Fatalf("masked %d credentials, want 2", m.Len())
+	}
+	env := strings.Join(m.Env(), "\n")
+	if strings.Contains(env, "sk-real-1") || strings.Contains(env, "ghp-real-2") {
+		t.Fatalf("the injected environment carries a real value:\n%s", env)
+	}
+}
+
+// Nothing to mask means nothing to terminate: masking an unset variable would
+// silently disable TLS termination for the whole sandbox.
+func TestCredentialMasker_EmptyWhenNothingIsSet(t *testing.T) {
+	withCredentialFlags(t, "NOT_SET_ANYWHERE", "", false)
+	if m := credentialMasker(); m != nil {
+		t.Fatalf("expected no masker, got %d credentials", m.Len())
+	}
+}
+
+func TestCredentialMasker_LinksAWS(t *testing.T) {
+	withCredentialFlags(t, "AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY", "", false)
+	t.Setenv("AWS_ACCESS_KEY_ID", "AKIAREAL")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "SECRETREAL")
+
+	m := credentialMasker()
+	if m == nil {
+		t.Fatal("no masker")
+	}
+	// A SigV4 request signed with the sentinel key is recognized as linked.
+	req, _ := http.NewRequest(http.MethodGet, "https://s3.amazonaws.com/", nil)
+	req.Header.Set("X-Amz-Date", "20250101T000000Z")
+	req.Header.Set("Authorization", "AWS4-HMAC-SHA256 Credential="+m.Sentinels()["AWS_ACCESS_KEY_ID"]+
+		"/20250101/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-date, Signature=abc")
+	resigned, err := m.ResignAWS(req)
+	if err != nil {
+		t.Fatalf("resign: %v", err)
+	}
+	if !resigned {
+		t.Fatal("the AWS pair was not linked, so SigV4 would not be re-signed")
+	}
+	if strings.Contains(req.Header.Get("Authorization"), "fake_value_") {
+		t.Error("the sentinel survived")
+	}
+}
+
+func TestMaskedFiles_RewritesTheConfiguredFiles(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "credentials")
+	if err := os.WriteFile(path, []byte("token = REALTOKEN\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	withCredentialFlags(t, "TOKEN", path, false)
+	t.Setenv("TOKEN", "REALTOKEN")
+
+	m := credentialMasker()
+	if m == nil {
+		t.Fatal("no masker")
+	}
+	files := maskedFiles(m)
+	if len(files) != 1 {
+		t.Fatalf("masked %d files, want 1", len(files))
+	}
+	raw, err := os.ReadFile(files[0].FakePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "REALTOKEN") {
+		t.Fatal("the masked copy still holds the real value")
+	}
+}
+
+func withCredentialFlags(t *testing.T, names, files string, plaintext bool) {
+	t.Helper()
+	oldNames, oldFiles, oldPlain := *credentialMask, *credentialMaskFiles, *credentialPlaintext
+	*credentialMask, *credentialMaskFiles, *credentialPlaintext = names, files, plaintext
+	t.Cleanup(func() { *credentialMask, *credentialMaskFiles, *credentialPlaintext = oldNames, oldFiles, oldPlain })
+}

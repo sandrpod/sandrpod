@@ -10,6 +10,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
+- **Credentials the agent can use but not read** (`-credential-mask`,
+  `docs/CREDENTIALS.md`). A key in the sandbox's environment is a key the model
+  can print: masked credentials are replaced with `fake_value_<uuid4>` sentinels
+  and substituted back by the egress proxy on the way out — in headers, in
+  bodies (length-preserving, so `Content-Length` stays valid), in credentials
+  files bound over the originals, and in AWS SigV4 signatures, which are
+  re-signed with the real secret and checked against AWS's published example.
+  This requires terminating TLS for allow-listed hosts, which is a real loss:
+  the sandbox's certificate is ours, pinning breaks, and mTLS cannot work. That
+  is why it is opt-in, per-host excludable (`-credential-terminate-exclude`
+  keeps mTLS and pinned hosts opaque, without masking), and why a masked
+  credential over plain HTTP is refused rather than leaked. The proxy records
+  which credential went where, and marks the connection `terminated` — breaking
+  end-to-end TLS should be a visible event, not a footnote. Verified end to end
+  in a real network namespace: a sandboxed process with no route fetches HTTPS
+  through the relay, the upstream reads the real key, and the sandbox's own
+  output never contains it.
+
+### Added
+
 - **Decider mode: per-connection verdicts from the control plane**
   (`-egress-mode=decider`, `POST /api/v1/policy/decide`). `-egress-mode=server`
   polls a copy of the policy; this one holds no rules at all and asks for every

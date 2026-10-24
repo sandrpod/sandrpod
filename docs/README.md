@@ -78,6 +78,7 @@ before you pick one to try first:
 | Doc | What it covers |
 |---|---|
 | [PERMISSION_AND_AUDIT.md](PERMISSION_AND_AUDIT.md) ([中文](PERMISSION_AND_AUDIT.zh.md)) | The consent gate (hardlock → work_dir → permanent → session → ask), native dialogs, `sandrpod-tray`, and the decision-audit upload pipeline |
+| [CREDENTIALS.md](CREDENTIALS.md) ([中文](CREDENTIALS.zh.md)) | Letting an agent use a credential it can never read: sentinel values, TLS termination on the proxy, substitution in headers/bodies/files and AWS SigV4 re-signing — with the trust it costs stated plainly, and the excludes that keep mTLS and pinning working |
 | [OS_SANDBOX.md](OS_SANDBOX.md) ([中文](OS_SANDBOX.zh.md)) | The kernel floor under the other two: bubblewrap / Seatbelt wrapping of every spawned process, so `open()` and `connect()` fail where the gate and the proxy cannot see them — with the platform that is verified and the one that is not |
 | [EGRESS_POLICY.md](EGRESS_POLICY.md) ([中文](EGRESS_POLICY.zh.md)) | What a sandboxed process may connect to: the allow-list format, the resolved-address check that stops an allowed name reaching loopback/metadata, the deny reasons the model sees, and the honest boundary (filter, not wall) |
 
