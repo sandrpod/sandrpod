@@ -33,6 +33,12 @@ func withEgressFlags(t *testing.T, mode, policy string) {
 	t.Cleanup(func() {
 		*egressMode, *egressPolicy = oldMode, oldPolicy
 		toolbox.SetChildEnv(nil)
+		// A server-mode test leaves a sync goroutine behind; stop it before
+		// the next test restores the flags it would otherwise be reading.
+		if egressSyncStop != nil {
+			egressSyncStop()
+			egressSyncStop = nil
+		}
 	})
 }
 
@@ -157,7 +163,7 @@ func TestFetchEgressPolicy(t *testing.T) {
 		_, _ = io.WriteString(w, `{"sandbox":"sb-egress","policy":{"allowed_domains":["api.example.com"]}}`)
 	})
 
-	p, err := fetchEgressPolicy(context.Background())
+	p, err := fetchEgressPolicy(context.Background(), egressTarget{apiURL: *apiURL, token: *token, sandbox: *name})
 	if err != nil {
 		t.Fatalf("fetchEgressPolicy: %v", err)
 	}
@@ -172,7 +178,7 @@ func TestFetchEgressPolicy_NoPolicyMeansDenyAll(t *testing.T) {
 	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"sandbox":"sb-egress","policy":null}`)
 	})
-	p, err := fetchEgressPolicy(context.Background())
+	p, err := fetchEgressPolicy(context.Background(), egressTarget{apiURL: *apiURL, token: *token, sandbox: *name})
 	if err != nil {
 		t.Fatalf("fetchEgressPolicy: %v", err)
 	}
@@ -189,7 +195,7 @@ func TestFetchEgressPolicy_NotFoundIsNotRegistered(t *testing.T) {
 	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sandbox not found", http.StatusNotFound)
 	})
-	if _, err := fetchEgressPolicy(context.Background()); !errors.Is(err, errSandboxNotRegistered) {
+	if _, err := fetchEgressPolicy(context.Background(), egressTarget{apiURL: *apiURL, token: *token, sandbox: *name}); !errors.Is(err, errSandboxNotRegistered) {
 		t.Fatalf("404 should report errSandboxNotRegistered, got %v", err)
 	}
 }
@@ -198,7 +204,7 @@ func TestFetchEgressPolicy_ServerErrorIsAnError(t *testing.T) {
 	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	})
-	if _, err := fetchEgressPolicy(context.Background()); err == nil {
+	if _, err := fetchEgressPolicy(context.Background(), egressTarget{apiURL: *apiURL, token: *token, sandbox: *name}); err == nil {
 		t.Fatal("a 500 must be reported as an error so the current policy is kept")
 	}
 }

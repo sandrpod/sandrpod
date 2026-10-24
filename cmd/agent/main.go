@@ -436,7 +436,10 @@ func installEgress() error {
 			return err
 		}
 		log.Printf("egress: policy from control plane (http=%s socks=%s); deny-all until the first sync", srv.HTTPAddr(), srv.SOCKSAddr())
-		go syncEgressPolicy(context.Background(), srv)
+		target := egressTarget{apiURL: *apiURL, token: *token, sandbox: *name}
+		ctx, cancel := context.WithCancel(context.Background())
+		egressSyncStop = cancel
+		go syncEgressPolicy(ctx, srv, target, *egressSync)
 		return nil
 
 	default:
@@ -448,6 +451,19 @@ func installEgress() error {
 // graceful shutdown) can reach it after installEgress returns. One agent hosts
 // one sandbox, so there is exactly one.
 var startedEgress *egress.Server
+
+// egressSyncStop cancels the control-plane sync loop, if one is running.
+var egressSyncStop context.CancelFunc
+
+// egressTarget is what the sync loop needs to find its sandbox, captured once
+// so the goroutine never reads the process's flag variables. Reading them in
+// the loop would race with anything that re-reads flags at runtime (and did
+// race with the tests that restore them).
+type egressTarget struct {
+	apiURL  string
+	token   string
+	sandbox string
+}
 
 // startEgressServer starts the proxies and hands their address to every
 // process the toolbox will spawn.
@@ -472,15 +488,14 @@ func startEgressServer(compiled *egress.Compiled) (*egress.Server, error) {
 // Failures are not fatal and do not widen anything: the last policy that
 // parsed stays in force until a new one arrives. The comparison is on the
 // serialised policy, so a steady state logs nothing every interval.
-func syncEgressPolicy(ctx context.Context, srv *egress.Server) {
-	interval := *egressSync
+func syncEgressPolicy(ctx context.Context, srv *egress.Server, target egressTarget, interval time.Duration) {
 	if interval < 5*time.Second {
 		interval = 5 * time.Second
 	}
 	var lastApplied string
 	waitingForRegistration := false
 	apply := func() (retrySoon bool) {
-		policy, err := fetchEgressPolicy(ctx)
+		policy, err := fetchEgressPolicy(ctx, target)
 		if errors.Is(err, errSandboxNotRegistered) {
 			// The tunnel is still registering the sandbox. Retry on the fast
 			// path rather than sitting on deny-all for a whole sync interval.
@@ -549,20 +564,20 @@ var errSandboxNotRegistered = fmt.Errorf("sandbox is not registered with the con
 // sandbox with no policy answers with a null policy, which turns into an empty
 // allow-list: "the control plane has nothing to say" and "nothing is allowed"
 // are the same answer here, and only one of them is safe.
-func fetchEgressPolicy(ctx context.Context) (*egress.Policy, error) {
-	base := strings.TrimRight(*apiURL, "/")
+func fetchEgressPolicy(ctx context.Context, target egressTarget) (*egress.Policy, error) {
+	base := strings.TrimRight(target.apiURL, "/")
 	if base == "" {
 		return nil, fmt.Errorf("no -api-url configured")
 	}
-	url := base + "/api/v1/sandboxes/" + neturl.PathEscape(*name) + "/egress"
+	url := base + "/api/v1/sandboxes/" + neturl.PathEscape(target.sandbox) + "/egress"
 	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	if *token != "" {
-		req.Header.Set("Authorization", "Bearer "+*token)
+	if target.token != "" {
+		req.Header.Set("Authorization", "Bearer "+target.token)
 	}
 	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
 	if err != nil {
