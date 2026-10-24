@@ -177,23 +177,39 @@ func (m *Manager) checkBody(ctx context.Context, req Request) Decision {
 		}
 	}
 
-	// 2. work_dir is the silent-allow zone — everything beneath it that no
+	// 2. Mandatory deny — the dangerous few *inside* the work tree.
+	//
+	//    The hardlock list protects what is outside the sandbox; this one
+	//    protects what an agent could use to persist inside it: .git/hooks,
+	//    .bashrc, .mcp.json, IDE launch configs. A permanent grant on the work
+	//    tree, or the work_dir shortcut below, must not open them — that is the
+	//    whole point, so this check sits above both. They stay readable; only
+	//    writes are refused.
+	if req.Mode != ModeRead && IsMandatoryDenied(req.Path) {
+		return Decision{
+			Action: ActionDeny,
+			Reason: fmt.Sprintf("path %q is protected: agent-writable persistence (git hooks/config, shell startup, "+
+				"MCP config, IDE launch config) is denied even inside the work tree", req.Path),
+		}
+	}
+
+	// 3. work_dir is the silent-allow zone — everything beneath it that no
 	//    hardlock covers.
 	if m.workDir != "" && pathInside(req.Path, m.workDir) {
 		return Decision{Action: ActionAllow}
 	}
 
-	// 3. Permanent rule check.
+	// 4. Permanent rule check.
 	if matchAllow(req, snap.Rules, m.homeDir) {
 		return Decision{Action: ActionAllow}
 	}
 
-	// 4. Live session grant check (with TTL).
+	// 5. Live session grant check (with TTL).
 	if matchSessionAllow(req, snap.SessionGrants, m.homeDir, time.Now()) {
 		return Decision{Action: ActionAllow}
 	}
 
-	// 5. Ask the human.
+	// 6. Ask the human.
 	return m.askAndPersist(ctx, req)
 }
 

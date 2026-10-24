@@ -25,6 +25,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -81,6 +82,17 @@ func (a *auditAdapter) Record(source, decision, path, mode, caller, sessionID, r
 		// operator watching the agent's logs/syslog notices.
 		log.Printf("audit: failed to record %s decision for %q: %v", decision, path, err)
 	}
+}
+
+// envIntOr parses an integer from the environment, falling back to the default
+// when the variable is unset or unparsable.
+func envIntOr(key string, defaultVal int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return defaultVal
 }
 
 // envDurationOr parses a duration from the environment, falling back to the
@@ -172,6 +184,11 @@ var (
 	//   bwrap     — force bubblewrap; fail startup if it cannot run
 	//   seatbelt  — force sandbox-exec; fail startup if it cannot run
 	osSandbox = flag.String("os-sandbox", envOr("SANDRPOD_OS_SANDBOX", "off"), "OS sandbox for spawned processes: off | auto | bwrap | seatbelt")
+	// How deep below work_dir to look for the write-protected paths (git
+	// hooks/config, shell startup files, MCP config, IDE launch config). The
+	// scan needs concrete paths to mount over, so it costs a walk of the tree.
+	mandatoryDenyDepth = flag.Int("mandatory-deny-depth", envIntOr("SANDRPOD_MANDATORY_DENY_DEPTH", 3),
+		"How deep below work_dir to protect against agent-written persistence (0-10)")
 
 	// MCP transport bridge — see docs/MCP_BRIDGE.md
 	mcpEnabled       = flag.Bool("mcp-enabled", envBool("SANDRPOD_MCP_ENABLED", true), "Enable MCP transport bridge if mcp.json is present (default true).")
@@ -797,7 +814,7 @@ func installOSSandbox(tb *toolbox.Server) error {
 	}
 
 	workDir := tb.Executor().GetWorkDirForPermission()
-	policy := sandbox.Policy{WorkDir: workDir, ReadDeny: hardlockPaths()}
+	policy := sandboxPolicyFor(workDir, *mandatoryDenyDepth)
 	if egressRelay != nil {
 		// Egress is enforcing and the proxy is on a unix socket: take the
 		// sandbox's network away and let the relay be its only way out.
@@ -807,8 +824,8 @@ func installOSSandbox(tb *toolbox.Server) error {
 	}
 	toolbox.SetSandbox(w, policy)
 
-	log.Printf("os sandbox: %s active — work_dir=%s writable, %d hard-locked path(s) masked",
-		w.Name(), workDir, len(policy.ReadDeny))
+	log.Printf("os sandbox: %s active — work_dir=%s writable, %d hard-locked path(s) masked, %d persistence path(s) read-only",
+		w.Name(), workDir, len(policy.ReadDeny), len(policy.WriteDeny))
 	for _, p := range policy.ReadDeny {
 		log.Printf("os sandbox:   masked %s", p)
 	}
@@ -816,6 +833,19 @@ func installOSSandbox(tb *toolbox.Server) error {
 		log.Printf("os sandbox: WARNING: no work_dir — nothing is writable, commands will fail")
 	}
 	return nil
+}
+
+// sandboxPolicyFor builds the sandbox policy for a work tree: the hardlocks it
+// must not read, and the persistence paths it must not write.
+//
+// The two lists come from the permission store, so the gate and the kernel
+// enforce the same policy rather than two that drift.
+func sandboxPolicyFor(workDir string, denyDepth int) sandbox.Policy {
+	p := sandbox.Policy{WorkDir: workDir, ReadDeny: hardlockPaths()}
+	if workDir != "" {
+		p.WriteDeny = permission.MandatoryDenyPaths(workDir, denyDepth)
+	}
+	return p
 }
 
 // hardlockPaths returns the hard-locked paths from the permission store, in the

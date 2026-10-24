@@ -61,6 +61,11 @@ type Policy struct {
 	// WriteAllow are extra writable paths (defaults cover /tmp, $TMPDIR and
 	// the work_dir).
 	WriteAllow []string
+	// WriteDeny are paths inside the writable area that must stay read-only:
+	// the mandatory-deny set (git hooks/config, shell startup files, MCP
+	// config, IDE launch config). Unlike ReadDeny they remain readable — a
+	// build may need to read .git/config — and only writes are refused.
+	WriteDeny []string
 	// NetworkNone removes the network namespace where the platform allows it.
 	// Linux only, and off by default: the egress proxy lives on the host's
 	// loopback, so taking the network away would also take the proxy away —

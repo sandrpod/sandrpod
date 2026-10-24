@@ -30,6 +30,11 @@ One model on both platforms, deliberately:
 - **Hardlocks masked.** Every path the permission gate hard-locked — `~/.ssh`,
   `~/.aws`, `~/.sandrpod/permissions.json`, the keychain, … — is made
   **unreadable to the process**, not merely off-limits to the file API.
+- **Persistence paths read-only.** The mandatory-deny set — `.git/hooks`,
+  `.git/config`, `.bashrc`, `.mcp.json`, `.vscode`, `.claude/commands`, … —
+  stays readable and loses its write permission (`--ro-bind` over the writable
+  tree on Linux, a trailing `deny file-write*` on macOS). It is a walk of the
+  work tree bounded by `-mandatory-deny-depth` (default 3).
 
 On Linux that is bubblewrap:
 

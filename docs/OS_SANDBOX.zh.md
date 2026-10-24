@@ -28,6 +28,10 @@
 - **hardlock 被遮蔽**：permission gate 锁住的每个路径——`~/.ssh`、`~/.aws`、
   `~/.sandrpod/permissions.json`、钥匙串……——对进程**不可读**，而不只是"文件 API
   不让读"。
+- **持久化路径只读**：mandatory deny 那一组——`.git/hooks`、`.git/config`、
+  `.bashrc`、`.mcp.json`、`.vscode`、`.claude/commands`……——保持可读、去掉写权限
+  （Linux 用 `--ro-bind` 盖在可写树上，macOS 用末尾的 `deny file-write*`）。扫描深度
+  由 `-mandatory-deny-depth`（默认 3）限定。
 
 Linux 上是 bubblewrap：
 

@@ -127,6 +127,11 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 	if len(rules) > 0 {
 		b.WriteString("(allow file-write* " + strings.Join(rules, " ") + ")\n")
 	}
+	// Mandatory-deny paths inside the writable tree: readable (the allow of
+	// file-read* stands), not writable. Later rules win, so these come last.
+	for _, p := range expanded(policy.WriteDeny) {
+		b.WriteString(fmt.Sprintf("(deny file-write* (subpath %s))\n", sbplString(p)))
+	}
 	return b.String(), nil
 }
 

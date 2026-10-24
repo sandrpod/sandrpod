@@ -295,7 +295,7 @@ SBPL 则是后置 deny）。策略直接读 permission store，避免两份清�
 - **验收**：4.4 的两个用例（注入 + 不洗白）做成集成测试。
 - **成本**：2 周（不含 CA 分发运维）。
 
-### P1-5 工作区危险文件自动防护
+### P1-5 工作区危险文件自动防护 — ✅ 已实现
 
 - **做什么**：把 ASRT 的 mandatory deny 变成 permission 的**第六分支**，且**排在 work_dir 与 permanent 授权之上**：`.git/hooks`、`.git/config`、`.bashrc/.zshrc/.profile`、`.gitconfig`、`.mcp.json`、`.vscode/`、`.claude/commands/`、`.idea/`；扫描深度默认 3（1–10 可配）。顺带修掉 4.5 的分支顺序。
 - **为什么**：现在是固定 hardlock 列表，而真正的持久化后门在**工作目录里**——agent 往 `.git/hooks/pre-commit` 写一行就长期驻留，且下次 `git commit` 在沙箱外执行；而 4.5 说明连现有 hardlock 在默认配置下都可能被 work_dir 短路。

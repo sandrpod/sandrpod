@@ -34,10 +34,18 @@ Five branches, first match wins, in `pkg/permission/manager.go`:
 | | Branch | Outcome |
 |---|---|---|
 | 1 | **Hardlock** (`~/.ssh`, `~/.aws`, Keychain, IM databases) | **deny** |
-| 2 | Inside the agent's `work_dir` | allow, silently |
-| 3 | Standing permanent grant | allow |
-| 4 | Live session grant (with TTL) | allow |
-| 5 | Otherwise | ask the human |
+| 2 | **Mandatory deny** (git hooks/config, `.bashrc`, `.mcp.json`, IDE launch config) | **deny** on write, allow on read |
+| 3 | Inside the agent's `work_dir` | allow, silently |
+| 4 | Standing permanent grant | allow |
+| 5 | Live session grant (with TTL) | allow |
+| 6 | Otherwise | ask the human |
+
+The mandatory-deny branch is why an approved `work_dir` is not a blanket yes:
+a line appended to `.git/hooks/pre-commit`, a `.bashrc` edit or a `.mcp.json`
+rewrite survives every later sandbox and runs on the host, and no consent dialog
+was ever about that. Those paths are refused on write however the tree was
+granted — and the same list is handed to the OS sandbox
+([OS_SANDBOX.md](OS_SANDBOX.md)), so the kernel refuses it too.
 
 The hardlock check runs **before** every allow path, `work_dir` included. That
 ordering is the point: an accidentally-permanent rule on `~/.ssh` can never take

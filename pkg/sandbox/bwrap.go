@@ -147,6 +147,14 @@ func BuildBwrapArgs(policy Policy) ([]string, error) {
 		args = append(args, "--bind", dir, dir)
 	}
 
+	// Read-only islands inside the writable tree. Applied after the writable
+	// binds above, which is what makes them win: a later mount at the same
+	// path replaces the earlier one. The source and target are the same path,
+	// so the content stays visible and only the write bit is gone.
+	for _, p := range expanded(policy.WriteDeny) {
+		args = append(args, "--ro-bind", p, p)
+	}
+
 	// Masked paths, deepest first so a parent mount cannot hide a child that
 	// still needs its own mask.
 	denied := expanded(policy.ReadDeny)

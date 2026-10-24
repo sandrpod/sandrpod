@@ -133,10 +133,17 @@ ptyDec := mgr.CheckPTY(ctx, sandboxName, sessionID)
 **决策优先级**（必须不可跳）：
 
 1. hardlock 命中 → silent deny（仅 audit）
-2. `work_dir` 内 → silent allow（无 audit）
-3. permanent rule 命中 → allow
-4. session grant 未过期 → allow
-5. 全部不命中 → 调 `Notifier.Ask()` 弹同意框
+2. **mandatory deny**（git hooks/config、`.bashrc`、`.mcp.json`、IDE 启动配置）→
+   写拒绝、读放行
+3. `work_dir` 内 → silent allow（无 audit）
+4. permanent rule 命中 → allow
+5. session grant 未过期 → allow
+6. 全部不命中 → 调 `Notifier.Ask()` 弹同意框
+
+第 2 条决定了"批准了 work_dir"不等于"什么都行"：往 `.git/hooks/pre-commit` 追加一行、
+改 `.bashrc`、重写 `.mcp.json`，都会跨沙箱存活并在宿主上执行，而这些从来不是任何一次
+同意对话框在谈的东西。这份清单同时交给 OS 沙箱（见
+[OS_SANDBOX.zh.md](OS_SANDBOX.zh.md)），所以内核也拒绝。
 
 **重要不变量**：hardlock **永远赢过** permanent 与 `work_dir`（前者由 `upsertRule` 守住，即使有人手工编辑 `permissions.json` 把 hardlock 覆盖成 permanent 也会被拒绝；后者由分支顺序守住——`work_dir` 默认是 agent 的启动目录，从 `~` 启动时它就等于 home，若 work_dir 分支先跑，`~/.ssh`、`~/.aws` 乃至 `~/.sandrpod/permissions.json` 都会被静默放行）。work_dir 里含有 hardlock 路径时，agent 启动会打一条 WARNING。
 

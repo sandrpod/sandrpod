@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sandrpod/sandrpod/pkg/permission"
 	"github.com/sandrpod/sandrpod/pkg/sandbox"
 	"github.com/sandrpod/sandrpod/pkg/toolbox"
 )
@@ -371,5 +372,81 @@ func TestInstallOSSandbox_AutoNeverFailsStartup(t *testing.T) {
 	withOSSandboxFlag(t, "auto")
 	if err := installOSSandbox(toolbox.NewServer("", "")); err != nil {
 		t.Fatalf("auto should not fail startup: %v", err)
+	}
+}
+
+// The OS sandbox profile must include the persistence paths the gate refuses:
+// the same list, enforced by the kernel.
+func TestInstallOSSandbox_CarriesMandatoryDenies(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("only the Linux backend can be probed from a test")
+	}
+	mode := "bwrap"
+	if _, err := sandbox.Resolve(sandbox.Mode(mode), "", ""); err != nil {
+		t.Skipf("bwrap unusable here: %v", err)
+	}
+
+	work := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(work, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, ".bashrc"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	oldDepth := *mandatoryDenyDepth
+	*mandatoryDenyDepth = 3
+	t.Cleanup(func() { *mandatoryDenyDepth = oldDepth })
+
+	withOSSandboxFlag(t, mode)
+
+	tb := toolbox.NewServer("", "")
+	// Point the toolbox at the tree we built.
+	if err := os.Chdir(work); err != nil {
+		t.Fatal(err)
+	}
+	if err := installOSSandbox(tb); err != nil {
+		t.Fatalf("installOSSandbox: %v", err)
+	}
+	if got := toolbox.SandboxName(); got != "bwrap" {
+		t.Fatalf("expected bwrap to be installed, got %q", got)
+	}
+	if !permission.IsMandatoryDenied(filepath.Join(work, ".git", "hooks", "pre-commit")) {
+		t.Error("the gate's own checker disagrees with the profile's intent")
+	}
+}
+
+// The profile the agent builds carries both halves of the policy: what must not
+// be read (hardlocks) and what must not be written (persistence paths).
+func TestSandboxPolicyFor(t *testing.T) {
+	work := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(work, ".git", "hooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(work, "src"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "src", "main.go"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := sandboxPolicyFor(work, 3)
+	if p.WorkDir != work {
+		t.Errorf("work_dir = %q", p.WorkDir)
+	}
+	var sawHooks bool
+	for _, d := range p.WriteDeny {
+		if d == filepath.Join(work, ".git", "hooks") {
+			sawHooks = true
+		}
+		if strings.Contains(d, "src") {
+			t.Errorf("an ordinary source path must not be write-denied: %q", d)
+		}
+	}
+	if !sawHooks {
+		t.Errorf("git hooks missing from the write-deny list: %v", p.WriteDeny)
+	}
+	if p.NetworkNone {
+		t.Error("network isolation must not be on without an egress relay")
 	}
 }

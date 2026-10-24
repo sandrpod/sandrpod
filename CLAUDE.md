@@ -83,10 +83,12 @@ go run ./cmd/agent -api-url=http://localhost:8080 -name=my-laptop \
 #   -egress-policy     path to the egress allow-list JSON (required with enforce)
 #   -egress-sync       how often server mode re-reads the policy (default 60s)
 #   -os-sandbox        off | auto | bwrap | seatbelt  (default: off)
+#   -mandatory-deny-depth  how deep below work_dir to write-protect persistence
+#                      paths (git hooks/config, .bashrc, .mcp.json, IDE config; default 3)
 # Env equivalents: SANDRPOD_PERMISSION_MODE, SANDRPOD_PERMISSION_FILE,
 #                  SANDRPOD_AUDIT_DIR, SANDRPOD_AUDIT_UPLOAD_URL, SANDRPOD_AUDIT_UPLOAD_TOKEN,
 #                  SANDRPOD_EGRESS_MODE, SANDRPOD_EGRESS_POLICY, SANDRPOD_EGRESS_SYNC,
-#                  SANDRPOD_OS_SANDBOX
+#                  SANDRPOD_OS_SANDBOX, SANDRPOD_MANDATORY_DENY_DEPTH
 
 # Run sandrpod-tray (user-session GUI companion for employee-PC mode)
 sandrpod-tray serve                                      # tray icon + IPC + local settings HTTP
@@ -142,7 +144,7 @@ Client → API Server (Control Plane)
 - `pkg/store/`: Repository implementations — in-memory adapter (`memory.go`) and a dialect-parameterised SQL backend (`sqldb/`) that targets **either SQLite or PostgreSQL from one codebase** (a thin `Dialect` handles placeholder rebinding, DDL types, and the `FOR UPDATE SKIP LOCKED` job claim). A given server instance uses exactly one backend, chosen at startup by the `-db` DSN scheme (`sqlite:` / `postgres://`) — not both simultaneously. Plug-in via `store.Stores` aggregate.
 - `pkg/tunnel/`: WebSocket + yamux reverse tunnel (`PoderTunnel`, `TunnelStore`). Used by both Poder and sandrpod-agent.
 - `pkg/toolbox/`: Code execution engine with PTY, file operations, and process management.
-- `pkg/permission/`: Decision engine for employee-PC mode. 5-branch policy (hardlock → work_dir → permanent → session → ask). Includes `Store` (atomic JSON), `Manager`, `IPCClient/Server`, command policy scanner, and default hardlock seeds.
+- `pkg/permission/`: Decision engine for employee-PC mode. 6-branch policy (hardlock → mandatory deny → work_dir → permanent → session → ask). `mandatory.go` holds the always-write-denied set inside a work tree (git hooks/config, shell startup files, `.mcp.json`, IDE launch config) plus `MandatoryDenyPaths` for the OS-sandbox walk. Includes `Store` (atomic JSON), `Manager`, `IPCClient/Server`, command policy scanner, and default hardlock seeds.
 - `pkg/notify/`: Cross-platform consent dialog. macOS: `osascript display dialog`; Linux: `zenity`/`kdialog`; Windows: PowerShell `MessageBox`. Fail-close (timeout/error → deny).
 - `pkg/audit/`: Local NDJSON audit log (`Recorder`, auto-rotate at 8 MiB) + background HTTP uploader (`Uploader`, at-least-once delivery). Decoupled from `pkg/permission` via `AuditSink` interface.
 - `pkg/sandbox/`: OS sandbox for spawned processes (see `docs/OS_SANDBOX.md`). `Bwrap` (Linux) renders a bubblewrap mount plan — read-only root, writable `work_dir` + temp dirs, `--ro-bind /dev/null`/`--tmpfs` over hardlocks, and, when egress is enforcing, `--unshare-net` plus read-only binds of the agent binary (as `sandrpod-agent relay`) and the proxy's unix socket, with a shell wrapper that starts the relay, waits for its ready file and `exec "$@"`; `Seatbelt` (macOS) renders an SBPL profile with the same shape. Installed by `cmd/agent -os-sandbox` from the permission store's hardlocks, applied at every toolbox spawn site through `toolbox.SetSandbox`/`wrapSandbox` (`pkg/toolbox/sandbox.go`). `auto` degrades loudly, `bwrap`/`seatbelt` refuse startup when the backend's probe fails.

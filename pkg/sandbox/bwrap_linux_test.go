@@ -119,3 +119,71 @@ func TestBwrap_RunsSandboxed(t *testing.T) {
 
 // The network-namespace half lives in netns_linux_test.go: it needs a relay to
 // be useful, so it is tested through the whole chain rather than alone.
+
+// Write denies are islands in the writable tree: readable, not writable. This
+// is the mandatory-deny set — .git/hooks, .bashrc — enforced by the kernel
+// rather than by the file API.
+func TestBwrap_WriteDenyIslands(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is Linux-only")
+	}
+	w := &Bwrap{Path: "bwrap"}
+	if err := w.Available(); err != nil {
+		t.Skipf("bubblewrap unavailable: %v", err)
+	}
+
+	dir, err := os.MkdirTemp("/var/tmp", "sandrpod-wd-")
+	if err != nil {
+		t.Skipf("no scratch dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	work := filepath.Join(dir, "work")
+	hooks := filepath.Join(work, ".git", "hooks")
+	for _, d := range []string{hooks, filepath.Join(work, "src")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	hook := filepath.Join(hooks, "pre-commit")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\necho original\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rc := filepath.Join(work, ".bashrc")
+	if err := os.WriteFile(rc, []byte("export ORIGINAL=1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plain := filepath.Join(work, "src", "main.go")
+	if err := os.WriteFile(plain, []byte("package main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	policy := Policy{WorkDir: work, WriteDeny: []string{hooks, rc, filepath.Join(work, ".git", "config")}}
+	run := func(script string) (string, error) {
+		path, args, err := w.Command(policy, "/bin/sh", []string{"-c", script})
+		if err != nil {
+			t.Fatalf("Command: %v", err)
+		}
+		out, err := exec.Command(path, args...).CombinedOutput()
+		return string(out), err
+	}
+
+	// Reading the hook still works — a build may need to.
+	if out, err := run("cat " + hook); err != nil || !strings.Contains(out, "original") {
+		t.Errorf("the hook should stay readable: err=%v out=%q", err, out)
+	}
+	// Writing it does not, and the host's copy is untouched.
+	if _, err := run("echo pwned >> " + hook); err == nil {
+		t.Error("writing a git hook succeeded inside the sandbox")
+	}
+	if b, _ := os.ReadFile(hook); strings.Contains(string(b), "pwned") {
+		t.Fatal("the hook was modified on the host")
+	}
+	// Same for a shell startup file.
+	if _, err := run("echo pwned >> " + rc); err == nil {
+		t.Error("writing .bashrc succeeded inside the sandbox")
+	}
+	// An ordinary file in the same tree is still writable.
+	if out, err := run("echo ok > " + plain + " && cat " + plain); err != nil || !strings.Contains(out, "ok") {
+		t.Errorf("ordinary files must stay writable: err=%v out=%q", err, out)
+	}
+}

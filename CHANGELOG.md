@@ -10,6 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
+- **Mandatory deny: the persistence paths inside a work tree stay write-only
+  protected, whatever was granted.** Granting `work_dir` used to mean "write
+  anything under it", which included `.git/hooks/pre-commit` — a file that
+  survives every later sandbox and runs on the host at the next `git commit` —
+  plus `.bashrc`, `.mcp.json` (which configures what the agent itself may run)
+  and IDE launch configs. Those are now refused on write even with an explicit
+  rw grant, sit above the `work_dir` shortcut in the gate, and stay readable
+  (a build may need to read `.git/config`). The same list is handed to the OS
+  sandbox: `--ro-bind` islands over the writable tree on Linux, a trailing
+  `deny file-write*` on macOS, found by a bounded walk of the tree
+  (`-mandatory-deny-depth`, default 3). Verified against a real sandboxed
+  process: the hook reads, the write fails, the host's copy is untouched, and
+  an ordinary file in the same tree is still writable.
+
+
 - **The network namespace on Linux, with a relay so the proxy survives it.**
   With `-os-sandbox=bwrap|auto` and egress enforcing, a sandboxed process now
   runs in its own network namespace (`--unshare-net`): loopback and nothing
