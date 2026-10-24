@@ -18,7 +18,7 @@
 |---|---|---|
 | **出网策略**（`pkg/egress`） | 决定沙箱进程能到哪些目的地，其余拒绝并给出模型能照做的原因 | ✅ 本文档 |
 | **解析地址校验**（`pkg/egress/guard.go`） | 允许的是**名字**，但名字解析到 loopback / 内网 / 云 metadata / 本机地址时拒绝 | ✅ 本文档 |
-| **内核兜底**（network namespace、Seatbelt、bwrap、WFP） | 拦住不认代理变量的进程 | ❌ 不在本版本，见[路线图](#7-它不做什么) |
+| **内核兜底**（network namespace、Seatbelt、bwrap、WFP） | 拦住不认代理变量的进程 | ✅ 容器沙箱（Docker internal network，见 2.3）· ❌ 员工机仍在路线图，见[§7](#7-它不做什么) |
 
 最后一行是必须说清的部分。代理是**过滤器**：它覆盖所有认
 `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY` 的工具——而这正是 agent 日常在跑的
@@ -121,6 +121,38 @@ sandrpod-agent -api-url=https://api.example.com -name=sb-1 -token=… \
   时就看到拼写错误。PUT 走同一套校验，所以被拒绝的修改不会动到正在生效的策略。
 - PUT 改的是策略，不是已经建立的连接。代理在**建连时**过滤目的地，已建立的 CONNECT
   隧道会一直carry到关闭。要"立刻全停"，删掉沙箱——它会连同隧道和容器一起关。
+
+### 2.3 在容器里（poder）
+
+容器沙箱执行同一份策略，而且 Docker 提供了代理给不了的那一半：**把容器出去的
+路拿走**。
+
+```
+sandbox ── (internal network) ── sidecar proxy ── (bridge) ── internet
+```
+
+- 每个 pod 一张 `Internal: true` 的 bridge 网络。Docker 不为它装 masquerade
+  规则，所以接在它上面的容器没有出机器的路由——除了内嵌 DNS，连域名都解析不了；
+- 沙箱容器只接这张网，不接别的；
+- 一个小 sidecar 跑代理（`cmd/egress-proxy`，镜像
+  `ghcr.io/sandrpod/egress-proxy`，用 `make docker-egress` 构建），同时接在
+  internal 网络上（沙箱能按名字找到它）和一张普通网络上（它能出去）。端口固定
+  8080/1080，因为沙箱的环境变量在代理启动之前就写好了；口令按 pod 生成。
+
+API 完全不变：还是创建时的 `network` 块。策略随 pod 请求到达 poder；如果代理起
+不来，**创建就失败**——一个要了策略却静默没生效的沙箱，比一个没建出来的沙箱更糟。
+
+两个部署细节，先说清楚免得踩：
+
+- **以容器方式运行的 poder 会加入每个 pod 的 internal 网络**，否则 toolbox
+  （`http://<pod IP>:8080`）不可达。跑在 Linux 宿主机上的 poder 本来就能走 bridge，
+  不需要这一步。这也正是代理做成 sidecar 而不是 poder 内监听的原因：Docker
+  Desktop 上 bridge 网关地址在 Docker VM 里面，宿主根本绑不了。
+- `SANDRPOD_EGRESS_IMAGE` 可以替换 sidecar 镜像（离线镜像仓库场景）。
+
+已在真实 daemon 上验证：只放行 `example.com` 时，容器经代理访问它是 200，访问
+`example.org` 和 `denied_domains` 里的条目是 403，而带 `--noproxy '*'` 直连
+`example.com` 完全不通——最后这条就是"容器"和"笔记本"的区别。
 
 ---
 
@@ -276,10 +308,12 @@ loopback address"），审计日志留下具体地址。这个拆分是有意的
 - **没有逐连接的"问人"。** 未命中即拒绝。每次连接弹一次窗，是个带限流问题的
   UX 难题。
 - **没有 UDP，没有入站。** 只有 SOCKS5 CONNECT。
-- **容器里的沙箱还没强制。** 策略随沙箱记录走、也随创建 job 送到 poder，但容器
-  侧还没有自己的代理。今天只有 agent 模式真正执行策略；容器沙箱上的策略是"存下来
-  并可见"，不是"已执行"。接上它需要 poder 宿主机上的每沙箱代理，以及一个只能连到
-  该代理的容器网络。
+- **容器仍能到达"和它接在同一张网上的东西"。** 沙箱唯一的出路是每 pod 的 internal
+  网络，而那里除代理外没有别人——但在 Linux 宿主机上，宿主自己暴露在 bridge 网段
+  上的服务仍然可达。堵这一条需要宿主级 `iptables`（`DOCKER-USER` 链，root 权限），
+  不在本版本。
+- **员工机仍然是过滤器，不是墙。** 笔记本上没有可以拿走的 network namespace，
+  无视代理变量的进程照样能出去——那正是 §1 里"内核兜底"要解决的。
 - **`-egress-mode=server` 会刷新，`enforce` 不会。** server 模式下 agent 每
   `-egress-sync`（默认 60s）重读一次并热替换；文件模式只在启动时读一次。两者都只
   对**下一次连接**生效，不会切断已在跑的隧道（见 2.2）。

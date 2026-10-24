@@ -325,7 +325,9 @@ metadata / 本机网卡地址。拒绝会带上写给模型看的原因，并以
 进审计。策略随沙箱走：创建时在 `network` 块里指定，存进
 `sandboxes.egress_policy`，由 `GET /sandboxes/{name}/egress` 交给执行它的
 agent，可用 `PUT` 替换；`-egress-mode=server` 的 agent 以 deny-all 启动，再
-热替换轮询到的策略。它过滤的是"认代理变量的工具"，不是内核边界——分界线见
+热替换轮询到的策略。在笔记本上它是"认代理变量的工具"的过滤器，不是内核边界；在容器里则接近一堵墙：
+`pkg/poder/egress.go` 把 pod 放进每 pod 一张 `Internal: true` 的网络、代理作为
+sidecar，容器没有别的路由可走。两边的分界线见
 [EGRESS_POLICY.zh.md](EGRESS_POLICY.zh.md)。
 
 **sandrpod-tray**（`cmd/sandrpod-tray`）是用户会话侧的伴随进程：托盘图标、

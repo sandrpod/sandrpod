@@ -114,7 +114,12 @@ docker-toolbox-centos: ## Build the Toolbox Docker image - CentOS Stream 9 full-
 		-f docker/Dockerfile.toolbox.centos \
 		-t ghcr.io/sandrpod/toolbox:centos --load .
 
-docker: docker-poder docker-toolbox ## Build all Docker images
+docker-egress: ## Build the Egress proxy image (per-pod, linux/amd64)
+	docker buildx build --platform linux/amd64 \
+		-f docker/Dockerfile.egress \
+		-t ghcr.io/sandrpod/egress-proxy:latest --load .
+
+docker: docker-poder docker-toolbox docker-egress ## Build all Docker images
 
 # ─── Maintenance ────────────────────────────────────────────────────────────
 

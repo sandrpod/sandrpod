@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -78,6 +79,22 @@ type Options struct {
 	LogAllowed bool
 	// DialTimeout bounds the connect to the upstream. Default 30s.
 	DialTimeout time.Duration
+	// HTTPPort and SOCKSPort pin the listening ports (0 = ephemeral). A
+	// container pod needs fixed ports because the sandbox's environment is
+	// built before the proxy exists; an agent can leave them ephemeral and
+	// read the port back from the server.
+	HTTPPort  int
+	SOCKSPort int
+	// ListenHost is the interface both proxies bind to. Empty means 127.0.0.1,
+	// which is what an agent wants. A container pod binds the gateway address
+	// of its per-pod internal network instead, because that is the only
+	// address inside the sandbox that leads anywhere.
+	//
+	// A non-loopback bind is only allowed together with a token: the proxy has
+	// no other authentication, and a token-less listener on a reachable address
+	// is an open relay. Token is generated when empty, so this only rejects the
+	// explicit Token == "" + off-loopback combination the caller has to ask for.
+	ListenHost string
 }
 
 // Server is a running pair of proxies.
@@ -126,13 +143,17 @@ func Start(opts Options) (*Server, error) {
 	s.policy.Store(opts.Policy)
 	s.transport = s.newTransport()
 
-	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
+	listenHost := opts.ListenHost
+	if listenHost == "" {
+		listenHost = "127.0.0.1"
+	}
+	httpLn, err := net.Listen("tcp", net.JoinHostPort(listenHost, strconv.Itoa(opts.HTTPPort)))
 	if err != nil {
 		return nil, fmt.Errorf("egress: listen http: %w", err)
 	}
 	s.httpLn = httpLn
 
-	socksLn, err := net.Listen("tcp", "127.0.0.1:0")
+	socksLn, err := net.Listen("tcp", net.JoinHostPort(listenHost, strconv.Itoa(opts.SOCKSPort)))
 	if err != nil {
 		httpLn.Close()
 		return nil, fmt.Errorf("egress: listen socks: %w", err)

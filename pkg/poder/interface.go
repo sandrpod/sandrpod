@@ -6,6 +6,8 @@ package poder
 import (
 	"context"
 	"time"
+
+	"github.com/sandrpod/sandrpod/pkg/egress"
 )
 
 // PodState represents the lifecycle state of a pod.
@@ -51,6 +53,12 @@ type CreatePodRequest struct {
 	NetworkConfig *NetworkConfig    `json:"network_config,omitempty"`
 	DiskConfig    *DiskConfig       `json:"disk_config,omitempty"`
 	Labels        map[string]string `json:"labels,omitempty"`
+	// Network is the egress allow-list for this pod, forwarded verbatim from
+	// the sandbox's create request. The docker driver enforces it with a
+	// per-pod internal network and a proxy on its gateway; a driver that
+	// cannot enforce it refuses the create rather than silently ignoring the
+	// policy (see docker.go).
+	Network *egress.Policy `json:"network,omitempty"`
 	// CPUCores and MemoryMB, when > 0, cap the container's resources.
 	CPUCores float64 `json:"cpu_cores,omitempty"`
 	MemoryMB int64   `json:"memory_mb,omitempty"`

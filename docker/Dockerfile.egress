@@ -1,0 +1,10 @@
+# sandrpod-egress-proxy: the per-pod egress proxy a container sandbox reaches
+FROM golang:1.27-alpine AS build
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o /egress-proxy ./cmd/egress-proxy
+
+FROM alpine:3.20
+COPY --from=build /egress-proxy /usr/local/bin/egress-proxy
+USER 65534:65534
+ENTRYPOINT ["/usr/local/bin/egress-proxy"]

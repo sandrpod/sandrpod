@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/distribution/reference"
@@ -29,6 +30,11 @@ type DockerPoder struct {
 	*BasePoder
 	dockerClient *client.Client
 	networkName  string
+
+	// Per-pod egress enforcement state (see egress.go). Guarded because
+	// CreatePod and DeletePod can run concurrently on different pods.
+	egressMu sync.Mutex
+	egress   map[string]*podEgress
 }
 
 // NewDockerPoder creates a Docker-backed Poder.
@@ -82,7 +88,7 @@ func (p *DockerPoder) EnsureNetwork(ctx context.Context) error {
 }
 
 // CreatePod creates a new sandbox container pod.
-func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*PodInfo, error) {
+func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod *PodInfo, retErr error) {
 	// Only ensure the network exists when a custom network is specified
 	if p.networkName != "" {
 		if err := p.EnsureNetwork(ctx); err != nil {
@@ -120,19 +126,42 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 		log.Printf("poder: pull image %q failed (continuing, may exist locally): %v", imageName, perr)
 	}
 
+	// Egress enforcement, when the sandbox was created with a policy: a
+	// per-pod internal network plus a proxy on its gateway. This runs before
+	// the container exists so a sandbox never starts on a network it should
+	// not have had; if it fails, the create fails (see egress.go).
+	containerNetwork := p.networkName
+	env := []string{
+		"TOOLBOX_API_URL=" + req.APIURL,
+		"PODER_VERSION=" + req.PoderVersion,
+		"LOG_LEVEL=" + req.LogLevel,
+	}
+	if req.Network != nil {
+		enforced, eerr := p.setupEgress(ctx, podID, req.Network)
+		if eerr != nil {
+			return nil, eerr
+		}
+		containerNetwork = egressNetworkName(podID)
+		env = append(env, enforced.env...)
+		p.putEgress(podID, enforced)
+		// A failure past this point must not leave the proxy and the network
+		// behind; every early return below tears them down.
+		defer func() {
+			if retErr != nil {
+				p.teardownEgress(ctx, podID)
+			}
+		}()
+	}
+
 	containerConfig := &container.Config{
-		Image: imageName,
-		Env: []string{
-			"TOOLBOX_API_URL=" + req.APIURL,
-			"PODER_VERSION=" + req.PoderVersion,
-			"LOG_LEVEL=" + req.LogLevel,
-		},
+		Image:  imageName,
+		Env:    env,
 		Labels: labels,
 	}
 
 	hostConfig := &container.HostConfig{}
-	if p.networkName != "" {
-		hostConfig.NetworkMode = container.NetworkMode(p.networkName)
+	if containerNetwork != "" {
+		hostConfig.NetworkMode = container.NetworkMode(containerNetwork)
 	}
 	// Per-sandbox resource limits (noisy-neighbor isolation). NanoCPUs is CPU
 	// cores × 1e9; Memory is in bytes. Both are ignored by Docker when zero.
@@ -145,27 +174,33 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 
 	resp, err := p.dockerClient.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, podID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create container: %w", err)
+		retErr = fmt.Errorf("failed to create container: %w", err)
+		return nil, retErr
 	}
 
 	// Start the container
 	if err := p.dockerClient.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
-		return nil, fmt.Errorf("failed to start container: %w", err)
+		retErr = fmt.Errorf("failed to start container: %w", err)
+		return nil, retErr
 	}
 
 	// Inspect the container to get runtime details
 	containerInfo, err := p.dockerClient.ContainerInspect(ctx, resp.ID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to inspect container: %w", err)
+		retErr = fmt.Errorf("failed to inspect container: %w", err)
+		return nil, retErr
 	}
 
-	// Resolve container IP: prefer the specified network; fall back to the first available network IP
+	// Resolve container IP: prefer the network the container actually joined
+	// (the per-pod egress network when one was created); fall back to the
+	// first available network IP.
 	ip := ""
-	if p.networkName != "" {
-		if netSettings, ok := containerInfo.NetworkSettings.Networks[p.networkName]; ok {
+	if containerNetwork != "" {
+		if netSettings, ok := containerInfo.NetworkSettings.Networks[containerNetwork]; ok {
 			ip = netSettings.IPAddress
 		}
-	} else {
+	}
+	if ip == "" {
 		for _, netSettings := range containerInfo.NetworkSettings.Networks {
 			if netSettings.IPAddress != "" {
 				ip = netSettings.IPAddress
@@ -175,7 +210,7 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 	}
 
 	// Build PodInfo
-	pod := &PodInfo{
+	pod = &PodInfo{
 		ID:           podID,
 		Name:         req.Name,
 		Region:       req.Region,
@@ -198,16 +233,22 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (*Po
 	return pod, nil
 }
 
-// DeletePod stops and removes the container for the given pod.
+// DeletePod stops and removes the container for the given pod, then releases
+// the pod's egress proxy and internal network (if it had them).
 func (p *DockerPoder) DeletePod(ctx context.Context, podID string) error {
 	// Stop the container gracefully
 	_ = p.dockerClient.ContainerStop(ctx, podID, container.StopOptions{Timeout: ptr(10)})
 
 	// Remove the container
 	if err := p.dockerClient.ContainerRemove(ctx, podID, container.RemoveOptions{Force: true}); err != nil {
+		// The network cannot be removed while a container is attached, and
+		// the proxy is useless without its container: still try to release
+		// both, then report the container failure.
+		p.teardownEgress(ctx, podID)
 		return fmt.Errorf("failed to remove container: %w", err)
 	}
 
+	p.teardownEgress(ctx, podID)
 	p.UnregisterPod(podID)
 	return nil
 }

@@ -29,6 +29,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   Seatbelt for processes that ignore the environment), and why TLS
   interception and credential masking are not in it yet.
 
+- **Container sandboxes enforce the egress policy with Docker's network
+  isolation, not with environment variables alone.** A pod created with a policy
+  gets a per-pod `Internal: true` bridge network (no masquerade rule, so no route
+  off the machine and no DNS beyond the embedded resolver), a `cmd/egress-proxy`
+  sidecar joined to that network and to an ordinary one, and an environment
+  pointing at it on fixed ports. The sandbox container joins the internal network
+  only, so the proxy is the single way out — `--noproxy '*'` no longer reaches
+  anything, which is the difference between this and the laptop case. A poder
+  running as a container joins each pod's internal network so the toolbox stays
+  reachable; a poder on a Linux host needs nothing. If the proxy cannot be stood
+  up, `CreatePod` fails rather than starting a sandbox whose policy nobody
+  enforces. New image: `docker/Dockerfile.egress` / `make docker-egress`
+  (`ghcr.io/sandrpod/egress-proxy`, override with `SANDRPOD_EGRESS_IMAGE`).
+
 - **The egress policy now travels with the sandbox instead of living on the
   machine.** `POST /api/v1/sandboxes` accepts a `network` block, validated at
   create time (a policy that does not parse is a 400, before any provisioning),

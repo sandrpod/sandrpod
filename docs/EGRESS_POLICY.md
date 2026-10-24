@@ -19,7 +19,7 @@ part it cannot.
 |---|---|---|
 | **Egress policy** (`pkg/egress`) | Decides which destinations a sandboxed process may reach, and refuses the rest with a reason the model can act on | ✅ this document |
 | **Resolved-address check** (`pkg/egress/guard.go`) | Refuses an allow-listed *name* that resolves into loopback, the LAN, a cloud metadata endpoint or this host | ✅ this document |
-| **Kernel floor** (network namespace, Seatbelt, bwrap, WFP) | Stops a process that ignores the proxy variables | ❌ not in this build — [roadmap](#7-what-this-does-not-do) |
+| **Kernel floor** (network namespace, Seatbelt, bwrap, WFP) | Stops a process that ignores the proxy variables | ✅ for container sandboxes (Docker's internal network, §2.3) · ❌ for laptops — [roadmap](#7-what-this-does-not-do) |
 
 That last row is the honest part. The proxy is a **filter**: it covers every
 tool that honours `HTTP_PROXY` / `HTTPS_PROXY` / `ALL_PROXY`, which is most of
@@ -134,6 +134,46 @@ Two storage-level notes, because they are the parts that surprise people:
   destinations at connection time; an established CONNECT tunnel keeps
   carrying bytes until it closes. For "stop everything now", delete the
   sandbox — that closes the tunnel and the container with it.
+
+### 2.3 In a container (poder)
+
+A container sandbox enforces the same policy, and Docker supplies the part a
+proxy cannot: the container's route out is **removed**.
+
+```
+sandbox ── (internal network) ── sidecar proxy ── (bridge) ── internet
+```
+
+- a per-pod bridge network created with `Internal: true`. Docker installs no
+  masquerade rule for it, so a container on it has no route off the machine —
+  not even DNS beyond the embedded resolver;
+- the sandbox container joins that network and nothing else;
+- a small sidecar runs the proxy (`cmd/egress-proxy`, image
+  `ghcr.io/sandrpod/egress-proxy`, built with `make docker-egress`), joined to
+  the internal network so the sandbox reaches it by name, and to an ordinary
+  network so it can reach out. It listens on fixed ports (8080 HTTP / 1080
+  SOCKS) because the sandbox's environment is written before the proxy starts,
+  and its password is minted per pod.
+
+Nothing changes at the API: the same `network` block on create. The policy
+reaches the poder in the pod request, and if the proxy cannot be stood up the
+create fails — a sandbox that asked for a policy and silently did not get one
+is worse than one that was never created.
+
+Two deployment notes worth knowing before you see them:
+
+- **A poder running as a container joins each pod's internal network**, which is
+  what keeps the toolbox (`http://<pod IP>:8080`) reachable. A poder on a Linux
+  host reaches the bridge itself and needs nothing. This is why the proxy is a
+  sidecar and not a listener in the poder: on Docker Desktop the bridge address
+  lives inside the Docker VM, and the host cannot bind it at all.
+- `SANDRPOD_EGRESS_IMAGE` overrides the sidecar image, for an air-gapped mirror.
+
+Verified against a real daemon: with a policy allowing `example.com` only, a
+container reaches it through the proxy (200), is refused `example.org` and a
+`denied_domains` entry (403), and cannot reach `example.com` at all with
+`--noproxy '*'` — the last one is the difference between this and the
+laptop case.
 
 ---
 
@@ -306,12 +346,14 @@ Listed because a security boundary that overstates itself is worse than none:
 - **No per-connection "ask the human".** Undecided means denied. A prompt per
   connection is a UX question with a rate-limit problem attached.
 - **No UDP, no inbound.** SOCKS5 CONNECT only.
-- **Container sandboxes do not enforce it yet.** The policy travels with the
-  sandbox record and in the create job, so a poder receives it — but the
-  container side has no proxy of its own yet. Only agent mode enforces today;
-  a policy on a container sandbox is stored and visible, not applied. Wiring
-  it means a per-sandbox proxy on the poder host plus a container that can only
-  reach that proxy.
+- **A container can still reach what else joins its network.** The sandbox's
+  only route is the per-pod internal network, whose only other member is the
+  proxy — but on a Linux host the host's own services on the bridge subnet are
+  reachable too. Closing that needs host-level `iptables` (a `DOCKER-USER`
+  chain, root) and is not in this build.
+- **A laptop is still a filter, not a wall.** On an employee machine there is
+  no network namespace to take away; a process that ignores the proxy variables
+  still gets out. That is what the kernel floor (§1) is for.
 - **`-egress-mode=server` refreshes, `-egress-mode=enforce` does not.** In
   server mode the agent re-reads the policy every `-egress-sync` (60s by
   default) and swaps it into the running proxy; a file-based policy is read

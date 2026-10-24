@@ -349,9 +349,11 @@ own addresses. Refusals carry a reason written for the model and are audited as
 (`POST /sandboxes` with a `network` block), stored on the record
 (`sandboxes.egress_policy`), served at `GET /sandboxes/{name}/egress` to the
 agent that enforces it, and replaceable at `PUT` — an agent started with
-`-egress-mode=server` starts deny-all and hot-swaps the policy it polls. It is
-a filter over proxy-aware tools, not a kernel boundary — see
-[EGRESS_POLICY.md](EGRESS_POLICY.md) for exactly where the line is.
+`-egress-mode=server` starts deny-all and hot-swaps the policy it polls. On a laptop that is a filter over proxy-aware tools, not a kernel boundary. In
+a container it is closer to a wall: `pkg/poder/egress.go` puts the pod on a
+per-pod `Internal: true` network with the proxy as a sidecar, so the container
+has no route anywhere else. See [EGRESS_POLICY.md](EGRESS_POLICY.md) for exactly
+where the line is on each.
 
 **sandrpod-tray** (`cmd/sandrpod-tray`) is the user-session companion: tray
 icon, the consent dialogs, and a local settings page. It talks to the agent over
