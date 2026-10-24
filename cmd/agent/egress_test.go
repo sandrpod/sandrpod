@@ -401,10 +401,18 @@ func TestInstallOSSandbox_CarriesMandatoryDenies(t *testing.T) {
 	withOSSandboxFlag(t, mode)
 
 	tb := toolbox.NewServer("", "")
-	// Point the toolbox at the tree we built.
+	// Point the toolbox at the tree we built. The working directory is process
+	// state, so it is restored before the temp dir disappears: leaving it on a
+	// deleted path breaks every later test that shells out (go build, update
+	// commands) with "cannot determine current directory".
+	oldWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chdir(work); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = os.Chdir(oldWD) })
 	if err := installOSSandbox(tb); err != nil {
 		t.Fatalf("installOSSandbox: %v", err)
 	}
