@@ -277,6 +277,9 @@ func (m *KernelManager) get(contextID string) (*kernel, error) {
 	// Force matplotlib's non-interactive Agg backend so plt.show() is a no-op
 	// headless and figures stay in memory for us to capture as PNG.
 	cmd.Env = append(ChildEnv(), "MPLBACKEND=Agg")
+	if err := wrapSandbox(cmd); err != nil {
+		return nil, err
+	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err

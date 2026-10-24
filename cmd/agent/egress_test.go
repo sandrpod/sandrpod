@@ -16,11 +16,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/sandrpod/sandrpod/pkg/sandbox"
 	"github.com/sandrpod/sandrpod/pkg/toolbox"
 )
 
@@ -310,5 +312,64 @@ func TestSyncEgressPolicy_RetriesUntilRegistered(t *testing.T) {
 			t.Fatal("policy was not fetched after the sandbox registered")
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// ─── OS sandbox wiring ──────────────────────────────────────────────────────
+
+func withOSSandboxFlag(t *testing.T, mode string) {
+	t.Helper()
+	old := *osSandbox
+	*osSandbox = mode
+	t.Cleanup(func() {
+		*osSandbox = old
+		toolbox.SetSandbox(nil, sandbox.Policy{})
+	})
+}
+
+func TestInstallOSSandbox_OffIsANoOp(t *testing.T) {
+	withOSSandboxFlag(t, "off")
+	if err := installOSSandbox(toolbox.NewServer("", "")); err != nil {
+		t.Fatalf("off: %v", err)
+	}
+	if got := toolbox.SandboxName(); got != "" {
+		t.Errorf("off installed a wrapper: %q", got)
+	}
+}
+
+func TestInstallOSSandbox_UnknownMode(t *testing.T) {
+	withOSSandboxFlag(t, "sandboxy")
+	if err := installOSSandbox(toolbox.NewServer("", "")); err == nil {
+		t.Fatal("an unknown mode must be rejected")
+	}
+}
+
+// Forcing a backend that cannot run here must fail startup rather than start an
+// agent that believes it is sandboxed. The probe is what decides, and on a
+// machine where Seatbelt cannot be applied (an already-sandboxed shell, an MDM
+// agent) it fails — which is exactly the case this asserts.
+func TestInstallOSSandbox_ForcedBackendThatCannotRun(t *testing.T) {
+	mode := "seatbelt"
+	if runtime.GOOS == "linux" {
+		mode = "bwrap"
+	}
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("no OS sandbox backend on this platform")
+	}
+	if _, err := sandbox.Resolve(sandbox.Mode(mode), "", ""); err == nil {
+		t.Skipf("%s is usable here, so the failure path cannot be exercised", mode)
+	}
+
+	withOSSandboxFlag(t, mode)
+	if err := installOSSandbox(toolbox.NewServer("", "")); err == nil {
+		t.Fatalf("forcing %s where it cannot run must fail startup", mode)
+	}
+}
+
+// auto never fails startup: it either installs a backend or says why not.
+func TestInstallOSSandbox_AutoNeverFailsStartup(t *testing.T) {
+	withOSSandboxFlag(t, "auto")
+	if err := installOSSandbox(toolbox.NewServer("", "")); err != nil {
+		t.Fatalf("auto should not fail startup: %v", err)
 	}
 }

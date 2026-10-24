@@ -473,7 +473,10 @@ make build-all
 > `/process`、`/procmgr/start`、`/process/session/*/exec`、`/pty/create`。
 > 它们是**摩擦层 + 审计层**，不是 OS 级沙箱。**任意代码执行
 > 天然看不住文件访问**：`/process` / `/code-interpreter` 里一句 `open("~/.ssh/id_rsa")`
-> 直接走进程 syscall，不经过 `pkg/permission`，hardlock 也拦不住(见下方 ❌)。真正的文件
+> 直接走进程 syscall，不经过 `pkg/permission`，hardlock 也拦不住(见下方 ❌)。
+不过加上 `-os-sandbox=auto|bwrap|seatbelt` 后，agent 会把每个派生进程装进平台沙箱
+（根只读、work_dir 可写、hardlock 被遮蔽），见 [OS_SANDBOX.zh.md](OS_SANDBOX.zh.md)
+——此时"门不管"这一句仍然成立，但内核管了。不开这个开关时，下面的结论原样有效。真正的文件
 > 边界只能靠 OS 用户隔离 / seccomp / landlock —— 本产品**不做** syscall 级沙箱。
 
 ### 这套机制 **挡不住** 什么

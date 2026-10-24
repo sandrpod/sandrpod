@@ -127,6 +127,9 @@ func (m *SessionManager) Create(sessionId string) (*Session, error) {
 	cmd := exec.Command(shell, args...)
 	cmd.Dir = defaultWorkDir()
 	cmd.Env = ChildEnv()
+	if err := wrapSandbox(cmd); err != nil {
+		return nil, &SessionError{Op: "create", Err: err}
+	}
 
 	// Obtain the stdin pipe before starting the process.
 	stdin, err := cmd.StdinPipe()

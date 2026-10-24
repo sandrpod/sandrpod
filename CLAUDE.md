@@ -80,9 +80,11 @@ go run ./cmd/agent -api-url=http://localhost:8080 -name=my-laptop \
 #   -egress-mode       off | enforce (local file) | server (control plane)  (default: off)
 #   -egress-policy     path to the egress allow-list JSON (required with enforce)
 #   -egress-sync       how often server mode re-reads the policy (default 60s)
+#   -os-sandbox        off | auto | bwrap | seatbelt  (default: off)
 # Env equivalents: SANDRPOD_PERMISSION_MODE, SANDRPOD_PERMISSION_FILE,
 #                  SANDRPOD_AUDIT_DIR, SANDRPOD_AUDIT_UPLOAD_URL, SANDRPOD_AUDIT_UPLOAD_TOKEN,
-#                  SANDRPOD_EGRESS_MODE, SANDRPOD_EGRESS_POLICY, SANDRPOD_EGRESS_SYNC
+#                  SANDRPOD_EGRESS_MODE, SANDRPOD_EGRESS_POLICY, SANDRPOD_EGRESS_SYNC,
+#                  SANDRPOD_OS_SANDBOX
 
 # Run sandrpod-tray (user-session GUI companion for employee-PC mode)
 sandrpod-tray serve                                      # tray icon + IPC + local settings HTTP
@@ -141,6 +143,7 @@ Client → API Server (Control Plane)
 - `pkg/permission/`: Decision engine for employee-PC mode. 5-branch policy (hardlock → work_dir → permanent → session → ask). Includes `Store` (atomic JSON), `Manager`, `IPCClient/Server`, command policy scanner, and default hardlock seeds.
 - `pkg/notify/`: Cross-platform consent dialog. macOS: `osascript display dialog`; Linux: `zenity`/`kdialog`; Windows: PowerShell `MessageBox`. Fail-close (timeout/error → deny).
 - `pkg/audit/`: Local NDJSON audit log (`Recorder`, auto-rotate at 8 MiB) + background HTTP uploader (`Uploader`, at-least-once delivery). Decoupled from `pkg/permission` via `AuditSink` interface.
+- `pkg/sandbox/`: OS sandbox for spawned processes (see `docs/OS_SANDBOX.md`). `Bwrap` (Linux) renders a bubblewrap mount plan — read-only root, writable `work_dir` + temp dirs, `--ro-bind /dev/null`/`--tmpfs` over hardlocks, optional `--unshare-net`; `Seatbelt` (macOS) renders an SBPL profile with the same shape. Installed by `cmd/agent -os-sandbox` from the permission store's hardlocks, applied at every toolbox spawn site through `toolbox.SetSandbox`/`wrapSandbox` (`pkg/toolbox/sandbox.go`). `auto` degrades loudly, `bwrap`/`seatbelt` refuse startup when the backend's probe fails.
 - `cmd/egress-proxy/`: The egress proxy as a standalone process, run as a per-pod sidecar container for container sandboxes (`docker/Dockerfile.egress`, `make docker-egress`, image overridable with `SANDRPOD_EGRESS_IMAGE`).
 - `pkg/egress/`: Egress policy for agent mode (see `docs/EGRESS_POLICY.md`). `Policy`/`Compiled` match `host[:port]` entries (`*.` wildcards, IPv6 literals); `guard.go` resolves an allowed name once and refuses loopback / link-local / cloud metadata / this host's own addresses before dialing the vetted address; `proxy.go` + `socks.go` serve an HTTP (absolute-form + CONNECT) and SOCKS5 (CONNECT only) proxy bound to `127.0.0.1` behind a per-process token. Denials carry a model-facing reason (`X-Deny-Reason`) and are audited as `source: "egress"`. Wired in by `cmd/agent`: `-egress-mode=enforce` reads a local file, `-egress-mode=server` starts deny-all and polls `GET /api/v1/sandboxes/{name}/egress`, hot-swapping through `Server.UpdatePolicy`. The proxy env goes to every toolbox-spawned process through `toolbox.SetChildEnv`/`ChildEnv` (`pkg/toolbox/env.go`), never into the agent's own traffic. The policy is stored with the sandbox record (`SandboxInfo.Network`, `sandboxes.egress_policy`), set at create time, and editable via `PUT`. Container pods (poder) enforce it differently: `pkg/poder/egress.go` creates a per-pod `Internal: true` docker network, runs the `cmd/egress-proxy` sidecar on it plus an ordinary network, and attaches the sandbox to the internal one only — so the container has no route except the proxy. If the proxy cannot be started, `CreatePod` fails rather than silently running unenforced.
 

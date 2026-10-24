@@ -339,6 +339,13 @@ and, when an upload URL is configured, ships batches to a central endpoint with
 at-least-once delivery. It is decoupled from `pkg/permission` through the
 `AuditSink` interface.
 
+`pkg/sandbox` is the kernel floor under both of them: with
+`-os-sandbox=auto|bwrap|seatbelt` every process the toolbox spawns is launched
+inside bubblewrap (Linux) or Seatbelt (macOS) with a read-only root, a writable
+`work_dir` and the hardlocks masked, so `open()` and `connect()` fail where the
+gate and the proxy cannot see them. The policy is read from the permission
+store — one list of sensitive paths, not two. See [OS_SANDBOX.md](OS_SANDBOX.md).
+
 `pkg/egress` is the network half of the same posture: with
 `-egress-mode=enforce` the agent starts an HTTP + SOCKS5 proxy on loopback and
 hands every spawned process its address, so a connection is allowed only when

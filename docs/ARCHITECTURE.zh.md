@@ -318,6 +318,12 @@ opt-in，面向"沙箱就是某个人的笔记本"这种员工机部署。用 `-
 就在后台批量投递到中心端点，至少一次送达。它通过 `AuditSink` 接口与
 `pkg/permission` 解耦。
 
+`pkg/sandbox` 是这两层下面的内核兜底：`-os-sandbox=auto|bwrap|seatbelt` 时，
+toolbox 派生的每个进程都在 bubblewrap（Linux）或 Seatbelt（macOS）里启动——根只读、
+`work_dir` 可写、hardlock 被遮蔽——于是 `open()` / `connect()` 在门和代理看不见的
+地方也会失败。策略直接读 permission store（一份敏感路径清单，不是两份），见
+[OS_SANDBOX.zh.md](OS_SANDBOX.zh.md)。
+
 `pkg/egress` 是同一套姿态在网络侧的对应物：`-egress-mode=enforce` 时 agent 在
 loopback 上起 HTTP + SOCKS5 代理，把地址交给每个派生进程。一个连接要被放行，
 必须 allow-list 覆盖该目的地，**并且**该名字没有解析到 loopback / 内网 / 云

@@ -258,7 +258,15 @@ ASRT 在这点上的不变量是明确的：**mandatory deny 对 `allowWrite` �
 sidecar，容器除代理外无路可走（已在本机 Docker 实测）。
 尚未做：员工机的内核兜底（netns / Seatbelt）、TLS 拦截与凭据掩码。
 
-### P1-2 把 hardlock 下沉成内核事实（仅 agent 模式）
+### P1-2 把 hardlock 下沉成内核事实（仅 agent 模式）— 🟡 已实现（`pkg/sandbox`）
+
+`-os-sandbox=auto|bwrap|seatbelt`：toolbox 派生进程全部套进 bwrap（Linux）/ Seatbelt
+（macOS）——根只读、work_dir 可写、hardlock 被遮蔽（`--tmpfs` / `--ro-bind /dev/null`，
+SBPL 则是后置 deny）。策略直接读 permission store，避免两份清单漂移。
+**Linux 已实测**（特权容器里跑真实沙箱化命令：hardlock 读不到、目录列不出、树外写
+落不了盘、`--unshare-net` 真的断网）；**macOS 未验证**——`sandbox-exec` 不能在已沙箱化
+的进程里嵌套，只能靠启动探测把关，文档里标了 experimental。
+未做：把网络也拿走（需要 unix socket + relay 那套桥接）。
 
 - **做什么**：由 `permissions.json` 生成强制层——macOS 生成 SBPL 跑 `sandbox-exec`；Linux 用 bwrap 把 hardlock 路径 tmpfs/ro-bind 覆盖掉。
 - **为什么**：`open("~/.ssh/id_rsa")` 目前直达 syscall，hardlock 对"跑代码"无效；这是把"consent gate"升级成"沙箱"的唯一途径。

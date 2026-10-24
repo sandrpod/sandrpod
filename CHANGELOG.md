@@ -10,6 +10,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
+- **An OS sandbox for spawned processes** (`pkg/sandbox`, `-os-sandbox`,
+  `SANDRPOD_OS_SANDBOX`). The gate covers the file API and the egress proxy
+  covers proxy-aware clients; neither sees a process that calls `open(2)` or
+  `connect(2)` directly, which is what `Execute` and the PTY are. With this on,
+  every process the toolbox spawns runs under bubblewrap (Linux) or Seatbelt
+  (macOS) with a read-only root, a writable `work_dir` and the permission
+  store's hardlocks masked — `~/.ssh` is unreadable to `open()`, not just to the
+  file API. One list of sensitive paths, enforced in two places. `auto`
+  degrades loudly when the backend cannot run; `bwrap`/`seatbelt` refuse to
+  start rather than run unprotected. Linux is verified against a real sandboxed
+  process (`pkg/sandbox/bwrap_linux_test.go`, run in a privileged container);
+  macOS is experimental — `sandbox-exec` cannot be exercised inside an
+  already-sandboxed shell, which is where it was written — and is gated behind
+  its own probe. The network namespace is implemented but off by default: the
+  egress proxy lives on the host's loopback, so taking the network away needs
+  the relay that has not been built yet.
+
 - **Egress policy for agent mode** — `pkg/egress`, `-egress-mode=enforce`,
   `-egress-policy <file>`. The agent starts an HTTP and a SOCKS5 proxy on
   loopback behind a per-process token, and hands every process the toolbox

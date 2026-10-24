@@ -137,8 +137,12 @@ On those it is a friction layer and an audit layer — the agent cannot read you
 SSH key through the file API, cannot `scp` without the command policy seeing it,
 cannot open a PTY without you agreeing.
 
-**It is not an OS-level sandbox, and arbitrary code execution is not
-containable by design.** A line of `open("~/.ssh/id_rsa")` inside
+**On its own it is not an OS-level sandbox, and arbitrary code execution is not
+containable by design.** With `-os-sandbox=auto|bwrap|seatbelt` the agent wraps
+every spawned process in the platform's sandbox (read-only root, writable
+work_dir, hardlocks masked) — see [OS_SANDBOX.md](OS_SANDBOX.md) — which turns
+the paragraph below into "the gate still does not cover it, but the kernel
+does". Without that flag, everything below stands. A line of `open("~/.ssh/id_rsa")` inside
 `/process` or `/code-interpreter` goes straight to a syscall. It never reaches
 `pkg/permission`, and the hardlock does not apply. The real file boundary is OS
 user isolation, seccomp, or landlock. SandrPod does not implement syscall-level

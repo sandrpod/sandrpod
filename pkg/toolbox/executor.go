@@ -328,6 +328,12 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 	cmd.Dir = defaultWorkDir()
 	// Inherit the parent process environment so PATH resolves python3, node, etc.
 	cmd.Env = ChildEnv()
+	// OS sandbox (bwrap / seatbelt) when the agent installed one. Applied here,
+	// at the last moment before the process exists, so nothing in between can
+	// hand a caller an unwrapped command.
+	if err := wrapSandbox(cmd); err != nil {
+		return nil, err
+	}
 	// Process group isolation (Unix only; no-op on Windows)
 	setSysProcAttr(cmd)
 

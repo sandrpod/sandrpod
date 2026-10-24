@@ -34,6 +34,7 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/egress"
 	"github.com/sandrpod/sandrpod/pkg/notify"
 	"github.com/sandrpod/sandrpod/pkg/permission"
+	"github.com/sandrpod/sandrpod/pkg/sandbox"
 	"github.com/sandrpod/sandrpod/pkg/toolbox"
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
@@ -41,6 +42,10 @@ import (
 // agentVersion is overridden at build time via -ldflags "-X main.agentVersion=…".
 // Default "dev" makes local builds clearly distinguishable on the server side.
 var agentVersion = "dev"
+
+// permissionStore is the store installPermissionGate loaded, so the OS sandbox
+// can mask exactly the paths the gate hard-locks without loading it twice.
+var permissionStore *permission.Store
 
 // sharedAuditRecorder is set by installAuditPipeline and reused by the MCP
 // bridge so both subsystems write through the same Recorder (= same mutex,
@@ -152,6 +157,20 @@ var (
 	egressPolicy = flag.String("egress-policy", envOr("SANDRPOD_EGRESS_POLICY", ""), "Path to the egress policy JSON (required with -egress-mode=enforce)")
 	egressSync   = flag.Duration("egress-sync", envDurationOr("SANDRPOD_EGRESS_SYNC", 60*time.Second), "How often -egress-mode=server re-reads the policy from the control plane")
 
+	// OS sandbox — the kernel floor under the proxy. Wraps every process the
+	// toolbox spawns in bubblewrap (Linux) or Seatbelt (macOS), so a call that
+	// ignores the proxy variables still cannot reach the network from outside
+	// the work tree, and a hard-locked path is unreadable to open(2), not just
+	// to the file API.
+	//
+	//   off       — no wrapper (default: an OS sandbox that breaks a toolchain
+	//               is worse than none, and this one has to be chosen)
+	//   auto      — use the platform backend when it works here, report it when
+	//               it does not
+	//   bwrap     — force bubblewrap; fail startup if it cannot run
+	//   seatbelt  — force sandbox-exec; fail startup if it cannot run
+	osSandbox = flag.String("os-sandbox", envOr("SANDRPOD_OS_SANDBOX", "off"), "OS sandbox for spawned processes: off | auto | bwrap | seatbelt")
+
 	// MCP transport bridge — see docs/MCP_BRIDGE.md
 	mcpEnabled       = flag.Bool("mcp-enabled", envBool("SANDRPOD_MCP_ENABLED", true), "Enable MCP transport bridge if mcp.json is present (default true).")
 	mcpConfigPath    = flag.String("mcp-config", envOr("SANDRPOD_MCP_CONFIG", ""), "Path to mcp.json (default: ~/.sandrpod/mcp.json). Empty + missing default disables the bridge.")
@@ -234,6 +253,11 @@ func main() {
 		log.Fatalf("egress policy setup failed: %v", err)
 	}
 
+	// OS sandbox: the layer that covers what the gate and the proxy cannot see.
+	if err := installOSSandbox(tb); err != nil {
+		log.Fatalf("os sandbox setup failed: %v", err)
+	}
+
 	tbHandler := tb.Handler()
 
 	// Optional MCP transport bridge: aggregates local stdio MCP servers
@@ -289,6 +313,7 @@ func installPermissionGate(tb *toolbox.Server) error {
 	if err != nil {
 		return fmt.Errorf("load permissions.json (%s): %w", storePath, err)
 	}
+	permissionStore = store
 
 	// Seed baseline protections on first run so `--permission-mode=strict|prompt`
 	// never silently runs with zero hardlocks / an empty command policy just
@@ -600,6 +625,70 @@ func fetchEgressPolicy(ctx context.Context, target egressTarget) (*egress.Policy
 		return &egress.Policy{}, nil
 	}
 	return body.Policy, nil
+}
+
+// installOSSandbox wraps every spawned process in the platform's OS sandbox.
+//
+// This is the layer the other two cannot be: the permission gate covers the
+// file API, the egress proxy covers processes that honour HTTP_PROXY, and a
+// process that calls open(2) or connect(2) directly — which is the whole point
+// of Execute and the PTY — is covered only here. What it enforces is the same
+// policy the gate describes, expressed where the kernel can act on it:
+// read-only root, writable work_dir, hard-locked paths masked.
+//
+// Modes are explicit because an OS sandbox that silently does not start is
+// indistinguishable from one that is protecting you: `auto` uses the backend
+// when it works and says so when it does not, while `bwrap`/`seatbelt` refuse
+// to start the agent rather than run unprotected.
+func installOSSandbox(tb *toolbox.Server) error {
+	mode := sandbox.Mode(strings.ToLower(strings.TrimSpace(*osSandbox)))
+	if mode == "" {
+		mode = sandbox.ModeOff
+	}
+	if mode == sandbox.ModeOff {
+		return nil
+	}
+
+	w, err := sandbox.Resolve(mode, "", "")
+	if err != nil {
+		return err
+	}
+	if w == nil {
+		// auto, and this host has no backend. Say what is missing rather than
+		// let an operator believe something is enforced.
+		log.Printf("os sandbox: %s requested but not usable on this host — processes run unwrapped", mode)
+		return nil
+	}
+
+	workDir := tb.Executor().GetWorkDirForPermission()
+	policy := sandbox.Policy{WorkDir: workDir, ReadDeny: hardlockPaths()}
+	toolbox.SetSandbox(w, policy)
+
+	log.Printf("os sandbox: %s active — work_dir=%s writable, %d hard-locked path(s) masked",
+		w.Name(), workDir, len(policy.ReadDeny))
+	for _, p := range policy.ReadDeny {
+		log.Printf("os sandbox:   masked %s", p)
+	}
+	if workDir == "" {
+		log.Printf("os sandbox: WARNING: no work_dir — nothing is writable, commands will fail")
+	}
+	return nil
+}
+
+// hardlockPaths returns the hard-locked paths from the permission store, in the
+// form the sandbox profile needs (absolute, existing).
+func hardlockPaths() []string {
+	if permissionStore == nil {
+		return nil
+	}
+	var out []string
+	for _, r := range permissionStore.Snapshot().Rules {
+		if r.Scope != permission.ScopeHardlock {
+			continue
+		}
+		out = append(out, r.Path)
+	}
+	return out
 }
 
 // egressAuditSink maps an egress event onto the audit record shape. Denials

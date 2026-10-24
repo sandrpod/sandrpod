@@ -68,6 +68,9 @@ func (m *PtyManager) CreateSession(width, height int) (*PtySession, error) {
 		env = append(env, "TERM=xterm-256color")
 	}
 	cmd.Env = env
+	if err := wrapSandbox(cmd); err != nil {
+		return nil, err
+	}
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
