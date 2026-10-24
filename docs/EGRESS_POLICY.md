@@ -117,6 +117,13 @@ tunnel from the moment it registers, so a proxy that started permissive "for a
 second" would be a hole with a schedule. A control plane that never answers
 leaves the sandbox with no egress and a log line saying why.
 
+The first seconds are worth spelling out, because the sandbox record is created
+*by* the agent's own registration: a 404 from the endpoint means "not
+registered yet", not "no policy". The agent retries that case every 2s instead
+of waiting out the sync interval, so a restart costs a couple of seconds of no
+egress rather than a minute. A 200 with a `null` policy is the other thing
+entirely — a registered sandbox nobody configured — and it means deny all.
+
 Two storage-level notes, because they are the parts that surprise people:
 
 - A create request with a policy that does not parse is **400**, before any

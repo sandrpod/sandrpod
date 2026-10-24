@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -477,12 +478,23 @@ func syncEgressPolicy(ctx context.Context, srv *egress.Server) {
 		interval = 5 * time.Second
 	}
 	var lastApplied string
-	apply := func() {
+	waitingForRegistration := false
+	apply := func() (retrySoon bool) {
 		policy, err := fetchEgressPolicy(ctx)
+		if errors.Is(err, errSandboxNotRegistered) {
+			// The tunnel is still registering the sandbox. Retry on the fast
+			// path rather than sitting on deny-all for a whole sync interval.
+			if !waitingForRegistration {
+				log.Printf("egress: waiting for the control plane to register this sandbox")
+				waitingForRegistration = true
+			}
+			return true
+		}
 		if err != nil {
 			log.Printf("egress: policy sync failed (%v) — keeping the current policy", err)
-			return
+			return false
 		}
+		waitingForRegistration = false
 		raw, _ := json.Marshal(policy)
 		if string(raw) == lastApplied {
 			return
@@ -499,25 +511,44 @@ func syncEgressPolicy(ctx context.Context, srv *egress.Server) {
 		lastApplied = string(raw)
 		allow, deny := compiled.Strings()
 		log.Printf("egress: policy updated from control plane — allow=%v deny=%v", allow, deny)
+		return false
 	}
 
-	apply()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	// registrationRetry is the fast path used only while the sandbox is
+	// unknown to the control plane; everything after that runs on `interval`.
+	const registrationRetry = 2 * time.Second
+	next := interval
+	if apply() {
+		next = registrationRetry
+	}
+	timer := time.NewTimer(next)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			apply()
+		case <-timer.C:
+			if apply() {
+				timer.Reset(registrationRetry)
+			} else {
+				timer.Reset(interval)
+			}
 		}
 	}
 }
 
+// errSandboxNotRegistered reports that the control plane has no record of this
+// sandbox yet — which is the normal state for the first seconds of an agent's
+// life, since the record appears when the tunnel registers. It is distinct
+// from "the sandbox exists but has no policy": one means "ask again shortly",
+// the other means "deny everything", and collapsing them costs a minute of
+// egress after every agent restart.
+var errSandboxNotRegistered = fmt.Errorf("sandbox is not registered with the control plane yet")
+
 // fetchEgressPolicy reads this sandbox's policy from the control plane. A
-// sandbox with no policy answers with a null policy, which turned into an
-// empty allow-list: "the control plane has nothing to say" and "nothing is
-// allowed" are the same answer here, and only one of them is safe.
+// sandbox with no policy answers with a null policy, which turns into an empty
+// allow-list: "the control plane has nothing to say" and "nothing is allowed"
+// are the same answer here, and only one of them is safe.
 func fetchEgressPolicy(ctx context.Context) (*egress.Policy, error) {
 	base := strings.TrimRight(*apiURL, "/")
 	if base == "" {
@@ -539,7 +570,7 @@ func fetchEgressPolicy(ctx context.Context) (*egress.Policy, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotFound {
-		return &egress.Policy{}, nil
+		return nil, errSandboxNotRegistered
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("control plane answered %s", resp.Status)

@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -178,13 +180,17 @@ func TestFetchEgressPolicy_NoPolicyMeansDenyAll(t *testing.T) {
 		t.Fatalf("null policy should become an empty allow-list, got %+v", p)
 	}
 
-	// 404 takes the same path.
+}
+
+// A 404 means "this sandbox is not registered yet", which the sync loop retries
+// on a short timer. It must not be confused with "registered, no policy":
+// collapsing the two costs a full sync interval of egress after every restart.
+func TestFetchEgressPolicy_NotFoundIsNotRegistered(t *testing.T) {
 	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "sandbox not found", http.StatusNotFound)
 	})
-	p, err = fetchEgressPolicy(context.Background())
-	if err != nil || p == nil || len(p.AllowedDomains) != 0 {
-		t.Fatalf("404 should become an empty allow-list, got %+v / %v", p, err)
+	if _, err := fetchEgressPolicy(context.Background()); !errors.Is(err, errSandboxNotRegistered) {
+		t.Fatalf("404 should report errSandboxNotRegistered, got %v", err)
 	}
 }
 
@@ -240,5 +246,63 @@ func TestInstallEgress_ServerModeStartsClosedThenSyncs(t *testing.T) {
 			t.Fatal("policy from the control plane never took effect")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// The retry path in miniature: an agent that reaches the control plane before
+// its sandbox exists must not sit on deny-all until the next full interval.
+func TestSyncEgressPolicy_RetriesUntilRegistered(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+	upURL, _ := url.Parse(upstream.URL)
+	_, upPort, _ := net.SplitHostPort(upURL.Host)
+
+	var registered atomic.Bool
+	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		if !registered.Load() {
+			http.Error(w, "sandbox not found", http.StatusNotFound)
+			return
+		}
+		_, _ = io.WriteString(w, `{"sandbox":"sb-egress","policy":{"allowed_domains":["127.0.0.1:`+upPort+`"]}}`)
+	})
+	// A long interval: only the registration retry can make this pass in time.
+	withEgressFlags(t, "server", "")
+	*egressSync = time.Hour
+	t.Cleanup(func() { *egressSync = 60 * time.Second })
+
+	if err := installEgress(); err != nil {
+		t.Fatalf("installEgress: %v", err)
+	}
+
+	// While unregistered the sandbox has no egress.
+	proxyURL, _ := url.Parse(startedEgress.ProxyURL())
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}, Timeout: 5 * time.Second}
+	resp, err := client.Get(upstream.URL)
+	if err != nil {
+		t.Fatalf("request while unregistered: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("while unregistered: status=%d, want 403", resp.StatusCode)
+	}
+
+	// The sandbox appears; the fast retry (2s) must pick the policy up well
+	// before the one-hour interval would.
+	registered.Store(true)
+	deadline := time.Now().Add(6 * time.Second)
+	for {
+		resp, err := client.Get(upstream.URL)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("policy was not fetched after the sandbox registered")
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
 }
