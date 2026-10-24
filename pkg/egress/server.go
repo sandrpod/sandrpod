@@ -91,6 +91,11 @@ type Server struct {
 	socksLn net.Listener
 	httpSrv *http.Server
 
+	// policy is the live allow-list. Start installs the first one; a
+	// control-plane sync calls UpdatePolicy later, and every decision reads
+	// whichever pointer is current at the moment the connection arrives.
+	policy atomic.Pointer[Compiled]
+
 	allowed atomic.Uint64
 	denied  atomic.Uint64
 }
@@ -118,6 +123,7 @@ func Start(opts Options) (*Server, error) {
 		token:  token,
 		dialer: newDialer(opts.Policy, opts.DialTimeout),
 	}
+	s.policy.Store(opts.Policy)
 	s.transport = s.newTransport()
 
 	httpLn, err := net.Listen("tcp", "127.0.0.1:0")
@@ -144,6 +150,31 @@ func Start(opts Options) (*Server, error) {
 
 	return s, nil
 }
+
+// UpdatePolicy replaces the allow-list of a running server.
+//
+// This is what makes a control-plane policy change land without restarting the
+// agent: the listeners, the token, the counters and the open tunnels all stay.
+// What changes is the next decision — a domain added here is reachable on the
+// next connection, one removed is refused on the next connection. A tunnel
+// that is already open keeps carrying bytes: the proxy filters destinations,
+// not streams, and pretending to cut a live CONNECT would be a promise this
+// layer cannot keep. Callers that need that certainty close the sandbox.
+//
+// A nil policy is rejected rather than treated as "allow everything" or
+// "deny everything": both readings are surprising, and both are one bug away
+// from the wrong one.
+func (s *Server) UpdatePolicy(p *Compiled) error {
+	if p == nil {
+		return errors.New("egress: UpdatePolicy needs a policy")
+	}
+	s.policy.Store(p)
+	s.dialer.setPolicy(p)
+	return nil
+}
+
+// Policy returns the policy the server is enforcing right now.
+func (s *Server) Policy() *Compiled { return s.policy.Load() }
 
 // Close stops both listeners and every in-flight tunnel they started.
 func (s *Server) Close() error {

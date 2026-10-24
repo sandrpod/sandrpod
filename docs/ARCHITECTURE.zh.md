@@ -322,7 +322,10 @@ opt-in，面向"沙箱就是某个人的笔记本"这种员工机部署。用 `-
 loopback 上起 HTTP + SOCKS5 代理，把地址交给每个派生进程。一个连接要被放行，
 必须 allow-list 覆盖该目的地，**并且**该名字没有解析到 loopback / 内网 / 云
 metadata / 本机网卡地址。拒绝会带上写给模型看的原因，并以 `source: "egress"`
-进审计。它过滤的是"认代理变量的工具"，不是内核边界——分界线见
+进审计。策略随沙箱走：创建时在 `network` 块里指定，存进
+`sandboxes.egress_policy`，由 `GET /sandboxes/{name}/egress` 交给执行它的
+agent，可用 `PUT` 替换；`-egress-mode=server` 的 agent 以 deny-all 启动，再
+热替换轮询到的策略。它过滤的是"认代理变量的工具"，不是内核边界——分界线见
 [EGRESS_POLICY.zh.md](EGRESS_POLICY.zh.md)。
 
 **sandrpod-tray**（`cmd/sandrpod-tray`）是用户会话侧的伴随进程：托盘图标、

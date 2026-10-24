@@ -32,6 +32,8 @@ walk data out", not as "the machine is airgapped".
 
 ## 2. Quick start
 
+### 2.1 From a file (one machine, hands on)
+
 ```bash
 # 1. Write a policy. An empty allow list means "no egress at all", so every
 #    policy starts by naming what the work actually needs.
@@ -76,6 +78,55 @@ curl: (56) ... # HTTP 403, X-Deny-Reason: not_allowed
 allow list denies everything, and an agent that starts with one looks, from
 the outside, exactly like an agent whose network is broken — better to refuse
 to start and say why.
+
+### 2.2 From the control plane (the fleet case)
+
+The policy belongs to the sandbox, not to the machine it runs on: it is set
+when the sandbox is created, it is returned with the sandbox record, and it can
+be tightened while the sandbox runs.
+
+```bash
+# Create a sandbox that may reach npm and GitHub, and nothing else.
+curl -sS -X POST https://api.example.com/api/v1/sandboxes \
+  -H "X-Sandrpod-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+        "name": "sb-1", "provider_type": "local", "region": "local",
+        "network": { "allowed_domains": ["registry.npmjs.org:443", "api.github.com"] }
+      }'
+
+# What this sandbox is allowed to reach (the sandbox itself polls this).
+curl -sS https://api.example.com/api/v1/sandboxes/sb-1/egress \
+  -H "X-Sandrpod-Token: $TOKEN"
+
+# Tighten it while it runs. Takes effect on the sandbox's next connection.
+curl -sS -X PUT https://api.example.com/api/v1/sandboxes/sb-1/egress \
+  -H "X-Sandrpod-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"allowed_domains": ["registry.npmjs.org:443"]}'
+```
+
+The agent then runs with `-egress-mode=server` and no policy file:
+
+```bash
+sandrpod-agent -api-url=https://api.example.com -name=sb-1 -token=… \
+  -egress-mode=server -egress-sync=60s
+```
+
+Ordering is deliberate: the proxy starts with an **empty** policy and only
+widens when the control plane answers. The agent is reachable through the
+tunnel from the moment it registers, so a proxy that started permissive "for a
+second" would be a hole with a schedule. A control plane that never answers
+leaves the sandbox with no egress and a log line saying why.
+
+Two storage-level notes, because they are the parts that surprise people:
+
+- A create request with a policy that does not parse is **400**, before any
+  provisioning: the operator sees the typo while the call is still in front of
+  them. The same validation runs on PUT, so a rejected edit leaves the running
+  policy untouched.
+- A PUT changes the policy, not the connections already open. The proxy filters
+  destinations at connection time; an established CONNECT tunnel keeps
+  carrying bytes until it closes. For "stop everything now", delete the
+  sandbox — that closes the tunnel and the container with it.
 
 ---
 
@@ -248,12 +299,17 @@ Listed because a security boundary that overstates itself is worse than none:
 - **No per-connection "ask the human".** Undecided means denied. A prompt per
   connection is a UX question with a rate-limit problem attached.
 - **No UDP, no inbound.** SOCKS5 CONNECT only.
-- **One proxy per agent.** Every sandbox on that agent shares the policy. Per
-  sandbox policies need the control plane to carry the policy in the sandbox's
-  job payload, which is the follow-up for container mode.
-- **The policy is read at startup.** Editing the file has no effect until the
-  agent restarts; a hot reload would need to be explicit about which changes
-  take effect on in-flight tunnels (none of them do).
+- **Container sandboxes do not enforce it yet.** The policy travels with the
+  sandbox record and in the create job, so a poder receives it — but the
+  container side has no proxy of its own yet. Only agent mode enforces today;
+  a policy on a container sandbox is stored and visible, not applied. Wiring
+  it means a per-sandbox proxy on the poder host plus a container that can only
+  reach that proxy.
+- **`-egress-mode=server` refreshes, `-egress-mode=enforce` does not.** In
+  server mode the agent re-reads the policy every `-egress-sync` (60s by
+  default) and swaps it into the running proxy; a file-based policy is read
+  once at startup. Both apply to the *next* connection — in-flight tunnels are
+  not cut (see 2.2).
 - **`git` over SSH is not covered.** `ssh` reads no proxy variable. The fix is
   the `GIT_SSH_COMMAND` + `socat` trick sandbox-runtime uses, which means
   requiring `socat` on every employee machine; not doing that yet.
@@ -290,8 +346,9 @@ real CONNECT tunnel, a real SOCKS5 handshake, and the auth refusals).
 
 | Flag | Env | Default | Meaning |
 |---|---|---|---|
-| `-egress-mode` | `SANDRPOD_EGRESS_MODE` | `off` | `off` \| `enforce` |
-| `-egress-policy` | `SANDRPOD_EGRESS_POLICY` | — | Path to the policy JSON; required with `enforce` |
+| `-egress-mode` | `SANDRPOD_EGRESS_MODE` | `off` | `off` \| `enforce` (local file) \| `server` (control plane) |
+| `-egress-policy` | `SANDRPOD_EGRESS_POLICY` | — | Path to the policy JSON; required with `enforce`, ignored with `server` |
+| `-egress-sync` | `SANDRPOD_EGRESS_SYNC` | `60s` | How often `server` re-reads the policy (floor 5s) |
 
 See also: [PERMISSION_AND_AUDIT.md](PERMISSION_AND_AUDIT.md) for the consent
 gate this complements, and

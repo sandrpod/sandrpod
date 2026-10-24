@@ -419,3 +419,67 @@ func TestTransportDial_RechecksPolicy(t *testing.T) {
 		t.Fatalf("expected a DenyError, got %v", err)
 	}
 }
+
+// A policy change must land on a running server: same listeners, same token,
+// new verdicts on the next connection.
+func TestUpdatePolicy_TakesEffectWithoutRestart(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+	upURL, _ := url.Parse(upstream.URL)
+	_, upPort, _ := net.SplitHostPort(upURL.Host)
+
+	s, _ := startProxy(t, Policy{AllowedDomains: []string{"example.com"}})
+	client := proxyClient(t, s)
+
+	resp, err := client.Get(upstream.URL)
+	if err != nil {
+		t.Fatalf("request: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("before the update: status=%d, want 403", resp.StatusCode)
+	}
+
+	updated, err := Parse(Policy{AllowedDomains: []string{"127.0.0.1:" + upPort}})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if err := s.UpdatePolicy(updated); err != nil {
+		t.Fatalf("UpdatePolicy: %v", err)
+	}
+	if s.Policy() != updated {
+		t.Error("Policy() should report the policy just installed")
+	}
+
+	resp, err = client.Get(upstream.URL)
+	if err != nil {
+		t.Fatalf("request after update: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("after the update: status=%d, want 200", resp.StatusCode)
+	}
+
+	// Tightening works the same way: the next request is refused again.
+	tightened, err := Parse(Policy{AllowedDomains: []string{}})
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if err := s.UpdatePolicy(tightened); err != nil {
+		t.Fatalf("UpdatePolicy: %v", err)
+	}
+	resp, err = client.Get(upstream.URL)
+	if err != nil {
+		t.Fatalf("request after tightening: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("after tightening: status=%d, want 403", resp.StatusCode)
+	}
+
+	if err := s.UpdatePolicy(nil); err == nil {
+		t.Error("UpdatePolicy(nil) must be rejected")
+	}
+}

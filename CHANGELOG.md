@@ -29,6 +29,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   Seatbelt for processes that ignore the environment), and why TLS
   interception and credential masking are not in it yet.
 
+- **The egress policy now travels with the sandbox instead of living on the
+  machine.** `POST /api/v1/sandboxes` accepts a `network` block, validated at
+  create time (a policy that does not parse is a 400, before any provisioning),
+  stored on the sandbox record (`sandboxes.egress_policy`, an additive column
+  migration) and served at `GET /api/v1/sandboxes/{name}/egress` — the endpoint
+  the sandbox itself polls. `PUT` replaces the policy of a running sandbox and
+  applies to its next connection, which is what makes "tighten this sandbox
+  now" a call rather than a redeploy. The agent gains `-egress-mode=server`: it
+  starts its proxy with an empty policy (deny all) and hot-swaps the policy it
+  fetches every `-egress-sync`, so the window between "the sandbox is
+  reachable" and "the policy has arrived" is closed rather than open. Both the
+  fetch and the swap are fail-closed: a control plane that never answers leaves
+  the sandbox without egress and says so in the log, and a 500 keeps the last
+  policy that parsed rather than widening to "no policy".
+
 ### Fixed
 
 - **A broad `work_dir` silently re-opened every hardlock.** The permission gate

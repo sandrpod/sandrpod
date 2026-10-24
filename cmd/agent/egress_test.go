@@ -7,13 +7,17 @@
 package main
 
 import (
+	"context"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/toolbox"
 )
@@ -125,5 +129,116 @@ func TestInstallEgress_InjectsProxyAndEnforces(t *testing.T) {
 	}
 	if !strings.Contains(string(body), "not on the egress allow list") {
 		t.Errorf("body should explain the refusal: %q", body)
+	}
+}
+
+// ─── control-plane policy (mode=server) ─────────────────────────────────────
+
+func withControlPlane(t *testing.T, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	oldURL, oldToken, oldName := *apiURL, *token, *name
+	*apiURL, *token, *name = srv.URL, "test-token", "sb-egress"
+	t.Cleanup(func() { *apiURL, *token, *name = oldURL, oldToken, oldName })
+	return srv
+}
+
+func TestFetchEgressPolicy(t *testing.T) {
+	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Errorf("Authorization = %q, want the agent's token", got)
+		}
+		if r.URL.Path != "/api/v1/sandboxes/sb-egress/egress" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"sandbox":"sb-egress","policy":{"allowed_domains":["api.example.com"]}}`)
+	})
+
+	p, err := fetchEgressPolicy(context.Background())
+	if err != nil {
+		t.Fatalf("fetchEgressPolicy: %v", err)
+	}
+	if p == nil || len(p.AllowedDomains) != 1 || p.AllowedDomains[0] != "api.example.com" {
+		t.Fatalf("policy = %+v", p)
+	}
+}
+
+// A sandbox the control plane knows nothing about must read as "deny all",
+// not as an error that leaves the previous (possibly wider) policy in place.
+func TestFetchEgressPolicy_NoPolicyMeansDenyAll(t *testing.T) {
+	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"sandbox":"sb-egress","policy":null}`)
+	})
+	p, err := fetchEgressPolicy(context.Background())
+	if err != nil {
+		t.Fatalf("fetchEgressPolicy: %v", err)
+	}
+	if p == nil || len(p.AllowedDomains) != 0 {
+		t.Fatalf("null policy should become an empty allow-list, got %+v", p)
+	}
+
+	// 404 takes the same path.
+	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "sandbox not found", http.StatusNotFound)
+	})
+	p, err = fetchEgressPolicy(context.Background())
+	if err != nil || p == nil || len(p.AllowedDomains) != 0 {
+		t.Fatalf("404 should become an empty allow-list, got %+v / %v", p, err)
+	}
+}
+
+func TestFetchEgressPolicy_ServerErrorIsAnError(t *testing.T) {
+	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	})
+	if _, err := fetchEgressPolicy(context.Background()); err == nil {
+		t.Fatal("a 500 must be reported as an error so the current policy is kept")
+	}
+}
+
+// Server mode starts closed and opens only when a policy actually arrives.
+func TestInstallEgress_ServerModeStartsClosedThenSyncs(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "ok")
+	}))
+	defer upstream.Close()
+	upURL, _ := url.Parse(upstream.URL)
+	_, upPort, _ := net.SplitHostPort(upURL.Host)
+
+	withControlPlane(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"sandbox":"sb-egress","policy":{"allowed_domains":["127.0.0.1:`+upPort+`"]}}`)
+	})
+	withEgressFlags(t, "server", "")
+	*egressSync = 5 * time.Second
+	t.Cleanup(func() { *egressSync = 60 * time.Second })
+
+	if err := installEgress(); err != nil {
+		t.Fatalf("installEgress: %v", err)
+	}
+	if startedEgress == nil {
+		t.Fatal("server mode should have started a proxy")
+	}
+
+	proxyURL, err := url.Parse(startedEgress.ProxyURL())
+	if err != nil {
+		t.Fatalf("parse proxy url: %v", err)
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}, Timeout: 5 * time.Second}
+
+	// The first sync runs immediately in a goroutine; wait for it to land.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		resp, err := client.Get(upstream.URL)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				break
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("policy from the control plane never took effect")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }

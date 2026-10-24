@@ -28,6 +28,7 @@ import (
 	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -111,8 +112,13 @@ func blockedClass(ip netip.Addr) string {
 }
 
 // dialer resolves once, vets, and dials the vetted address.
+//
+// The policy sits behind an atomic pointer rather than a plain field because a
+// running server can be re-pointed at a new policy (the control plane pushes
+// one down) while tunnels are being opened. A dial either sees the old policy
+// or the new one, never a half-applied one.
 type dialer struct {
-	policy  *Compiled
+	policy  atomic.Pointer[Compiled]
 	timeout time.Duration
 	// lookup is injectable so the guard can be tested without a resolver.
 	lookup func(ctx context.Context, host string) ([]netip.Addr, error)
@@ -131,15 +137,19 @@ func newDialer(p *Compiled, timeout time.Duration) *dialer {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
-	return &dialer{
-		policy:  p,
+	d := &dialer{
 		timeout: timeout,
 		lookup: func(ctx context.Context, host string) ([]netip.Addr, error) {
 			addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
 			return addrs, err
 		},
 	}
+	d.policy.Store(p)
+	return d
 }
+
+// setPolicy swaps the policy the address check consults.
+func (d *dialer) setPolicy(p *Compiled) { d.policy.Store(p) }
 
 // dialAllowingVetted opens a TCP connection to host:port, refusing any
 // destination whose resolved address falls in a denied class.
@@ -177,7 +187,7 @@ func (d *dialer) vet(ctx context.Context, host string, port int) (netip.Addr, *D
 			}}
 		}
 		ip = ip.Unmap()
-		if d.policy.AllowsLiteral(host, port) {
+		if d.policy.Load().AllowsLiteral(host, port) {
 			return ip, nil
 		}
 		if deny := d.checkAddr(ip, host, port); deny != nil {
@@ -234,7 +244,7 @@ func (d *dialer) checkAddr(ip netip.Addr, host string, port int) *DenyError {
 	if class := blockedClass(ip); class != "" {
 		return deny(class)
 	}
-	if rule, ok := d.policy.DeniedAddressReason(ip); ok {
+	if rule, ok := d.policy.Load().DeniedAddressReason(ip); ok {
 		return deny("a denied address range (" + rule + ")")
 	}
 	if d.isOwnAddr(ip) {

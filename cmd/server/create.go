@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/sandrpod/sandrpod/pkg/egress"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
@@ -90,6 +91,11 @@ func runSandboxCreate(
 			s.OS = sbOS
 			s.OSVersion = sbOSVersion
 			s.TTLSeconds = req.TTLSeconds
+			// A create request may carry a new policy (same sandbox name,
+			// recreated); keep the record in step with the request.
+			if req.Network != nil {
+				s.Network = req.Network
+			}
 			s.LastActivity = time.Now()
 		})
 	} else {
@@ -101,6 +107,7 @@ func runSandboxCreate(
 			InstanceType: req.InstanceType,
 			Owner:        owner,
 			TTLSeconds:   req.TTLSeconds,
+			Network:      req.Network,
 			PoderID:      schedJob.PoderID,
 			ProxyURL:     "tunnel://" + schedJob.PoderID,
 			State:        podpkg.StatePending,
@@ -206,4 +213,19 @@ func validateSandboxName(name string) string {
 		return "sandbox name must start with a letter or digit and contain only letters, digits, '.', '_' or '-'"
 	}
 	return ""
+}
+
+// validateEgressPolicy compiles a policy without starting anything. It is the
+// create-time and PUT-time gate: a malformed entry, an unknown wildcard shape,
+// an unbracketed IPv6 literal with a port — all of it is reported here, while
+// the caller is still on the line, instead of at the sandbox, where it would
+// read as "the network is broken".
+func validateEgressPolicy(p *egress.Policy) error {
+	if p == nil {
+		return nil
+	}
+	if _, err := egress.Parse(*p); err != nil {
+		return err
+	}
+	return nil
 }

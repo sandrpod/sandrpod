@@ -30,6 +30,8 @@
 
 ## 2. 快速开始
 
+### 2.1 来自文件（单机、手工）
+
 ```bash
 # 1. 写策略。空的 allow 列表 = 完全禁止出网，所以每条策略都从"这次任务真正需要
 #    什么"开始写。
@@ -72,6 +74,48 @@ curl: (56) ... # HTTP 403, X-Deny-Reason: not_allowed
 `-egress-mode=enforce` 但没给 `-egress-policy` 是启动错误。空 allow 列表会拒绝
 一切，而从外部看，"策略为空"和"网络坏了"长得一模一样——不如直接拒绝启动并说明
 原因。
+
+### 2.2 来自控制面（舰队场景）
+
+策略属于**沙箱**，不属于它落在哪台机器上：创建沙箱时指定，随沙箱记录取回，运
+行中还能收紧。
+
+```bash
+# 建一个只允许 npm 和 GitHub 的沙箱。
+curl -sS -X POST https://api.example.com/api/v1/sandboxes \
+  -H "X-Sandrpod-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+        "name": "sb-1", "provider_type": "local", "region": "local",
+        "network": { "allowed_domains": ["registry.npmjs.org:443", "api.github.com"] }
+      }'
+
+# 这个沙箱能到哪（沙箱自己也会轮询这个接口）。
+curl -sS https://api.example.com/api/v1/sandboxes/sb-1/egress \
+  -H "X-Sandrpod-Token: $TOKEN"
+
+# 运行中收紧，对沙箱的下一次连接生效。
+curl -sS -X PUT https://api.example.com/api/v1/sandboxes/sb-1/egress \
+  -H "X-Sandrpod-Token: $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"allowed_domains": ["registry.npmjs.org:443"]}'
+```
+
+agent 这时用 `-egress-mode=server` 启动，不再需要策略文件：
+
+```bash
+sandrpod-agent -api-url=https://api.example.com -name=sb-1 -token=… \
+  -egress-mode=server -egress-sync=60s
+```
+
+顺序是有意的：代理以**空策略**启动，只有控制面给出策略后才放宽。agent 一注册，
+隧道那头就能把命令送到沙箱，所以"先宽松一秒"的代理就是一个有日程表的漏洞。控制面
+始终不回话，沙箱那就是没有出网 + 一行说明原因的日志——安全控件该有的失败方式。
+
+两个存储层面的细节，因为它们是让人意外的地方：
+
+- 创建时策略解析失败是 **400**，发生在任何 provisioning 之前：运营者在调用还没挂断
+  时就看到拼写错误。PUT 走同一套校验，所以被拒绝的修改不会动到正在生效的策略。
+- PUT 改的是策略，不是已经建立的连接。代理在**建连时**过滤目的地，已建立的 CONNECT
+  隧道会一直carry到关闭。要"立刻全停"，删掉沙箱——它会连同隧道和容器一起关。
 
 ---
 
@@ -227,10 +271,13 @@ loopback address"），审计日志留下具体地址。这个拆分是有意的
 - **没有逐连接的"问人"。** 未命中即拒绝。每次连接弹一次窗，是个带限流问题的
   UX 难题。
 - **没有 UDP，没有入站。** 只有 SOCKS5 CONNECT。
-- **一个 agent 一个代理。** 这台机器上所有沙箱共享同一份策略。按沙箱下发策略
-  需要控制面把它放进创建 job 的 payload，那是容器模式的后续工作。
-- **策略在启动时读取。** 改文件要重启 agent 才生效；热更新必须先说清楚哪些改动
-  对已在隧道上的连接无效（答案是：全部无效）。
+- **容器里的沙箱还没强制。** 策略随沙箱记录走、也随创建 job 送到 poder，但容器
+  侧还没有自己的代理。今天只有 agent 模式真正执行策略；容器沙箱上的策略是"存下来
+  并可见"，不是"已执行"。接上它需要 poder 宿主机上的每沙箱代理，以及一个只能连到
+  该代理的容器网络。
+- **`-egress-mode=server` 会刷新，`enforce` 不会。** server 模式下 agent 每
+  `-egress-sync`（默认 60s）重读一次并热替换；文件模式只在启动时读一次。两者都只
+  对**下一次连接**生效，不会切断已在跑的隧道（见 2.2）。
 - **不覆盖 git over SSH。** `ssh` 不读任何代理由变量。修法是 sandbox-runtime 那套
   `GIT_SSH_COMMAND` + `socat`，代价是每台员工机都得装 `socat`；这一版没做。
 
@@ -263,8 +310,9 @@ curl -x "$HTTP_PROXY" http://localhost:8080/
 
 | 参数 | 环境变量 | 默认 | 含义 |
 |---|---|---|---|
-| `-egress-mode` | `SANDRPOD_EGRESS_MODE` | `off` | `off` \| `enforce` |
-| `-egress-policy` | `SANDRPOD_EGRESS_POLICY` | — | 策略 JSON 路径，`enforce` 时必填 |
+| `-egress-mode` | `SANDRPOD_EGRESS_MODE` | `off` | `off` \| `enforce`（本地文件）\| `server`（控制面） |
+| `-egress-policy` | `SANDRPOD_EGRESS_POLICY` | — | 策略 JSON 路径；`enforce` 必填，`server` 忽略 |
+| `-egress-sync` | `SANDRPOD_EGRESS_SYNC` | `60s` | `server` 模式重读策略的间隔（下限 5s） |
 
 相关文档：[PERMISSION_AND_AUDIT.zh.md](PERMISSION_AND_AUDIT.zh.md)（与它互补的
 同意门）、[SANDBOX_RUNTIME_ANALYSIS.md](SANDBOX_RUNTIME_ANALYSIS.md)（模型的来处）。

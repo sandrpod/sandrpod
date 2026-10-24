@@ -9,6 +9,8 @@ import "database/sql"
 //   - DATETIME columns store RFC3339 strings; this is standard SQLite practice
 //     and the syntax is accepted unchanged by PostgreSQL TIMESTAMP WITH TIME ZONE.
 //   - sandboxes.labels and jobs.trace_context are JSON TEXT (map[string]string).
+//   - sandboxes.egress_policy is the egress allow-list as JSON TEXT; the empty
+//     string means "the sandbox was created without one".
 //   - jobs.result is nullable JSON TEXT (*JobResult); NULL means no result yet.
 //   - poders stores Resources and Usage as inline columns (not JSON) so that
 //     the SelectBest scoring query can run entirely in SQL without a table scan.
@@ -31,6 +33,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
     os             TEXT    NOT NULL DEFAULT '',
     os_version     TEXT    NOT NULL DEFAULT '',
     labels         TEXT    NOT NULL DEFAULT '{}',
+    egress_policy  TEXT    NOT NULL DEFAULT '',
     owner          TEXT    NOT NULL DEFAULT '',
     ttl_seconds    INTEGER NOT NULL DEFAULT 0,
     created_at     DATETIME NOT NULL,
@@ -114,6 +117,7 @@ var columnMigrations = []string{
 	`ALTER TABLE sandboxes ADD COLUMN owner TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE jobs ADD COLUMN owner TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE sandboxes ADD COLUMN ttl_seconds INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE sandboxes ADD COLUMN egress_policy TEXT NOT NULL DEFAULT ''`,
 }
 
 // migrate applies the dialect's schema then its idempotent column migrations.

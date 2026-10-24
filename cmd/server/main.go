@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/sandrpod/sandrpod/pkg/egress"
 	"github.com/sandrpod/sandrpod/pkg/logging"
 	"github.com/sandrpod/sandrpod/pkg/provider"
 	"github.com/sandrpod/sandrpod/pkg/provider/aliyun"
@@ -619,6 +620,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 					// record is world-visible to every authenticated token (see
 					// the agent-connect path). This route is adminOnly.
 					Owner:        identityFrom(r).Name,
+					Network:      req.Network,
 					Arch:         poderArch,
 					OS:           poderOS,
 					OSVersion:    poderOSVersion,
@@ -731,6 +733,15 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				http.Error(w, reason, http.StatusBadRequest)
 				return
 			}
+			// A policy that does not parse is a 400 here, not a sandbox that
+			// provisions and then denies everything: the operator sees the
+			// typo while they still have the create call in front of them.
+			if req.Network != nil {
+				if err := validateEgressPolicy(req.Network); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
+			}
 
 			if _, exists := sandboxStore.Get(req.Name); exists {
 				http.Error(w, fmt.Sprintf("sandbox %s already exists", req.Name), http.StatusConflict)
@@ -775,6 +786,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 					State:        podpkg.StatePending,
 					Owner:        ident.Name,
 					TTLSeconds:   req.TTLSeconds,
+					Network:      req.Network,
 					CreatedAt:    time.Now(),
 					LastActivity: time.Now(),
 				}
@@ -906,6 +918,54 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 		if sb, ok := sandboxStore.Get(name); ok && !canAccessSandbox(ident, sb) {
 			http.Error(w, "sandbox not found", http.StatusNotFound)
 			return
+		}
+
+		// Egress policy of this sandbox: what its enforcing agent is allowed
+		// to reach. GET is served to the owning identity *and* to the sandbox
+		// itself (the agent polls it); PUT lets an operator tighten or widen a
+		// running sandbox without recreating it.
+		if action == "egress" {
+			if sb, ok := sandboxStore.Get(name); !ok {
+				http.Error(w, "sandbox not found", http.StatusNotFound)
+				return
+			} else {
+				switch r.Method {
+				case http.MethodGet:
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]any{
+						"sandbox": name,
+						"policy":  sb.Network,
+					})
+					return
+				case http.MethodPut, http.MethodPost:
+					r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+					var policy egress.Policy
+					if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+						http.Error(w, "invalid egress policy: "+err.Error(), http.StatusBadRequest)
+						return
+					}
+					if err := validateEgressPolicy(&policy); err != nil {
+						http.Error(w, err.Error(), http.StatusBadRequest)
+						return
+					}
+					if err := sandboxStore.Update(name, func(s *podpkg.SandboxInfo) {
+						s.Network = &policy
+						s.LastActivity = time.Now()
+					}); err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					notifyEvent("sandbox.egress.updated", map[string]any{
+						"name": name, "allowed": policy.AllowedDomains, "denied": policy.DeniedDomains,
+					})
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]any{"sandbox": name, "policy": policy})
+					return
+				default:
+					http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+					return
+				}
+			}
 		}
 
 		// Detect session sub-path

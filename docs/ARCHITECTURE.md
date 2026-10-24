@@ -345,9 +345,13 @@ hands every spawned process its address, so a connection is allowed only when
 an entry in the allow-list covers the destination **and** the name does not
 resolve into loopback, the LAN, a cloud metadata endpoint or one of this host's
 own addresses. Refusals carry a reason written for the model and are audited as
-`source: "egress"`. It is a filter over proxy-aware tools, not a kernel
-boundary — see [EGRESS_POLICY.md](EGRESS_POLICY.md) for exactly where the line
-is.
+`source: "egress"`. The policy travels with the sandbox: it is set on create
+(`POST /sandboxes` with a `network` block), stored on the record
+(`sandboxes.egress_policy`), served at `GET /sandboxes/{name}/egress` to the
+agent that enforces it, and replaceable at `PUT` — an agent started with
+`-egress-mode=server` starts deny-all and hot-swaps the policy it polls. It is
+a filter over proxy-aware tools, not a kernel boundary — see
+[EGRESS_POLICY.md](EGRESS_POLICY.md) for exactly where the line is.
 
 **sandrpod-tray** (`cmd/sandrpod-tray`) is the user-session companion: tray
 icon, the consent dialogs, and a local settings page. It talks to the agent over

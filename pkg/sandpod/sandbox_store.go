@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/sandrpod/sandrpod/pkg/egress"
 )
 
 // SandboxInfo holds metadata about a sandbox instance.
@@ -37,6 +39,14 @@ type SandboxInfo struct {
 	CreatedAt    time.Time         `json:"created_at"`
 	LastActivity time.Time         `json:"last_activity"`
 	Labels       map[string]string `json:"labels,omitempty"`
+	// Network is the egress allow-list this sandbox came with, as written at
+	// create time. It is stored here (not only on the job) so the policy
+	// outlives provisioning and can be served to the sandbox that enforces it
+	// — `GET /api/v1/sandboxes/{name}/egress`. Nil means "no policy was
+	// requested"; whether that means "no egress" or "unrestricted egress"
+	// depends on the enforcement point, which is why the agent's mode is
+	// explicit (`-egress-mode=server` denies until the control plane answers).
+	Network *egress.Policy `json:"network,omitempty"`
 }
 
 // CreateSandboxRequest is the request body for creating a sandbox.
@@ -60,6 +70,11 @@ type CreateSandboxRequest struct {
 	// progress. Cloud provisioning takes minutes — long synchronous responses
 	// are routinely killed by intermediate proxies.
 	Async bool `json:"async,omitempty"`
+	// Network is the egress allow-list for this sandbox. Validated at create
+	// time (a policy that does not parse is a 400, not a sandbox that starts
+	// and then denies everything), stored with the record, and handed to the
+	// sandbox that enforces it. See docs/EGRESS_POLICY.md.
+	Network *egress.Policy `json:"network,omitempty"`
 }
 
 // UpdateJobStatusRequest is the request body for updating a job's status.

@@ -16,8 +16,10 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/signal"
 	"runtime"
@@ -71,6 +73,17 @@ func (a *auditAdapter) Record(source, decision, path, mode, caller, sessionID, r
 		// operator watching the agent's logs/syslog notices.
 		log.Printf("audit: failed to record %s decision for %q: %v", decision, path, err)
 	}
+}
+
+// envDurationOr parses a duration from the environment, falling back to the
+// default when the variable is unset or unparsable.
+func envDurationOr(key string, defaultVal time.Duration) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			return d
+		}
+	}
+	return defaultVal
 }
 
 func envOr(key, defaultVal string) string {
@@ -134,8 +147,9 @@ var (
 	//   enforce  — start the loopback HTTP+SOCKS5 proxy, hand its address to
 	//              every spawned process, and refuse anything the policy or
 	//              the resolved-address check does not allow
-	egressMode   = flag.String("egress-mode", envOr("SANDRPOD_EGRESS_MODE", "off"), "Egress policy: off | enforce")
+	egressMode   = flag.String("egress-mode", envOr("SANDRPOD_EGRESS_MODE", "off"), "Egress policy: off | enforce (local file) | server (control plane)")
 	egressPolicy = flag.String("egress-policy", envOr("SANDRPOD_EGRESS_POLICY", ""), "Path to the egress policy JSON (required with -egress-mode=enforce)")
+	egressSync   = flag.Duration("egress-sync", envDurationOr("SANDRPOD_EGRESS_SYNC", 60*time.Second), "How often -egress-mode=server re-reads the policy from the control plane")
 
 	// MCP transport bridge — see docs/MCP_BRIDGE.md
 	mcpEnabled       = flag.Bool("mcp-enabled", envBool("SANDRPOD_MCP_ENABLED", true), "Enable MCP transport bridge if mcp.json is present (default true).")
@@ -374,42 +388,172 @@ func installPermissionGate(tb *toolbox.Server) error {
 // explicit about the boundary so nobody assumes more than it delivers.
 func installEgress() error {
 	mode := strings.ToLower(strings.TrimSpace(*egressMode))
-	if mode == "" || mode == "off" {
+	switch mode {
+	case "", "off":
 		return nil
-	}
-	if mode != "enforce" {
-		return fmt.Errorf("unknown --egress-mode %q (expected off|enforce)", mode)
-	}
-	if strings.TrimSpace(*egressPolicy) == "" {
-		// Starting with no allow list would deny every connection and read,
-		// from the outside, exactly like a broken network. Refuse instead.
-		return fmt.Errorf("--egress-mode=enforce needs --egress-policy <file>; " +
-			"an empty allow list denies all egress")
-	}
 
-	compiled, err := egress.LoadPolicy(*egressPolicy)
-	if err != nil {
-		return err
+	case "enforce":
+		// Policy from a local file, fixed for the life of the process.
+		if strings.TrimSpace(*egressPolicy) == "" {
+			// Starting with no allow list would deny every connection and
+			// read, from the outside, exactly like a broken network.
+			return fmt.Errorf("--egress-mode=enforce needs --egress-policy <file>; " +
+				"an empty allow list denies all egress")
+		}
+		compiled, err := egress.LoadPolicy(*egressPolicy)
+		if err != nil {
+			return err
+		}
+		srv, err := startEgressServer(compiled)
+		if err != nil {
+			return err
+		}
+		allow, deny := compiled.Strings()
+		log.Printf("egress: enforcing from %s (http=%s socks=%s)", *egressPolicy, srv.HTTPAddr(), srv.SOCKSAddr())
+		log.Printf("egress: allow=%v", allow)
+		if len(deny) > 0 {
+			log.Printf("egress: deny=%v", deny)
+		}
+		return nil
+
+	case "server":
+		// Policy from the control plane, refreshed in the background.
+		//
+		// It starts with an EMPTY policy — deny all — and only widens once a
+		// policy actually arrives. That ordering is the point: the sandbox is
+		// reachable through the tunnel from the moment the agent registers,
+		// and a proxy that started permissive "for a second" would be a hole
+		// with a schedule. A control plane that never answers leaves the
+		// sandbox with no egress and a log line saying why, which is the
+		// correct failure for a security control.
+		empty, err := egress.Parse(egress.Policy{})
+		if err != nil {
+			return err
+		}
+		srv, err := startEgressServer(empty)
+		if err != nil {
+			return err
+		}
+		log.Printf("egress: policy from control plane (http=%s socks=%s); deny-all until the first sync", srv.HTTPAddr(), srv.SOCKSAddr())
+		go syncEgressPolicy(context.Background(), srv)
+		return nil
+
+	default:
+		return fmt.Errorf("unknown --egress-mode %q (expected off|enforce|server)", mode)
 	}
+}
+
+// startedEgress is the running proxy, kept so a caller (a test, or a future
+// graceful shutdown) can reach it after installEgress returns. One agent hosts
+// one sandbox, so there is exactly one.
+var startedEgress *egress.Server
+
+// startEgressServer starts the proxies and hands their address to every
+// process the toolbox will spawn.
+func startEgressServer(compiled *egress.Compiled) (*egress.Server, error) {
 	srv, err := egress.Start(egress.Options{
 		Policy: compiled,
 		Sink:   egressAuditSink{rec: sharedAuditRecorder},
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
+	startedEgress = srv
 	toolbox.SetChildEnv(srv.ProxyEnv())
-
-	allow, deny := compiled.Strings()
-	log.Printf("egress: enforcing from %s (http=%s socks=%s)", *egressPolicy, srv.HTTPAddr(), srv.SOCKSAddr())
-	log.Printf("egress: allow=%v", allow)
-	if len(deny) > 0 {
-		log.Printf("egress: deny=%v", deny)
-	}
 	if sharedAuditRecorder == nil {
 		log.Printf("egress: no audit recorder — denials are counted but not persisted")
 	}
-	return nil
+	return srv, nil
+}
+
+// syncEgressPolicy keeps the running proxy in step with the control plane.
+//
+// Failures are not fatal and do not widen anything: the last policy that
+// parsed stays in force until a new one arrives. The comparison is on the
+// serialised policy, so a steady state logs nothing every interval.
+func syncEgressPolicy(ctx context.Context, srv *egress.Server) {
+	interval := *egressSync
+	if interval < 5*time.Second {
+		interval = 5 * time.Second
+	}
+	var lastApplied string
+	apply := func() {
+		policy, err := fetchEgressPolicy(ctx)
+		if err != nil {
+			log.Printf("egress: policy sync failed (%v) — keeping the current policy", err)
+			return
+		}
+		raw, _ := json.Marshal(policy)
+		if string(raw) == lastApplied {
+			return
+		}
+		compiled, err := egress.Parse(*policy)
+		if err != nil {
+			log.Printf("egress: control-plane policy is invalid (%v) — keeping the current policy", err)
+			return
+		}
+		if err := srv.UpdatePolicy(compiled); err != nil {
+			log.Printf("egress: apply policy: %v", err)
+			return
+		}
+		lastApplied = string(raw)
+		allow, deny := compiled.Strings()
+		log.Printf("egress: policy updated from control plane — allow=%v deny=%v", allow, deny)
+	}
+
+	apply()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			apply()
+		}
+	}
+}
+
+// fetchEgressPolicy reads this sandbox's policy from the control plane. A
+// sandbox with no policy answers with a null policy, which turned into an
+// empty allow-list: "the control plane has nothing to say" and "nothing is
+// allowed" are the same answer here, and only one of them is safe.
+func fetchEgressPolicy(ctx context.Context) (*egress.Policy, error) {
+	base := strings.TrimRight(*apiURL, "/")
+	if base == "" {
+		return nil, fmt.Errorf("no -api-url configured")
+	}
+	url := base + "/api/v1/sandboxes/" + neturl.PathEscape(*name) + "/egress"
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	if *token != "" {
+		req.Header.Set("Authorization", "Bearer "+*token)
+	}
+	resp, err := (&http.Client{Timeout: 15 * time.Second}).Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return &egress.Policy{}, nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("control plane answered %s", resp.Status)
+	}
+	var body struct {
+		Policy *egress.Policy `json:"policy"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode policy: %w", err)
+	}
+	if body.Policy == nil {
+		return &egress.Policy{}, nil
+	}
+	return body.Policy, nil
 }
 
 // egressAuditSink maps an egress event onto the audit record shape. Denials

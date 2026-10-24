@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sandrpod/sandrpod/pkg/egress"
 	"github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/store/sqldb"
 )
@@ -612,5 +613,64 @@ func TestTokenRepo_CRUD(t *testing.T) {
 	}
 	if removed, _ := repo.DeleteByPrefix("e2b_nope"); len(removed) != 0 {
 		t.Errorf("delete miss: want none, got %v", removed)
+	}
+}
+
+// The egress policy rides with the sandbox record: created once, read back by
+// the sandbox that enforces it, and re-written when an operator edits it.
+func TestSandboxRepo_EgressPolicyRoundTrip(t *testing.T) {
+	db, err := sqldb.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+
+	repo := sqldb.NewSandboxRepo(db)
+	now := time.Now().UTC().Truncate(time.Second)
+	sb := &sandpod.SandboxInfo{
+		Name:         "policy-sb",
+		State:        sandpod.StateRunning,
+		CreatedAt:    now,
+		LastActivity: now,
+		Network: &egress.Policy{
+			AllowedDomains:          []string{"api.example.com", "*.npmjs.org"},
+			DeniedDomains:           []string{"*.internal"},
+			DeniedDomainReasons:     map[string]string{"*.internal": "use the mirror"},
+			DeniedResolvedAddresses: []string{"10.0.0.0/8"},
+		},
+	}
+	if err := repo.Add(sb); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	got, ok := repo.Get("policy-sb")
+	if !ok || got.Network == nil {
+		t.Fatalf("policy did not survive the round trip: %+v", got)
+	}
+	if len(got.Network.AllowedDomains) != 2 || got.Network.AllowedDomains[0] != "api.example.com" {
+		t.Errorf("allowed_domains = %v", got.Network.AllowedDomains)
+	}
+	if got.Network.DeniedDomainReasons["*.internal"] != "use the mirror" {
+		t.Errorf("denied_domain_reasons = %v", got.Network.DeniedDomainReasons)
+	}
+
+	// An edit lands, and a sandbox created without a policy reads back as nil
+	// (not as an empty allow-list, which would mean "deny everything").
+	if err := repo.Update("policy-sb", func(s *sandpod.SandboxInfo) {
+		s.Network = &egress.Policy{AllowedDomains: []string{"only.example.com"}}
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	got, _ = repo.Get("policy-sb")
+	if got.Network == nil || len(got.Network.AllowedDomains) != 1 || got.Network.AllowedDomains[0] != "only.example.com" {
+		t.Fatalf("update did not land: %+v", got.Network)
+	}
+
+	plain := &sandpod.SandboxInfo{Name: "no-policy", State: sandpod.StateRunning, CreatedAt: now, LastActivity: now}
+	if err := repo.Add(plain); err != nil {
+		t.Fatalf("Add plain: %v", err)
+	}
+	if got, _ := repo.Get("no-policy"); got.Network != nil {
+		t.Fatalf("a sandbox created without a policy must read back nil, got %+v", got.Network)
 	}
 }

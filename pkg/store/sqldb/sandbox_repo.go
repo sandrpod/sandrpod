@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/sandrpod/sandrpod/pkg/egress"
 	"github.com/sandrpod/sandrpod/pkg/sandpod"
 )
 
@@ -21,16 +22,20 @@ func (r *sandboxRepo) Add(sb *sandpod.SandboxInfo) error {
 	if err != nil {
 		return fmt.Errorf("store/sqlite: sandbox Add marshal labels: %w", err)
 	}
+	network, err := marshalNetwork(sb)
+	if err != nil {
+		return err
+	}
 	_, err = r.db.Exec(`
 		INSERT INTO sandboxes
 		  (name, id, region, provider_type, instance_type, image_id, state,
 		   ip, poder_id, poder_url, container_id, proxy_url, api_url,
-		   arch, os, os_version, labels, owner, ttl_seconds, created_at, last_activity)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		   arch, os, os_version, labels, egress_policy, owner, ttl_seconds, created_at, last_activity)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		sb.Name, sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID,
 		string(sb.State), sb.IP, sb.PoderID, sb.PoderURL, sb.ContainerID,
 		sb.ProxyURL, sb.APIURL, sb.Arch, sb.OS, sb.OSVersion,
-		string(labels), sb.Owner, sb.TTLSeconds,
+		string(labels), network, sb.Owner, sb.TTLSeconds,
 		sb.CreatedAt.UTC().Format(time.RFC3339Nano),
 		sb.LastActivity.UTC().Format(time.RFC3339Nano),
 	)
@@ -105,7 +110,7 @@ func (r *sandboxRepo) Delete(name string) error {
 
 const sandboxColumns = `name, id, region, provider_type, instance_type, image_id, state,
     ip, poder_id, poder_url, container_id, proxy_url, api_url,
-    arch, os, os_version, labels, owner, ttl_seconds, created_at, last_activity`
+    arch, os, os_version, labels, egress_policy, owner, ttl_seconds, created_at, last_activity`
 
 func (r *sandboxRepo) getByName(name string) (*sandpod.SandboxInfo, bool, error) {
 	row := r.db.QueryRow(`SELECT `+sandboxColumns+` FROM sandboxes WHERE name=?`, name)
@@ -122,12 +127,16 @@ func (r *sandboxRepo) upsertTx(tx *Tx, sb *sandpod.SandboxInfo) error {
 	if err != nil {
 		return fmt.Errorf("store/sqlite: sandbox upsert marshal labels: %w", err)
 	}
+	network, err := marshalNetwork(sb)
+	if err != nil {
+		return err
+	}
 	_, err = tx.Exec(`
 		INSERT INTO sandboxes
 		  (name, id, region, provider_type, instance_type, image_id, state,
 		   ip, poder_id, poder_url, container_id, proxy_url, api_url,
-		   arch, os, os_version, labels, owner, ttl_seconds, created_at, last_activity)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		   arch, os, os_version, labels, egress_policy, owner, ttl_seconds, created_at, last_activity)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(name) DO UPDATE SET
 		  id=excluded.id, region=excluded.region, provider_type=excluded.provider_type,
 		  instance_type=excluded.instance_type, image_id=excluded.image_id,
@@ -135,11 +144,12 @@ func (r *sandboxRepo) upsertTx(tx *Tx, sb *sandpod.SandboxInfo) error {
 		  poder_url=excluded.poder_url, container_id=excluded.container_id,
 		  proxy_url=excluded.proxy_url, api_url=excluded.api_url,
 		  arch=excluded.arch, os=excluded.os, os_version=excluded.os_version,
-		  labels=excluded.labels, owner=excluded.owner, ttl_seconds=excluded.ttl_seconds, last_activity=excluded.last_activity`,
+		  labels=excluded.labels, egress_policy=excluded.egress_policy,
+		  owner=excluded.owner, ttl_seconds=excluded.ttl_seconds, last_activity=excluded.last_activity`,
 		sb.Name, sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID,
 		string(sb.State), sb.IP, sb.PoderID, sb.PoderURL, sb.ContainerID,
 		sb.ProxyURL, sb.APIURL, sb.Arch, sb.OS, sb.OSVersion,
-		string(labels), sb.Owner, sb.TTLSeconds,
+		string(labels), network, sb.Owner, sb.TTLSeconds,
 		sb.CreatedAt.UTC().Format(time.RFC3339Nano),
 		sb.LastActivity.UTC().Format(time.RFC3339Nano),
 	)
@@ -152,6 +162,7 @@ func scanSandbox(row *sql.Row) (*sandpod.SandboxInfo, bool, error) {
 		sb          sandpod.SandboxInfo
 		state       string
 		labelsJSON  string
+		networkJSON string
 		createdStr  string
 		activityStr string
 	)
@@ -159,7 +170,7 @@ func scanSandbox(row *sql.Row) (*sandpod.SandboxInfo, bool, error) {
 		&sb.Name, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID,
 		&state, &sb.IP, &sb.PoderID, &sb.PoderURL, &sb.ContainerID,
 		&sb.ProxyURL, &sb.APIURL, &sb.Arch, &sb.OS, &sb.OSVersion,
-		&labelsJSON, &sb.Owner, &sb.TTLSeconds, &createdStr, &activityStr,
+		&labelsJSON, &networkJSON, &sb.Owner, &sb.TTLSeconds, &createdStr, &activityStr,
 	)
 	if err == sql.ErrNoRows {
 		return nil, false, nil
@@ -169,6 +180,7 @@ func scanSandbox(row *sql.Row) (*sandpod.SandboxInfo, bool, error) {
 	}
 	sb.State = sandpod.State(state)
 	json.Unmarshal([]byte(labelsJSON), &sb.Labels)
+	sb.Network = unmarshalNetwork(networkJSON)
 	sb.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdStr)
 	sb.LastActivity, _ = time.Parse(time.RFC3339Nano, activityStr)
 	return &sb, true, nil
@@ -182,6 +194,7 @@ func scanSandboxes(rows *sql.Rows) []*sandpod.SandboxInfo {
 			sb          sandpod.SandboxInfo
 			state       string
 			labelsJSON  string
+			networkJSON string
 			createdStr  string
 			activityStr string
 		)
@@ -189,15 +202,44 @@ func scanSandboxes(rows *sql.Rows) []*sandpod.SandboxInfo {
 			&sb.Name, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID,
 			&state, &sb.IP, &sb.PoderID, &sb.PoderURL, &sb.ContainerID,
 			&sb.ProxyURL, &sb.APIURL, &sb.Arch, &sb.OS, &sb.OSVersion,
-			&labelsJSON, &sb.Owner, &sb.TTLSeconds, &createdStr, &activityStr,
+			&labelsJSON, &networkJSON, &sb.Owner, &sb.TTLSeconds, &createdStr, &activityStr,
 		); err != nil {
 			continue
 		}
 		sb.State = sandpod.State(state)
 		json.Unmarshal([]byte(labelsJSON), &sb.Labels)
+		sb.Network = unmarshalNetwork(networkJSON)
 		sb.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdStr)
 		sb.LastActivity, _ = time.Parse(time.RFC3339Nano, activityStr)
 		out = append(out, &sb)
 	}
 	return out
+}
+
+// marshalNetwork serialises the sandbox's egress policy for the
+// egress_policy column. An absent policy stores as "" — distinct from "{}",
+// which would round-trip to an empty allow-list and read as a decision.
+func marshalNetwork(sb *sandpod.SandboxInfo) (string, error) {
+	if sb.Network == nil {
+		return "", nil
+	}
+	raw, err := json.Marshal(sb.Network)
+	if err != nil {
+		return "", fmt.Errorf("store/sqlite: sandbox marshal egress policy: %w", err)
+	}
+	return string(raw), nil
+}
+
+// unmarshalNetwork is the read side; an unparsable column is treated as "no
+// policy" rather than failing the whole record, so one bad row cannot make a
+// sandbox invisible.
+func unmarshalNetwork(raw string) *egress.Policy {
+	if raw == "" {
+		return nil
+	}
+	var p egress.Policy
+	if err := json.Unmarshal([]byte(raw), &p); err != nil {
+		return nil
+	}
+	return &p
 }

@@ -75,7 +75,7 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request) {
 	}
 	host, port := hostPort(r.URL.Host, 80)
 
-	verdict := s.opts.Policy.Decide(host, port)
+	verdict := s.policy.Load().Decide(host, port)
 	if !verdict.Allow {
 		s.deny(w, CodeHTTP, r, verdict, "")
 		return
@@ -112,7 +112,7 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	host, port := hostPort(r.Host, 443)
 
-	verdict := s.opts.Policy.Decide(host, port)
+	verdict := s.policy.Load().Decide(host, port)
 	if !verdict.Allow {
 		s.deny(w, CodeConnect, r, verdict, "")
 		return
@@ -174,7 +174,7 @@ func (s *Server) newTransport() *http.Transport {
 			// The request path already decided this; deciding again here is
 			// what makes a pooled connection impossible to establish without
 			// a verdict, whatever a future caller does.
-			if v := s.opts.Policy.Decide(host, port); !v.Allow {
+			if v := s.policy.Load().Decide(host, port); !v.Allow {
 				return nil, &DenyError{Verdict: v}
 			}
 			return s.dialer.dialAllowingVetted(ctx, host, port)
