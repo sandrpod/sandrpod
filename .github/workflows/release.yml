@@ -1,7 +1,8 @@
 name: Release
 
 # On a v* tag: publish CGO-free release binaries AND multi-arch container
-# images to GHCR (ghcr.io/<owner>/{server,poder,toolbox,toolbox-centos}).
+# images to GHCR
+# (ghcr.io/<owner>/{server,poder,toolbox,toolbox-centos,egress-proxy}).
 # CGO binaries (sandrpod-tray) are excluded — they need platform toolchains
 # and are built/distributed separately.
 on:
@@ -74,6 +75,12 @@ jobs:
             platforms: linux/amd64,linux/arm64
           - name: toolbox
             dockerfile: docker/Dockerfile.toolbox
+            platforms: linux/amd64,linux/arm64
+          # The per-pod egress proxy. A container sandbox with a policy cannot
+          # start without this image, so it is part of the release rather than
+          # something a fleet operator builds by hand.
+          - name: egress-proxy
+            dockerfile: docker/Dockerfile.egress
             platforms: linux/amd64,linux/arm64
           # CentOS image is amd64-only here: building it for arm64 under QEMU
           # emulation is slow enough to risk CI timeouts.

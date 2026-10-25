@@ -78,6 +78,7 @@ before you pick one to try first:
 | Doc | What it covers |
 |---|---|
 | [PERMISSION_AND_AUDIT.md](PERMISSION_AND_AUDIT.md) ([中文](PERMISSION_AND_AUDIT.zh.md)) | The consent gate (hardlock → work_dir → permanent → session → ask), native dialogs, `sandrpod-tray`, and the decision-audit upload pipeline |
+| [RELEASE_NOTES.md](RELEASE_NOTES.md) | 0.6.0: what this version adds, the upgrade order (workers → server → agents), the Go API breaks, and the limits it does not hide |
 | [APP_INTEGRATION.md](APP_INTEGRATION.md) ([中文](APP_INTEGRATION.zh.md)) | What an application team sees after upgrading: the (empty) API diff, the three visible differences inside the sandbox, the four kinds of tool that break by design, and three deployment profiles |
 | [PLAYGROUND.md](PLAYGROUND.md) ([中文](PLAYGROUND.zh.md)) | A manual walkthrough that verifies every layer — gate, kernel, netns, egress, masking — with the real output of each check |
 | [CREDENTIALS.md](CREDENTIALS.md) ([中文](CREDENTIALS.zh.md)) | Letting an agent use a credential it can never read: sentinel values, TLS termination on the proxy, substitution in headers/bodies/files and AWS SigV4 re-signing — with the trust it costs stated plainly, and the excludes that keep mTLS and pinning working |

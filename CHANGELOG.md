@@ -6,7 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
-## [Unreleased]
+## [0.6.0] - 2026-10-25
+
+The release notes for this version — what it adds, the upgrade order, the breaking
+Go API changes and the known limits — are in [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
 
 ### Upgrade notes
 
