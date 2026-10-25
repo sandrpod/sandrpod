@@ -132,6 +132,7 @@ printf 'PRIVATE-KEY-SECRET\n' > /root/.ssh/id_rsa
 printf '#!/bin/sh\necho ok\n' > /pg/work/.git/hooks/pre-commit
 printf 'TOP-SECRET\n' > /pg/work/.git/config
 cd /pg/work
+echo "agent: pwd=$(pwd) HOME=${HOME:-unset} workdir=$(pwd)" >&2
 exec /pg/agent \
   -api-url="http://host.docker.internal:$PORT" -name=playground \
   -permission-mode=strict -permission-file=/pg/permissions.json \
@@ -203,7 +204,7 @@ contains "without the proxy there is no DNS" "Could not resolve host" "$NET_OUT"
 
 log "kernel floor: hardlocks masked, persistence read-only"
 KERNEL_OUT=$(run_code '
-echo "cwd=$(pwd)"; ls -a 2>&1 | head -4
+echo "cwd=$(pwd) HOME=${HOME:-unset}"; ls -a 2>&1 | head -4; ls -d /workspace 2>&1 | head -1
 if cat ~/.ssh/id_rsa >/dev/null 2>&1; then echo "hardlock=READABLE"; else echo "hardlock=DENIED"; fi
 if echo pwned >> .git/hooks/pre-commit 2>/dev/null; then echo "hook=WRITABLE"; else echo "hook=DENIED"; fi
 if echo pwned >> .git/config 2>/dev/null; then echo "config=WRITABLE"; else echo "config=DENIED"; fi
