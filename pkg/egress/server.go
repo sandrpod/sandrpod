@@ -445,7 +445,11 @@ func (s *Server) record(e Event) {
 	if s.opts.Sink == nil {
 		return
 	}
-	if e.Code == CodeAllowed && !s.opts.LogAllowed {
+	// Allowed connections are only logged when asked, with one exception: a
+	// request that carried a credential is recorded either way. "Which secret
+	// went to which host" is the question this feature exists to answer, and an
+	// answer that only appears when verbose logging is on is not an audit.
+	if e.Code == CodeAllowed && !s.opts.LogAllowed && len(e.Credentials) == 0 {
 		return
 	}
 	s.opts.Sink.RecordEgress(e)

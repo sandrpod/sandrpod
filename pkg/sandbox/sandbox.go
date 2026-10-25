@@ -28,6 +28,7 @@ package sandbox
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -182,6 +183,19 @@ func Resolve(mode Mode, bwrapPath, sandboxExecPath string) (Wrapper, error) {
 			return nil, nil
 		}
 		return nil, err
+	}
+	// Pin the absolute path. The wrapper's Command() hands it to a caller that
+	// assigns it to exec.Cmd.Path, and execve does no PATH search: a bare
+	// "bwrap" there fails with ENOENT even though the binary is on PATH.
+	switch sw := w.(type) {
+	case *Bwrap:
+		if p, err := exec.LookPath(sw.Path); err == nil {
+			sw.Path = p
+		}
+	case *Seatbelt:
+		if p, err := exec.LookPath(sw.Path); err == nil {
+			sw.Path = p
+		}
 	}
 	return w, nil
 }

@@ -108,6 +108,10 @@ sandrpod-tray seed                                       # install default hardl
 
 # Run Toolbox (inside sandbox container, port 8080)
 go run ./cmd/toolbox -port 8080
+
+# Playground upstream for manual verification (see docs/PLAYGROUND.md)
+go run ./hack/playground/echo -gen-ca /tmp/pg/certs     # self-signed CA + cert for echo.local
+go run ./hack/playground/echo -addr :8443 -cert /tmp/pg/certs/cert.pem -key /tmp/pg/certs/key.pem
 ```
 
 ## Architecture Overview

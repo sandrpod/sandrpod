@@ -10,6 +10,43 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
+- **`docs/APP_INTEGRATION.md` and `docs/PLAYGROUND.md`** (both with Chinese
+  versions). The first answers "what does upgrading do to my application": the
+  API diff is empty, three things are visible inside the sandbox, four kinds of
+  tool are expected to break, and the three deployment profiles are spelled out.
+  The second is a manual walkthrough that verifies every layer end to end — the
+  gate, the kernel floor, the network namespace, the egress policy and
+  credential masking — with the real output of each check, plus
+  `hack/playground/echo`, a sixty-line TLS upstream that reports the
+  `Authorization` header it received so masking can be verified without a third
+  party.
+
+### Fixed
+
+- **The OS sandbox never actually ran through the toolbox.** `Resolve` returned
+  `bwrap` as a bare name, and `wrapSandbox` assigned it to `exec.Cmd.Path`, which
+  `execve` takes verbatim: every `Execute` with `-os-sandbox` failed with
+  `fork/exec bwrap: no such file or directory`. The path is now resolved by
+  `exec.LookPath` in `Resolve` and again defensively in `wrapSandbox`. The
+  automated sandbox tests missed it because they call `Command()` and hand the
+  result to `exec.Command`, which does the lookup themselves; the playground
+  found it in the first command it ran.
+- **Masking silently dropped the proxy environment.** `applyEgressChildEnv` set
+  the child environment, then the credential path set it again with only the
+  sentinels and the trust bundle, so `HTTP_PROXY` vanished and every request in
+  the sandbox failed to connect. The two now build one list.
+- **Only port 443 was ever terminated**, so a masked credential sent to any other
+  HTTPS port arrived upstream as a sentinel. `-credential-terminate-ports`
+  (default `443`) makes the set explicit, and an unparsable value fails startup.
+- **Credential use did not reach the audit trail.** The egress event carried
+  `Terminated`/`Credentials` but neither `audit.Event` nor the agent's adapter
+  mapped them, and allowed events were dropped unless `LogAllowed` was on.
+  "Which secret went to which host" is recorded now even when allowed-logging is
+  off — names only, never values.
+- **A terminated request dropped a non-443 port from the Host header**, which
+  made a terminated tunnel behave differently from an opaque one for upstreams
+  that build absolute links.
+
 - **Credentials the agent can use but not read** (`-credential-mask`,
   `docs/CREDENTIALS.md`). A key in the sandbox's environment is a key the model
   can print: masked credentials are replaced with `fake_value_<uuid4>` sentinels

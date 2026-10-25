@@ -140,7 +140,14 @@ func (s *Server) serveTerminated(w http.ResponseWriter, r *http.Request, tr *htt
 	if port == 443 {
 		out.URL.Host = host
 	}
-	out.Host = host
+	// Keep the port the client used when it was not 443: an upstream that
+	// builds absolute links from Host needs it, and dropping it would make a
+	// terminated tunnel behave differently from an opaque one.
+	if port == 443 {
+		out.Host = host
+	} else {
+		out.Host = net.JoinHostPort(host, itoa(port))
+	}
 	out.Header = r.Header.Clone()
 
 	// Refuse a cleartext hop: this path is only used when we terminated, so a

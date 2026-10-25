@@ -15,7 +15,9 @@ package toolbox
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"github.com/sandrpod/sandrpod/pkg/sandbox"
@@ -59,6 +61,13 @@ func wrapSandbox(cmd *exec.Cmd) error {
 	path, args, err := sandbox.Apply(w, policy, cmd.Path, cmd.Args[1:])
 	if err != nil {
 		return fmt.Errorf("os sandbox: %w", err)
+	}
+	// execve does no PATH lookup, and cmd.Path is used verbatim. A wrapper that
+	// hands back a bare name would fail at exec time with a confusing ENOENT.
+	if !strings.ContainsRune(path, os.PathSeparator) {
+		if resolved, lerr := exec.LookPath(path); lerr == nil {
+			path = resolved
+		}
 	}
 	cmd.Path = path
 	cmd.Args = append([]string{path}, args...)

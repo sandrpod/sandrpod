@@ -208,6 +208,8 @@ var (
 		"Directory holding the egress CA used to terminate TLS (default ~/.sandrpod/egress-ca)")
 	credentialExclude = flag.String("credential-terminate-exclude", envOr("SANDRPOD_CREDENTIAL_TERMINATE_EXCLUDE", ""),
 		"Domains whose TLS is never terminated (mTLS upstreams, certificate pinning)")
+	credentialPorts = flag.String("credential-terminate-ports", envOr("SANDRPOD_CREDENTIAL_TERMINATE_PORTS", "443"),
+		"Comma-separated ports whose CONNECT is terminated (default 443)")
 	credentialPlaintext = flag.Bool("credential-allow-plaintext",
 		envBoolOr("SANDRPOD_CREDENTIAL_ALLOW_PLAINTEXT", false),
 		"Allow a masked credential over plain HTTP (not recommended: it exposes the real value)")
@@ -571,9 +573,14 @@ func startEgressServer(compiled *egress.Compiled) (*egress.Server, error) {
 		}
 		opts.Mask = masker
 		opts.CA = ca
+		ports, err := parsePorts(*credentialPorts)
+		if err != nil {
+			return nil, err
+		}
 		opts.Terminate = &egress.TerminateOptions{
 			CADir:   *credentialCA,
 			Exclude: splitList(*credentialExclude),
+			Ports:   ports,
 		}
 		log.Printf("egress: credential masking on for %v; TLS is terminated for allowed hosts except %v",
 			masker.Names(), splitList(*credentialExclude))
@@ -596,16 +603,6 @@ func startEgressServer(compiled *egress.Compiled) (*egress.Server, error) {
 	startedEgress = srv
 
 	applyEgressChildEnv(srv)
-	if srv.Masker() != nil {
-		env := srv.Masker().Env()
-		trust, err := srv.CA().TrustEnv()
-		if err != nil {
-			return nil, err
-		}
-		// Masked names replace the real values; the trust env points every
-		// runtime at the CA bundle so a terminated host verifies.
-		toolbox.SetChildEnv(append(env, trust...))
-	}
 	if sharedAuditRecorder == nil {
 		log.Printf("egress: no audit recorder — denials are counted but not persisted")
 	}
@@ -922,6 +919,24 @@ func maskedFiles(m *egress.Masker) []*egress.MaskedFile {
 	return out
 }
 
+// parsePorts turns "443,8443" into ports. An unparsable entry is a startup
+// error: silently terminating fewer ports than asked would leave a credential
+// unmasked on a port the operator expected to be covered.
+func parsePorts(raw string) ([]int, error) {
+	var out []int
+	for _, part := range splitList(raw) {
+		n, err := strconv.Atoi(part)
+		if err != nil || n <= 0 || n > 65535 {
+			return nil, fmt.Errorf("-credential-terminate-ports: %q is not a port", part)
+		}
+		out = append(out, n)
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("-credential-terminate-ports: no ports given")
+	}
+	return out, nil
+}
+
 // splitList parses a comma-separated flag value, trimming blanks.
 func splitList(s string) []string {
 	var out []string
@@ -1017,6 +1032,16 @@ func runRelay(args []string) {
 // applyEgressChildEnv hands the sandbox the proxy's address: the relay's
 // loopback when the network will be taken away, the proxy itself otherwise.
 func applyEgressChildEnv(srv *egress.Server) {
+	// One call, one environment. Setting it twice is how the proxy variables
+	// silently disappeared the first time masking was added: the second call
+	// replaced the first instead of extending it.
+	env := egressChildEnv(srv)
+	toolbox.SetChildEnv(env)
+}
+
+// egressChildEnv is everything a spawned process needs from the network layer:
+// where the proxy is, which credentials are fake, and which CA to trust.
+func egressChildEnv(srv *egress.Server) []string {
 	if srv.UnixSocket() != "" {
 		// Inside the sandbox the proxy is 127.0.0.1:<relay port>, reached
 		// through the relay the sandbox wrapper starts.
@@ -1029,10 +1054,26 @@ func applyEgressChildEnv(srv *egress.Server) {
 			SocketName:         filepath.Base(srv.UnixSocket()),
 			Listen:             relayListenAddr,
 		}
-		return
+		return withCredentialEnv(srv, relayProxyEnv(srv.Token(), relayListenAddr))
 	}
 	egressRelay = nil
-	toolbox.SetChildEnv(srv.ProxyEnv())
+	return withCredentialEnv(srv, srv.ProxyEnv())
+}
+
+// withCredentialEnv adds the masked names and the CA trust variables to the
+// proxy environment. The real values are never in either list.
+func withCredentialEnv(srv *egress.Server, base []string) []string {
+	if srv.Masker() == nil || srv.CA() == nil {
+		return base
+	}
+	env := append([]string{}, base...)
+	env = append(env, srv.Masker().Env()...)
+	if trust, err := srv.CA().TrustEnv(); err == nil {
+		env = append(env, trust...)
+	} else {
+		log.Printf("credential masking: trust env unavailable: %v", err)
+	}
+	return env
 }
 
 // installOSSandbox wraps every spawned process in the platform's OS sandbox.
@@ -1159,6 +1200,10 @@ func (s egressAuditSink) RecordEgress(e egress.Event) {
 		Rule:     e.Rule,
 		Reason:   e.Reason,
 		Address:  e.Address,
+		// Los marks a connection whose TLS the proxy terminated; Credentials
+		// name what was substituted into it. Neither carries a value.
+		Los:         e.Terminated,
+		Credentials: e.Credentials,
 	}); err != nil {
 		// Same posture as the permission audit path: a write failure means
 		// decisions are no longer being recorded, so say so rather than
