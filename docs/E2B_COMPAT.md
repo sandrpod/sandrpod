@@ -134,6 +134,33 @@ not yet exercised by the real SDK.
 | MCP gateway | in-sandbox `mcp-gateway` on `:50005` | ☑ | E2B-style shim over the native bridge; reached via the generic port proxy; verified live over a real TLS vanity domain |
 | cross-node routing | any SDK call on a multi-instance cluster | ☑ | requests are forwarded to the node holding the sandbox's tunnel; verified live with a real cloud poder |
 
+### Re-verified with the current SDK (2026-10-25, `e2b` 2.59.0, `e2b-code-interpreter` 2.11.3)
+
+The variants drift, so the surface was re-run against a live server + a real
+Docker toolbox container behind a docker-run poder
+(`SANDRPOD_E2B_DEBUG_PORT=3333`, `E2B_API_URL`/`E2B_SANDBOX_URL=http://127.0.0.1:3333`,
+`E2B_VALIDATE_API_KEY=false`):
+
+| Check | Result |
+|---|---|
+| `Sandbox.create("base")` → real container | ✔ |
+| `commands.run("echo … && uname -s")` | ✔ `e2b-hello` / `Linux` |
+| `files.write` + `files.read` | ✔ round-tripped |
+| `Sandbox.list()` | ✔ (paginator; `next_items()`) |
+| `set_timeout` | ✔ |
+| `kill` | ✔ |
+| code interpreter: stateful `run_code` (`a=100` → `print(a*2)` = `200`) | ✔ |
+| code interpreter: error capture (`1/0` → `ZeroDivisionError`) | ✔ |
+| code interpreter: imports (`math.sqrt(16)` → `4.0`) and multiline loops | ✔ |
+
+One rough edge, worth knowing before it confuses someone: in debug mode
+(`E2B_DEBUG=true`) the SDK sends a fixed `debug_sandbox_id` and the gateway
+resolves *the* E2B sandbox by name — so it needs **exactly one** `e2b*` sandbox
+to exist. With two, the resolver refuses to guess and the client sees
+`404 {"code":"not_found","message":"sandbox not found"}`, which reads like a
+missing sandbox rather than an ambiguous one. Delete the extras, or run debug
+mode against a fresh server.
+
 ### Verified against the REAL unmodified E2B SDK over HTTP + a real container (2026-07-03)
 
 Ran the official `e2b` **v2.30.0** and `e2b-code-interpreter` Python SDKs against

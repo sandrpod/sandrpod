@@ -1,5 +1,12 @@
 # sandrpod-cli
 
+> Note on proxies: when `--api-url` points at loopback the client ignores the
+> operating system's HTTP proxy (`session.trust_env = False`). A developer
+> machine often has one set system-wide (Clash, Charles, …); it would otherwise
+> capture calls to `127.0.0.1:8080` and fail with a timeout naming the *proxy*
+> port, not the server. A remote `--api-url` still honours the proxy as usual.
+
+
 Command-line client for [SandrPod](https://github.com/sandrpod/sandrpod) — open-source, **self-hosted execution infrastructure (sandboxes) for AI agents**. Run sandboxes on your own substrate (8 clouds incl. Aliyun/Tencent, plain Docker, or a bare machine), drive them over the native REST API, and stay E2B-compatible.
 
 ## Install

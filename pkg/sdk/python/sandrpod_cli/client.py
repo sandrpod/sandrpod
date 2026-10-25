@@ -7,6 +7,20 @@ import requests
 from typing import Optional, Dict, Any, List, Tuple
 
 
+def _is_loopback(url: str) -> bool:
+    """True when the URL's host is the loopback interface.
+
+    A proxy is meant for the network, not for the machine the client runs on:
+    an OS-level proxy setting that captures 127.0.0.1 breaks every local API
+    call with an error that names the proxy, not the target.
+    """
+    try:
+        host = urllib.parse.urlparse(url).hostname or ""
+    except ValueError:
+        return False
+    return host in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+
+
 class CLIClient:
     """SandrPod CLI 客户端"""
 
@@ -21,6 +35,15 @@ class CLIClient:
         self.timeout = timeout
         self.mcp_token = mcp_token
         self.session = requests.Session()
+        # A system HTTP proxy must not intercept traffic to a *loopback* API.
+        # requests reads the OS proxy settings (on macOS via SystemConfiguration),
+        # so a developer running Clash/Surge/Charles has HTTP_PROXY=127.0.0.1:1082
+        # set system-wide; every CLI call to http://127.0.0.1:8080 then went
+        # through that proxy and failed with a confusing
+        # "HTTPConnectionPool(host='127.0.0.1', port=1082): Read timed out",
+        # naming a port the user never configured. Loopback is never proxied.
+        if _is_loopback(self.api_url):
+            self.session.trust_env = False
         # Two-tier auth (see docs MCP_AUTH_HEADER_CONFLICT_FIX): the platform token
         # goes in X-Sandrpod-Token, the server's preferred header. Authorization:
         # Bearer is kept as a legacy fallback for older servers — but crucially it
