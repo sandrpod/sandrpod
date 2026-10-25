@@ -236,3 +236,23 @@ func TestDecideForSandbox_InvalidPolicyDenies(t *testing.T) {
 		t.Errorf("the reason should say the policy is broken: %q", v.Reason)
 	}
 }
+
+func TestSplitCapabilities(t *testing.T) {
+	cases := map[string][]string{
+		"":                  nil,
+		"egress":            {"egress"},
+		" egress , sandbox": {"egress", "sandbox"},
+		",,":                nil,
+	}
+	for in, want := range cases {
+		got := splitCapabilities(in)
+		if len(got) != len(want) {
+			t.Fatalf("%q → %v, want %v", in, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%q → %v, want %v", in, got, want)
+			}
+		}
+	}
+}

@@ -135,6 +135,25 @@ Two storage-level notes, because they are the parts that surprise people:
   carrying bytes until it closes. For "stop everything now", delete the
   sandbox — that closes the tunnel and the container with it.
 
+### 2.3a Which worker runs a walled sandbox
+
+A worker advertises what it can enforce when it connects
+(`X-Poder-Capabilities: egress`). The control plane only places a sandbox that
+carries a policy on a worker that advertises it, and refuses otherwise:
+
+```
+POST /api/v1/sandboxes {… "network": {…}}   →  409
+failed to create sandbox: worker capability unavailable: this sandbox asks for
+an egress policy, but 1 online local worker(s) do not support it (upgrade the
+poder to a build that advertises "egress", or drop the policy)
+```
+
+This exists because the alternative is silent: a worker that predates per-pod
+egress ignores the `network` field, starts the container with no route policy,
+and the sandbox reports `RUNNING` while the API happily serves its policy back.
+Sandboxes without a policy still schedule onto older workers — the requirement
+applies only to what the request actually needs.
+
 ### 2.3b From the CLI
 
 The same policy the HTTP API takes, with the file as the unit of work:

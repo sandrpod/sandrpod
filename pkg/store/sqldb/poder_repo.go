@@ -3,6 +3,7 @@ package sqldb
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/sandpod"
@@ -23,9 +24,9 @@ func (r *poderRepo) Register(req *sandpod.RegisterPoderRequest) (*sandpod.PoderI
 		INSERT INTO poders
 		  (id, name, url, region, provider_type, vm_id, state,
 		   cpu_cores, memory_bytes, max_containers, arch, os, os_version, kernel_version,
-		   usage_containers, usage_cpu, usage_memory,
+		   capabilities, usage_containers, usage_cpu, usage_memory,
 		   last_heartbeat, created_at)
-		VALUES (?,?,?,?,?,?,'ONLINE',?,?,?,?,?,?,?,0,0,0,?,?)
+		VALUES (?,?,?,?,?,?,'ONLINE',?,?,?,?,?,?,?,?,0,0,0,?,?)
 		ON CONFLICT(id) DO UPDATE SET
 		  name=excluded.name, url=excluded.url, region=excluded.region,
 		  provider_type=excluded.provider_type, vm_id=excluded.vm_id, state='ONLINE',
@@ -33,10 +34,12 @@ func (r *poderRepo) Register(req *sandpod.RegisterPoderRequest) (*sandpod.PoderI
 		  max_containers=excluded.max_containers, arch=excluded.arch,
 		  os=excluded.os, os_version=excluded.os_version,
 		  kernel_version=excluded.kernel_version,
+		  capabilities=excluded.capabilities,
 		  last_heartbeat=excluded.last_heartbeat`,
 		req.ID, req.Name, req.URL, req.Region, req.ProviderType, req.VMID,
 		req.Resources.CPUCores, req.Resources.MemoryBytes, req.Resources.MaxContainers,
 		req.Resources.Arch, req.Resources.OS, req.Resources.OSVersion, req.Resources.KernelVersion,
+		strings.Join(req.Capabilities, ","),
 		now.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano),
 	)
 	if err != nil {
@@ -94,6 +97,13 @@ func (r *poderRepo) List() []*sandpod.PoderInfo {
 //
 //	score = (containers/max_containers)*0.6 + cpu*0.2 + memory*0.2
 func (r *poderRepo) SelectBest(region, providerType string) (*sandpod.PoderInfo, error) {
+	return r.SelectBestFor(region, providerType, nil)
+}
+
+// SelectBestFor is SelectBest plus a capability requirement. The capability
+// column is a comma-separated list, so the filter is a LIKE on delimiters
+// rather than a join: '%,egress,%' against ','||capabilities||','.
+func (r *poderRepo) SelectBestFor(region, providerType string, require []string) (*sandpod.PoderInfo, error) {
 	var id string
 	err := r.db.QueryRow(`
 		SELECT id FROM poders
@@ -101,12 +111,14 @@ func (r *poderRepo) SelectBest(region, providerType string) (*sandpod.PoderInfo,
 		  AND usage_containers < max_containers
 		  AND (? = '' OR region = ?)
 		  AND (? = '' OR provider_type = ?)
+		  AND (? = '' OR instr(',' || capabilities || ',', ',' || ? || ',') > 0)
 		ORDER BY
 		  (CAST(usage_containers AS REAL) / NULLIF(max_containers, 0)) * 0.6
 		  + usage_cpu    * 0.2
 		  + usage_memory * 0.2 ASC
 		LIMIT 1`,
 		region, region, providerType, providerType,
+		firstCapability(require), firstCapability(require),
 	).Scan(&id)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("no available poder found (region=%q provider=%q)", region, providerType)
@@ -172,7 +184,7 @@ func (r *poderRepo) Delete(id string) error {
 
 const poderColumns = `id, name, url, region, provider_type, vm_id, state,
     cpu_cores, memory_bytes, max_containers, arch, os, os_version, kernel_version,
-    usage_containers, usage_cpu, usage_memory,
+    capabilities, usage_containers, usage_cpu, usage_memory,
     last_heartbeat, created_at`
 
 func (r *poderRepo) getByID(id string) (*sandpod.PoderInfo, bool, error) {
@@ -189,6 +201,7 @@ func scanPoder(row *sql.Row) (*sandpod.PoderInfo, bool, error) {
 	var (
 		p            sandpod.PoderInfo
 		state        string
+		caps         string
 		heartbeatStr string
 		createdStr   string
 	)
@@ -196,6 +209,7 @@ func scanPoder(row *sql.Row) (*sandpod.PoderInfo, bool, error) {
 		&p.ID, &p.Name, &p.URL, &p.Region, &p.ProviderType, &p.VMID, &state,
 		&p.Resources.CPUCores, &p.Resources.MemoryBytes, &p.Resources.MaxContainers,
 		&p.Resources.Arch, &p.Resources.OS, &p.Resources.OSVersion, &p.Resources.KernelVersion,
+		&caps,
 		&p.Usage.Containers, &p.Usage.CPUUsage, &p.Usage.MemoryUsage,
 		&heartbeatStr, &createdStr,
 	)
@@ -205,6 +219,7 @@ func scanPoder(row *sql.Row) (*sandpod.PoderInfo, bool, error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("store/sqlite: poder scan: %w", err)
 	}
+	p.Capabilities = splitCapabilities(caps)
 	p.State = sandpod.PoderState(state)
 	p.LastHeartbeat, _ = time.Parse(time.RFC3339Nano, heartbeatStr)
 	p.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdStr)
@@ -217,6 +232,7 @@ func scanPoders(rows *sql.Rows) []*sandpod.PoderInfo {
 		var (
 			p            sandpod.PoderInfo
 			state        string
+			caps         string
 			heartbeatStr string
 			createdStr   string
 		)
@@ -224,15 +240,38 @@ func scanPoders(rows *sql.Rows) []*sandpod.PoderInfo {
 			&p.ID, &p.Name, &p.URL, &p.Region, &p.ProviderType, &p.VMID, &state,
 			&p.Resources.CPUCores, &p.Resources.MemoryBytes, &p.Resources.MaxContainers,
 			&p.Resources.Arch, &p.Resources.OS, &p.Resources.OSVersion, &p.Resources.KernelVersion,
+			&caps,
 			&p.Usage.Containers, &p.Usage.CPUUsage, &p.Usage.MemoryUsage,
 			&heartbeatStr, &createdStr,
 		); err != nil {
 			continue
 		}
+		p.Capabilities = splitCapabilities(caps)
 		p.State = sandpod.PoderState(state)
 		p.LastHeartbeat, _ = time.Parse(time.RFC3339Nano, heartbeatStr)
 		p.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdStr)
 		out = append(out, &p)
 	}
 	return out
+}
+
+// splitCapabilities parses the comma-separated column back into a list.
+func splitCapabilities(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if c := strings.TrimSpace(part); c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// firstCapability is the capability to filter on. One is enough for the
+// query — the scheduler passes a single requirement today — and the exact
+// check happens again on the selected row's parsed list.
+func firstCapability(require []string) string {
+	if len(require) == 0 {
+		return ""
+	}
+	return require[0]
 }

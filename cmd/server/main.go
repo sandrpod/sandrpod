@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -275,6 +276,9 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			Region:       r.Header.Get("X-Poder-Region"),
 			ProviderType: r.Header.Get("X-Poder-Provider-Type"),
 			VMID:         r.Header.Get("X-Poder-VM-ID"),
+			// A worker that does not say what it can enforce can enforce
+			// nothing; the empty list is the honest default.
+			Capabilities: splitCapabilities(r.Header.Get("X-Poder-Capabilities")),
 			Resources: podpkg.PoderResources{
 				CPUCores:      cpuCores,
 				MemoryBytes:   memBytes,
@@ -299,7 +303,7 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			_ = stores.TunnelOwners.Claim(poderID, cfg.NodeURL)
 		}
 		log.Printf("Poder %s connected via tunnel", poderID)
-		notifyEvent("poder.registered", map[string]any{"poder_id": poderID, "provider": r.Header.Get("X-Poder-Provider-Type"), "vm_id": r.Header.Get("X-Poder-VM-ID")})
+		notifyEvent("poder.registered", map[string]any{"poder_id": poderID, "provider": r.Header.Get("X-Poder-Provider-Type"), "vm_id": r.Header.Get("X-Poder-VM-ID"), "capabilities": splitCapabilities(r.Header.Get("X-Poder-Capabilities"))})
 		// Reconciliation now happens via heartbeat (reconcileByHeartbeat).
 		// The first heartbeat from Poder (≤10 s) will carry ContainerNames and
 		// mark any stale RUNNING sandboxes as ERROR — no tunnel-HTTP probe needed.
@@ -570,6 +574,17 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
+				}
+				// A policy on a worker that cannot enforce it would produce a
+				// sandbox the records call walled and that runs unwalled.
+				if req.Network != nil {
+					if pi, ok := poderStore.Get(pID); ok && !pi.HasCapability(podpkg.CapabilityEgress) {
+						http.Error(w, fmt.Sprintf(
+							"poder %s does not support an egress policy (it does not advertise %q); "+
+								"upgrade it or create the sandbox without a policy",
+							pID, podpkg.CapabilityEgress), http.StatusConflict)
+						return
+					}
 				}
 				body, _ := json.Marshal(req)
 				proxyReq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, "http://poder/sandboxes", bytes.NewReader(body))
@@ -863,7 +878,13 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			// Synchronous path (legacy default): same flow, inline.
 			sandbox, jobID, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, "", ident.Name)
 			if err != nil {
-				http.Error(w, err.Error(), http.StatusInternalServerError)
+				status := http.StatusInternalServerError
+				if errors.Is(err, podpkg.ErrPoderCapability) {
+					// Fixable by the caller (upgrade the worker or drop the
+					// policy), so it is a conflict, not a server fault.
+					status = http.StatusConflict
+				}
+				http.Error(w, err.Error(), status)
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
@@ -1490,6 +1511,19 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 // version is stamped at release time via -ldflags "-X main.version=v…"
 // (see .github/workflows/release.yml).
 var version = "dev"
+
+// splitCapabilities parses the comma-separated capability header a worker sends
+// on connect. Whitespace and empty entries are dropped so a malformed header
+// degrades to "no capabilities" rather than to a bogus one.
+func splitCapabilities(raw string) []string {
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if c := strings.TrimSpace(part); c != "" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
 
 func main() {
 	flag.Parse()

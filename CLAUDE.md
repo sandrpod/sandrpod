@@ -176,7 +176,7 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 ### API Endpoints
 
 **Sandboxes**
-- `POST /api/v1/sandboxes` - Create sandbox (returns job)
+- `POST /api/v1/sandboxes` - Create sandbox (returns job). A `network` policy on a fleet with no capable worker answers **409** ("worker capability unavailable") instead of creating an unenforced sandbox
 - `GET /api/v1/sandboxes` - List sandboxes
 - `GET /api/v1/sandboxes/{name}` - Get sandbox details
 - `POST /api/v1/sandboxes/{name}/start` - Start sandbox
@@ -195,7 +195,7 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 - `DELETE /api/v1/poders/{id}` - Delete Poder record（若在线则同时断开 tunnel）
 
 **WebSocket / Internal**
-- `GET /ws/poder/connect` - Poder registers via WebSocket tunnel (`tunnelStore`)
+- `GET /ws/poder/connect` - Poder registers via WebSocket tunnel (`tunnelStore`); headers carry its identity, resources and **capabilities** (`X-Poder-Capabilities: egress`). A sandbox that asks for a policy is only scheduled onto a worker that advertises the capability — the alternative is a sandbox reported as walled that runs unwalled.
 - `GET /ws/sandbox/connect` - sandrpod-agent registers local machine as sandbox (`directStore`)
 - `GET /api/v1/jobs/poll` - Poder polls for pending CREATE/DELETE jobs
 

@@ -22,6 +22,9 @@ type PoderRepository interface {
 	// SelectBest returns the least-loaded available Poder matching region and
 	// providerType filters (empty string matches any).
 	SelectBest(region, providerType string) (*PoderInfo, error)
+	// SelectBestFor additionally requires every capability listed, so a sandbox
+	// that needs per-pod egress cannot land on a worker that ignores it.
+	SelectBestFor(region, providerType string, require []string) (*PoderInfo, error)
 	UpdateUsage(id string, fn func(*PoderUsage)) error
 	SetOffline(id string)
 	Delete(id string) error

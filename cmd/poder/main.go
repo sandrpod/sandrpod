@@ -84,6 +84,13 @@ var (
 // version is stamped at release time via -ldflags "-X main.version=v…".
 var version = "dev"
 
+// poderCapabilities is what this build can enforce inside a sandbox pod. It is
+// advertised on the tunnel handshake so the control plane can refuse to put a
+// policy on a worker that would ignore it (an older worker silently did).
+var poderCapabilities = []string{
+	podpkg.CapabilityEgress,
+}
+
 func main() {
 	flag.Parse()
 
@@ -677,6 +684,11 @@ func connectTunnel(ctx context.Context, poderID string, mux http.Handler, p *pod
 		headers.Set("X-Poder-Name", p.Name())
 		headers.Set("X-Poder-Region", *region)
 		headers.Set("X-Poder-Provider-Type", *providerType)
+		// What this build can enforce. The control plane will not schedule a
+		// sandbox that asks for a capability onto a worker that has not
+		// advertised it, because the alternative is a sandbox reported as
+		// walled while running with no route policy.
+		headers.Set("X-Poder-Capabilities", strings.Join(poderCapabilities, ","))
 		headers.Set("X-Poder-VM-ID", *vmInstanceID)
 		headers.Set("X-Poder-CPU-Cores", strconv.Itoa(resources.CPUCores))
 		headers.Set("X-Poder-Memory-Bytes", strconv.FormatInt(resources.MemoryBytes, 10))

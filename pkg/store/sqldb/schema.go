@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS poders (
     os               TEXT    NOT NULL DEFAULT '',
     os_version       TEXT    NOT NULL DEFAULT '',
     kernel_version   TEXT    NOT NULL DEFAULT '',
+    -- What this worker can enforce ("egress"); empty on a build that predates it
+    capabilities     TEXT    NOT NULL DEFAULT '',
     -- PoderUsage (inline for SQL scoring)
     usage_containers INTEGER NOT NULL DEFAULT 0,
     usage_cpu        REAL    NOT NULL DEFAULT 0,
@@ -118,6 +120,7 @@ var columnMigrations = []string{
 	`ALTER TABLE jobs ADD COLUMN owner TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE sandboxes ADD COLUMN ttl_seconds INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE sandboxes ADD COLUMN egress_policy TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE poders ADD COLUMN capabilities TEXT NOT NULL DEFAULT ''`,
 }
 
 // migrate applies the dialect's schema then its idempotent column migrations.

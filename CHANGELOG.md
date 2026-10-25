@@ -21,13 +21,14 @@ deployment can notice.
   `ADD COLUMN … DEFAULT ''` migration, and every new JSON field is
   `omitempty`/ignored-if-unknown, so an old binary can still read a database and
   a payload produced by a new one. Rolling either direction is safe.
-- **Mixed-version fleet is the one real hazard.** A *new* server with an *old*
-  poder is accepted, but the old poder ignores the `network` field in the create
-  payload and starts the container with **no egress enforcement** — while the
-  control plane reports a walled sandbox and serves its policy. Upgrade poders
-  before creating sandboxes with `network`, or hold off on policies until they
-  are all current. (The poder does not advertise a version, so the server cannot
-  refuse this for you yet.)
+- **Mixed-version fleets are now detected, not trusted.** A worker advertises
+  what it can enforce on the tunnel handshake (`X-Poder-Capabilities`), and the
+  control plane refuses to schedule a sandbox that asks for a policy onto one
+  that does not advertise `egress` — `409` with "worker capability unavailable",
+  rather than a sandbox reported as walled that runs with no route policy. A
+  worker from before this change advertises nothing, so it is refused; upgrade
+  poders *or* drop the policy. (The refusal is per-capability, so a plain
+  sandbox still schedules onto an old worker.)
 - **New agent with an old server**: `-egress-mode=server` polls
   `GET /api/v1/sandboxes/{name}/egress`, and `decider` calls
   `POST /api/v1/policy/decide`. Both are new endpoints; against an old server

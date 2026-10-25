@@ -6,6 +6,7 @@ package sandpod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -60,14 +61,23 @@ const localPoderPollInterval = 500 * time.Millisecond
 // 1. Find an available Poder of the requested provider type
 // 2. If one exists, create the sandbox on it directly
 // 3. Otherwise, provision a new VM via the provider, wait for Poder to register, then create
+// ErrPoderCapability marks a refusal that is the caller's to fix: the fleet
+// cannot enforce what the request asks for. The HTTP layer answers 409 rather
+// than 500 so a client can tell "your configuration needs a newer worker" from
+// "the server broke".
+var ErrPoderCapability = errors.New("worker capability unavailable")
+
 func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSandboxRequest) (*Job, error) {
 	providerType := req.ProviderType
 	if providerType == "" {
 		providerType = "local"
 	}
 
-	// 1. Find an available Poder
-	poder, err := s.poderStore.SelectBest(req.Region, providerType)
+	// 1. Find an available Poder. A sandbox with an egress policy needs a
+	//    worker that advertises the capability; scheduling it onto an older one
+	//    would produce a sandbox reported as walled and running unwalled.
+	require := capabilityRequirement(req)
+	poder, err := s.poderStore.SelectBestFor(req.Region, providerType, require)
 	if err == nil && poder != nil {
 		log.Printf("[Scheduler] Found available poder %s for provider %s", poder.ID, providerType)
 		return s.createJobForPoder(req, poder)
@@ -80,6 +90,16 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 		// period first and then reporting "no worker registered" sends the
 		// reader to `docker compose ps`, where they find the worker online and
 		// learn nothing. Under load this also cost 30s on every rejected create.
+		if len(require) > 0 {
+			// Every online worker of this type predates the capability. Say so
+			// plainly: "no available poder" would send someone to
+			// `docker compose ps`, where the worker is online and fine.
+			if n := s.onlineWithoutCapability(providerType, req.Region, require); n > 0 {
+				return nil, fmt.Errorf("%w: this sandbox asks for an egress policy, but %d online %s "+
+					"worker(s) do not support it (upgrade the poder to a build that advertises %q, "+
+					"or drop the policy)", ErrPoderCapability, n, providerType, require[0])
+			}
+		}
 		if n := s.atCapacity(providerType, req.Region); n > 0 {
 			return nil, fmt.Errorf(
 				"no available %s poder found — %d worker(s) online but at their container "+
@@ -467,4 +487,43 @@ func shellQuoteSingleValue(s string) string {
 		}
 	}
 	return result
+}
+
+// capabilityRequirement maps a create request to the worker capabilities it
+// needs. Only per-pod egress lives here today: everything else is enforced
+// inside the toolbox, which every worker has.
+func capabilityRequirement(req *CreateSandboxRequest) []string {
+	if req.Network != nil {
+		return []string{CapabilityEgress}
+	}
+	return nil
+}
+
+// onlineWithoutCapability counts workers that are online and match the region
+// and provider but lack every capability in require — the case where waiting
+// cannot help.
+func (s *Scheduler) onlineWithoutCapability(providerType, region string, require []string) int {
+	n := 0
+	for _, p := range s.poderStore.List() {
+		if p.State != PoderStateOnline {
+			continue
+		}
+		if region != "" && p.Region != region {
+			continue
+		}
+		if providerType != "" && p.ProviderType != providerType {
+			continue
+		}
+		ok := true
+		for _, cap := range require {
+			if !p.HasCapability(cap) {
+				ok = false
+				break
+			}
+		}
+		if !ok {
+			n++
+		}
+	}
+	return n
 }

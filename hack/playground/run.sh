@@ -331,6 +331,11 @@ if [ "$FLEET_SKIPPED" = "0" ]; then
 		sleep 1
 	done
 
+	# The worker has to say what it can enforce, or the creation below is
+	# refused — which is the point of the capability header.
+	contains "the worker advertises the egress capability" "egress" \
+		"$(curl -s "$API/api/v1/poders" | python3 -c 'import json,sys; print(",".join(str(p.get("capabilities")) for p in json.load(sys.stdin).get("poders", [])))' 2>&1)"
+
 	if ctl create fleet-egress --provider local \
 		--allow-domain example.com --deny-domain blocked.test >"$WORK/fleet-create.log" 2>&1; then
 		pass "the CLI created a sandbox with a policy"

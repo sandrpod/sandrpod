@@ -432,3 +432,21 @@ func TestPoderStore_Concurrency(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestPoderInfo_HasCapability(t *testing.T) {
+	p := &PoderInfo{Capabilities: []string{CapabilityEgress}}
+	if !p.HasCapability(CapabilityEgress) {
+		t.Error("the advertised capability should be found")
+	}
+	if p.HasCapability("sandbox") {
+		t.Error("an unadvertised capability must not be assumed")
+	}
+	// An older worker sends nothing: it can enforce nothing.
+	if (&PoderInfo{}).HasCapability(CapabilityEgress) {
+		t.Error("an empty list must not satisfy a requirement")
+	}
+	// The empty requirement is always satisfied.
+	if !(&PoderInfo{}).HasCapability("") {
+		t.Error("no requirement is always satisfiable")
+	}
+}

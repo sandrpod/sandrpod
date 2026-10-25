@@ -6,16 +6,20 @@ package sandpod
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/sandrpod/sandrpod/pkg/egress"
 )
 
 // mockPoderRepo is a minimal implementation of PoderRepository for testing.
 type mockPoderRepo struct {
-	selectBestFn func(region, providerType string) (*PoderInfo, error)
-	listFn       func() []*PoderInfo
+	selectBestFn    func(region, providerType string) (*PoderInfo, error)
+	selectBestForFn func(region, providerType string, require []string) (*PoderInfo, error)
+	listFn          func() []*PoderInfo
 }
 
 func (m *mockPoderRepo) Register(req *RegisterPoderRequest) (*PoderInfo, error) {
@@ -39,6 +43,22 @@ func (m *mockPoderRepo) List() []*PoderInfo {
 
 func (m *mockPoderRepo) SelectBest(region, providerType string) (*PoderInfo, error) {
 	return m.selectBestFn(region, providerType)
+}
+
+func (m *mockPoderRepo) SelectBestFor(region, providerType string, require []string) (*PoderInfo, error) {
+	if m.selectBestForFn != nil {
+		return m.selectBestForFn(region, providerType, require)
+	}
+	p, err := m.selectBestFn(region, providerType)
+	if err != nil || p == nil || len(require) == 0 {
+		return p, err
+	}
+	for _, c := range require {
+		if !p.HasCapability(c) {
+			return nil, fmt.Errorf("no available poder with capability %q", c)
+		}
+	}
+	return p, nil
 }
 
 func (m *mockPoderRepo) UpdateUsage(id string, fn func(*PoderUsage)) error {
@@ -489,5 +509,40 @@ func TestScheduleLocal_UnfullWorkerDoesNotTriggerCapacityPath(t *testing.T) {
 	}
 	if job.PoderID != "poder-late" {
 		t.Errorf("scheduled on %q, want poder-late", job.PoderID)
+	}
+}
+
+// A sandbox that asks for an egress policy must not land on a worker that
+// cannot enforce it: the record would say "walled" while the container runs
+// with no route policy at all.
+func TestSchedule_EgressNeedsACapablePoder(t *testing.T) {
+	old := &PoderInfo{ID: "old-poder", State: PoderStateOnline, ProviderType: "local",
+		Resources: PoderResources{MaxContainers: 10}}
+	repo := &mockPoderRepo{
+		selectBestFn: func(region, providerType string) (*PoderInfo, error) { return old, nil },
+		// SelectBestFor filters by capability: an incapable fleet finds none.
+		selectBestForFn: func(region, providerType string, require []string) (*PoderInfo, error) {
+			return nil, errors.New("no available poder found")
+		},
+		listFn: func() []*PoderInfo { return []*PoderInfo{old} },
+	}
+	s := NewScheduler(repo, "", "")
+
+	policy := &egress.Policy{AllowedDomains: []string{"example.com"}}
+	_, err := s.ScheduleSandboxCreation(context.Background(), &CreateSandboxRequest{
+		Name: "walled", ProviderType: "local", Network: policy,
+	})
+	if err == nil {
+		t.Fatal("an egress policy on an incapable worker must be refused")
+	}
+	if !strings.Contains(err.Error(), "do not support it") {
+		t.Fatalf("the error should name the capability, got: %v", err)
+	}
+
+	// Without a policy the same worker is fine.
+	if _, err := s.ScheduleSandboxCreation(context.Background(), &CreateSandboxRequest{
+		Name: "plain", ProviderType: "local",
+	}); err != nil {
+		t.Fatalf("a sandbox with no policy must still schedule: %v", err)
 	}
 }

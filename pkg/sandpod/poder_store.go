@@ -11,17 +11,22 @@ import (
 
 // PoderInfo holds metadata for a registered Poder node.
 type PoderInfo struct {
-	ID            string         `json:"id"`
-	Name          string         `json:"name"`
-	URL           string         `json:"url"` // Poder API URL (e.g., http://poder1:8081)
-	Region        string         `json:"region"`
-	ProviderType  string         `json:"provider_type"`   // aws, aliyun, local, docker
-	VMID          string         `json:"vm_id,omitempty"` // cloud VM instance ID (aws/aliyun); empty for local/docker
-	State         PoderState     `json:"state"`
-	Resources     PoderResources `json:"resources"`
-	Usage         PoderUsage     `json:"usage"`
-	LastHeartbeat time.Time      `json:"last_heartbeat"`
-	CreatedAt     time.Time      `json:"created_at"`
+	ID           string         `json:"id"`
+	Name         string         `json:"name"`
+	URL          string         `json:"url"` // Poder API URL (e.g., http://poder1:8081)
+	Region       string         `json:"region"`
+	ProviderType string         `json:"provider_type"`   // aws, aliyun, local, docker
+	VMID         string         `json:"vm_id,omitempty"` // cloud VM instance ID (aws/aliyun); empty for local/docker
+	State        PoderState     `json:"state"`
+	Resources    PoderResources `json:"resources"`
+	// Capabilities is what this worker build can enforce, as advertised when it
+	// connects ("egress" for the per-pod proxy). The control plane refuses to
+	// put a sandbox that needs a capability on a worker that does not have it,
+	// instead of creating one that looks walled and is not.
+	Capabilities  []string   `json:"capabilities,omitempty"`
+	Usage         PoderUsage `json:"usage"`
+	LastHeartbeat time.Time  `json:"last_heartbeat"`
+	CreatedAt     time.Time  `json:"created_at"`
 }
 
 // PoderState represents the online/offline state of a Poder node.
@@ -59,7 +64,25 @@ type RegisterPoderRequest struct {
 	ProviderType string         `json:"provider_type"`   // aws, aliyun, local, docker
 	VMID         string         `json:"vm_id,omitempty"` // cloud VM instance ID (aws/aliyun); empty for local/docker
 	Resources    PoderResources `json:"resources"`
+	Capabilities []string       `json:"capabilities,omitempty"`
 }
+
+// HasCapability reports whether this worker advertised the capability.
+func (p *PoderInfo) HasCapability(name string) bool {
+	if name == "" {
+		return true
+	}
+	for _, c := range p.Capabilities {
+		if c == name {
+			return true
+		}
+	}
+	return false
+}
+
+// CapabilityEgress is the per-pod egress proxy: a worker that does not have it
+// starts containers with no route policy at all.
+const CapabilityEgress = "egress"
 
 // HeartbeatRequest carries usage stats sent by a Poder node on each heartbeat.
 // ContainerNames is the authoritative list of sandbox container names currently
@@ -96,6 +119,7 @@ func (s *PoderStore) Register(req *RegisterPoderRequest) (*PoderInfo, error) {
 		existing.Region = req.Region
 		existing.VMID = req.VMID
 		existing.Resources = req.Resources
+		existing.Capabilities = req.Capabilities
 		existing.LastHeartbeat = time.Now()
 		existing.State = PoderStateOnline
 		return existing, nil
@@ -168,6 +192,14 @@ func (s *PoderStore) List() []*PoderInfo {
 // SelectBest returns the online Poder node with the lowest weighted load score,
 // suitable for scheduling a new container. An empty providerType matches any type.
 func (s *PoderStore) SelectBest(region, providerType string) (*PoderInfo, error) {
+	return s.SelectBestFor(region, providerType, nil)
+}
+
+// SelectBestFor is SelectBest with a capability requirement: a sandbox that
+// asks for per-pod egress must not land on a worker that cannot enforce it,
+// because the alternative is a sandbox the control plane reports as walled
+// while it runs with no route policy at all.
+func (s *PoderStore) SelectBestFor(region, providerType string, require []string) (*PoderInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -192,6 +224,18 @@ func (s *PoderStore) SelectBest(region, providerType string) (*PoderInfo, error)
 
 		// Skip nodes that have reached their container limit.
 		if poder.Usage.Containers >= poder.Resources.MaxContainers {
+			continue
+		}
+
+		// Skip nodes that cannot enforce what this sandbox needs.
+		missing := false
+		for _, cap := range require {
+			if !poder.HasCapability(cap) {
+				missing = true
+				break
+			}
+		}
+		if missing {
 			continue
 		}
 
