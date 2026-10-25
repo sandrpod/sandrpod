@@ -203,6 +203,7 @@ contains "without the proxy there is no DNS" "Could not resolve host" "$NET_OUT"
 
 log "kernel floor: hardlocks masked, persistence read-only"
 KERNEL_OUT=$(run_code '
+echo "cwd=$(pwd)"; ls -a 2>&1 | head -4
 if cat ~/.ssh/id_rsa >/dev/null 2>&1; then echo "hardlock=READABLE"; else echo "hardlock=DENIED"; fi
 if echo pwned >> .git/hooks/pre-commit 2>/dev/null; then echo "hook=WRITABLE"; else echo "hook=DENIED"; fi
 if echo pwned >> .git/config 2>/dev/null; then echo "config=WRITABLE"; else echo "config=DENIED"; fi
