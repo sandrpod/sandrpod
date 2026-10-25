@@ -8,6 +8,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Upgrade notes
+
+Read this before tagging a release: everything below is what an *existing*
+deployment can notice.
+
+- **Defaults are unchanged.** Every feature added in this cycle is opt-in
+  (`-os-sandbox`, `-egress-mode`, `-credential-mask`, `-mandatory-deny-depth`
+  is inert without a gate). An upgrade that changes no flags behaves exactly as
+  before, including on the agent path.
+- **Storage and wire format are additive.** `sandboxes.egress_policy` is an
+  `ADD COLUMN … DEFAULT ''` migration, and every new JSON field is
+  `omitempty`/ignored-if-unknown, so an old binary can still read a database and
+  a payload produced by a new one. Rolling either direction is safe.
+- **Mixed-version fleet is the one real hazard.** A *new* server with an *old*
+  poder is accepted, but the old poder ignores the `network` field in the create
+  payload and starts the container with **no egress enforcement** — while the
+  control plane reports a walled sandbox and serves its policy. Upgrade poders
+  before creating sandboxes with `network`, or hold off on policies until they
+  are all current. (The poder does not advertise a version, so the server cannot
+  refuse this for you yet.)
+- **New agent with an old server**: `-egress-mode=server` polls
+  `GET /api/v1/sandboxes/{name}/egress`, and `decider` calls
+  `POST /api/v1/policy/decide`. Both are new endpoints; against an old server
+  they 404, and both modes then **deny all egress** (fail-closed by design).
+  Upgrade the server first if you intend to use them.
+- **Go API (only for importers of `pkg/...`)**: `permission.AuditSink.Record`
+  gained a `modelReason` parameter — an interface implementer will fail to
+  compile until it adds one. `egress.Server.SOCKSURL()` now returns `""` when the
+  proxy listens on a unix socket instead of a malformed URL. Everything else in
+  this cycle is additive at the Go level.
+- **Image tags**: a release publishes `<version>` **and moves `latest`**. Running
+  containers keep the image they were started with (Docker does not re-pull on
+  restart); anything that pulls `latest` explicitly, or starts on a machine
+  without the image, gets the new one. Pin tags in production if that timing
+  matters.
+
 ### Fixed
 
 A review of everything borrowed from sandbox-runtime found and fixed these.
