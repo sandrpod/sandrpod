@@ -60,6 +60,9 @@ go run ./cmd/server -port 8080 -public-url https://api.example.com -db sqlite:./
 #   both work. This costs an hour if you hit it without knowing.
 go run ./cmd/poder -api-url=http://localhost:8080 -region=local
 go run ./cmd/poder -api-url=http://localhost:8080 -region=local -network=sandrpod
+#   -emulate-legacy (poder and server, TEST ONLY) makes the binary behave like a
+#   build from before the capability bits — it advertises nothing — so the
+#   nightly can prove the mixed-version refusals without an old binary.
 
 # Run Poder via Docker (recommended for production)
 docker run -d --name sandrpod-poder --restart=unless-stopped \

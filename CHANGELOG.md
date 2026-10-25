@@ -47,6 +47,19 @@ deployment can notice.
 
 ### Added
 
+- **The mixed-version refusals are re-proven every night.** The playground's
+  legacy phase starts a second control plane with `-emulate-legacy` (404 on
+  `/api/v1/capabilities`, as an older build does) and a worker container that
+  advertises nothing, then asserts all four facts: the agent refuses that control
+  plane with the upgrade message, a policy on that worker is refused `409`, the
+  message names the capability, and a sandbox *without* a policy still runs.
+  Both flags are TEST ONLY and only remove what the binary claims — they cannot
+  widen anything — and both log a warning at startup. The failure they guard
+  against is silent (a sandbox reported RUNNING with no route policy), which is
+  what makes it worth a nightly rather than a paragraph.
+
+### Added
+
 - **The control plane states its capabilities, and the agent refuses a server it
   cannot rely on** (`GET /api/v1/capabilities` -> `egress_policy`,
   `egress_decider`). `-egress-mode=server|decider` probe it at startup: an older

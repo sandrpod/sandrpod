@@ -371,6 +371,24 @@ rm -rf /tmp/pg
 这就是发布说明里写的"混合版本"隐患，在真机上复现了一遍。所以这一节现在从源码构建两个镜像，
 并且在 toolbox 镜像拉不到时跳过（并说明原因）。
 
+## B''. 混合版本关卡
+
+最后一节模拟**旧版本**构建，断言两道关卡：
+
+```
+== legacy: the two refusals that guard a mixed-version fleet ==
+PASS an agent refuses a control plane without the capability route
+PASS a policy on a legacy worker is refused with 409
+PASS …and the message names the capability
+PASS a sandbox without a policy still runs on a legacy worker
+```
+
+它起第二个 server（`-emulate-legacy`，对 `/api/v1/capabilities` 返回 404，和这条路由
+出现之前的构建完全一样）和一个 worker 容器（`-emulate-legacy`，什么都不声明）。两个开关
+都只会**减少**二进制声称的能力，不会放宽任何东西，而且启动时都会打警告。意义在于：这道关卡
+每晚被重新证明一次，不需要任何人留着一个旧二进制——它防的失败是静默的（沙箱显示 `RUNNING`
+却没有任何路由策略），正是必须有测试压住的那一类。
+
 ## C. 这次走查证明了什么
 
 | 层 | 检查 | 证据 |

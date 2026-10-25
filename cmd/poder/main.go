@@ -33,6 +33,16 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
 
+// envBool parses a boolean env var, defaulting to false.
+func envBool(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
+		}
+	}
+	return def
+}
+
 func env(key, defaultVal string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -70,9 +80,14 @@ func flushingCopy(w http.ResponseWriter, r io.Reader) {
 }
 
 var (
-	apiURL            = flag.String("api-url", env("API_URL", "http://localhost:8080"), "API Server URL")
-	apiToken          = flag.String("token", env("SANDRPOD_TOKEN", ""), "API Server bearer token")
-	region            = flag.String("region", env("REGION", "local"), "Region")
+	apiURL   = flag.String("api-url", env("API_URL", "http://localhost:8080"), "API Server URL")
+	apiToken = flag.String("token", env("SANDRPOD_TOKEN", ""), "API Server bearer token")
+	region   = flag.String("region", env("REGION", "local"), "Region")
+	// TEST ONLY: advertise nothing, the way a build from before per-pod egress
+	// did. It reduces what this worker claims it can do, so it cannot widen
+	// anything — the control plane simply refuses to put a policy on it.
+	emulateLegacy = flag.Bool("emulate-legacy", envBool("EMULATE_LEGACY", false),
+		"TEST ONLY: do not advertise capabilities (behaves like an older worker)")
 	providerType      = flag.String("provider-type", env("PROVIDER_TYPE", "local"), "Provider type: local, docker, aws, aliyun, azure, gcp, tencent, digitalocean, hetzner, oracle")
 	vmInstanceID      = flag.String("vm-instance-id", env("VM_INSTANCE_ID", ""), "Cloud VM instance ID this Poder runs on (used for VM reclamation)")
 	poderIDFlag       = flag.String("poder-id", env("PODER_ID", ""), "Poder ID (auto-generated if not set)")
@@ -688,7 +703,12 @@ func connectTunnel(ctx context.Context, poderID string, mux http.Handler, p *pod
 		// sandbox that asks for a capability onto a worker that has not
 		// advertised it, because the alternative is a sandbox reported as
 		// walled while running with no route policy.
-		headers.Set("X-Poder-Capabilities", strings.Join(poderCapabilities, ","))
+		if *emulateLegacy {
+			log.Printf("WARNING: -emulate-legacy is set — this worker advertises no capabilities; " +
+				"the control plane will refuse to create sandboxes with an egress policy on it")
+		} else {
+			headers.Set("X-Poder-Capabilities", strings.Join(poderCapabilities, ","))
+		}
 		headers.Set("X-Poder-VM-ID", *vmInstanceID)
 		headers.Set("X-Poder-CPU-Cores", strconv.Itoa(resources.CPUCores))
 		headers.Set("X-Poder-Memory-Bytes", strconv.FormatInt(resources.MemoryBytes, 10))

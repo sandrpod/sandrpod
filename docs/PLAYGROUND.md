@@ -403,6 +403,28 @@ release notes, demonstrated on a real machine. The phase now builds both images
 from source for exactly that reason, and skips (with a message) if the toolbox
 image is not pullable.
 
+## B''. Mixed-version guard
+
+The last section emulates the *older* builds and asserts the two refusals that
+keep a mixed fleet honest:
+
+```
+== legacy: the two refusals that guard a mixed-version fleet ==
+PASS an agent refuses a control plane without the capability route
+PASS a policy on a legacy worker is refused with 409
+PASS …and the message names the capability
+PASS a sandbox without a policy still runs on a legacy worker
+```
+
+It starts a second server with `-emulate-legacy` (which answers 404 to
+`/api/v1/capabilities`, exactly as a build from before it does) and a worker
+container with `-emulate-legacy` (which advertises nothing). Both flags only
+*remove* what the binary claims; they cannot widen anything, and both log a
+warning at startup. The point is that the guard is re-proven every night without
+anyone keeping an old binary around — the failure they prevent is silent (a
+sandbox reported `RUNNING` with no route policy), which is exactly the kind that
+a test has to hold down.
+
 ## C. What this walkthrough proved
 
 | Layer | Check | Evidence |

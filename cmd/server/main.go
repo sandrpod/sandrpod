@@ -56,11 +56,15 @@ var (
 	poderIdleTTL   = flag.Duration("poder-idle-timeout", envDuration("SANDRPOD_PODER_IDLE_TIMEOUT"), "Reclaim cloud poders with no sandboxes after this, terminating the VM, e.g. 30m (0 = disabled; env: SANDRPOD_PODER_IDLE_TIMEOUT)")
 	publicURL      = flag.String("public-url", os.Getenv("SANDRPOD_PUBLIC_URL"), "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
 	nodeURL        = flag.String("node-url", os.Getenv("SANDRPOD_NODE_URL"), "Internal URL of THIS instance that peer instances reach it at (e.g. http://10.0.1.5:8080). Set on every instance in a load-balanced, PostgreSQL-backed multi-instance deployment so requests can be forwarded to the node holding a poder's tunnel. Empty = single-instance (no forwarding). (env: SANDRPOD_NODE_URL)")
-	tokensFile     = flag.String("tokens-file", os.Getenv("SANDRPOD_TOKENS_FILE"), "JSON file of named API tokens [{name,token,role}] adding to -token; role admin|user; hot-reloaded on change (env: SANDRPOD_TOKENS_FILE)")
-	tlsCert        = flag.String("tls-cert", os.Getenv("SANDRPOD_TLS_CERT"), "TLS certificate file; with -tls-key serves HTTPS (env: SANDRPOD_TLS_CERT)")
-	tlsKey         = flag.String("tls-key", os.Getenv("SANDRPOD_TLS_KEY"), "TLS private key file (env: SANDRPOD_TLS_KEY)")
-	rateLimit      = flag.Float64("rate-limit", float64(envInt("SANDRPOD_RATE_LIMIT")), "Requests/second per user token, 0 = unlimited (env: SANDRPOD_RATE_LIMIT)")
-	maxPerOwner    = flag.Int("max-sandboxes-per-owner", envInt("SANDRPOD_MAX_SANDBOXES_PER_OWNER"), "Max concurrent sandboxes per user token (0 = unlimited, admins exempt; env: SANDRPOD_MAX_SANDBOXES_PER_OWNER)")
+	// -emulate-legacy hides the capability route so the nightly can prove the
+	// agent refuses an old control plane without keeping an old binary around.
+	// It only *removes* what this build advertises; it cannot widen anything.
+	emulateLegacy = flag.Bool("emulate-legacy", false, "TEST ONLY: behave like a build that predates the capability route (clients will refuse to start)")
+	tokensFile    = flag.String("tokens-file", os.Getenv("SANDRPOD_TOKENS_FILE"), "JSON file of named API tokens [{name,token,role}] adding to -token; role admin|user; hot-reloaded on change (env: SANDRPOD_TOKENS_FILE)")
+	tlsCert       = flag.String("tls-cert", os.Getenv("SANDRPOD_TLS_CERT"), "TLS certificate file; with -tls-key serves HTTPS (env: SANDRPOD_TLS_CERT)")
+	tlsKey        = flag.String("tls-key", os.Getenv("SANDRPOD_TLS_KEY"), "TLS private key file (env: SANDRPOD_TLS_KEY)")
+	rateLimit     = flag.Float64("rate-limit", float64(envInt("SANDRPOD_RATE_LIMIT")), "Requests/second per user token, 0 = unlimited (env: SANDRPOD_RATE_LIMIT)")
+	maxPerOwner   = flag.Int("max-sandboxes-per-owner", envInt("SANDRPOD_MAX_SANDBOXES_PER_OWNER"), "Max concurrent sandboxes per user token (0 = unlimited, admins exempt; env: SANDRPOD_MAX_SANDBOXES_PER_OWNER)")
 )
 
 // poderTombstones remembers recently-deleted poder IDs so a deleted poder's
@@ -773,6 +777,11 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 	// it per request. 404 on an older server is the signal, which is why the
 	// endpoint exists at all: an absent route is unambiguous.
 	mux.HandleFunc("/api/v1/capabilities", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if *emulateLegacy {
+			// Exactly what an older server does: the route is not there.
+			http.NotFound(w, r)
+			return
+		}
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -788,6 +797,11 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 			},
 		})
 	}))
+
+	if *emulateLegacy {
+		log.Printf("WARNING: -emulate-legacy is set — this server reports no capabilities. " +
+			"Agents using -egress-mode=server|decider will refuse to start; it is meant for tests")
+	}
 
 	mux.HandleFunc("/api/v1/sandboxes", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		ident := identityFrom(r)

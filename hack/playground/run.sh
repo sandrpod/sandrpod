@@ -86,9 +86,11 @@ log "build (linux/$GOARCH)"
 CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -o "$WORK/agent" ./cmd/agent || exit 1
 CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -o "$WORK/echo" ./hack/playground/echo || exit 1
 go build -o "$WORK/server" ./cmd/server || exit 1
-# A host build for -gen-ca: the linux binaries cannot run here when the host is
-# not linux.
+# Host builds for the two checks that run here rather than in a container: the
+# certificate generator, and the agent of the legacy phase (which must be able to
+# refuse a bad control plane on the machine running the playground).
 go build -o "$WORK/echo-host" ./hack/playground/echo || exit 1
+go build -o "$WORK/agent-host" ./cmd/agent || exit 1
 "$WORK/echo-host" -gen-ca "$WORK/certs" >/dev/null || exit 1
 chmod +x "$WORK/agent" "$WORK/echo"
 
@@ -366,6 +368,68 @@ printf "\ndeny_code="; curl -s -D - -o /dev/null http://blocked.test/ | tr -d "\
 
 	ctl delete fleet-egress >/dev/null 2>&1
 	docker rm -f sandrpod-pg-poder >/dev/null 2>&1
+fi
+
+# ── 6. the mixed-version guard, proven rather than assumed
+#
+# Two refusals keep an old fleet from producing a sandbox that is reported as
+# walled and runs unwalled: the control plane refuses to place a policy on a
+# worker that does not advertise it, and an agent refuses to start in a mode the
+# control plane cannot serve. Both are checked here against builds that emulate
+# the older versions (`-emulate-legacy`), so the guard cannot rot unnoticed.
+log "legacy: the two refusals that guard a mixed-version fleet"
+
+LEGACY_PORT=$((PORT + 1))
+if ! "$WORK/server" -port "$LEGACY_PORT" -db "sqlite:$WORK/legacy.db" -emulate-legacy \
+	>"$WORK/legacy-server.log" 2>&1 & then
+	info "skipping the legacy phase: the server did not start"
+else
+	LEGACY_PID=$!
+	for _ in $(seq 1 40); do
+		curl -s -o /dev/null "http://127.0.0.1:$LEGACY_PORT/api/v1/sandboxes" && break
+		sleep 0.5
+	done
+
+	# 1. The agent refuses a control plane it cannot rely on.
+	LEGACY_AGENT=$("$WORK/agent-host" -api-url "http://127.0.0.1:$LEGACY_PORT" \
+		-name legacy-probe -egress-mode=server \
+		-audit-dir "$WORK/legacy-audit" -permission-file "$WORK/legacy-perm.json" 2>&1 | tail -3)
+	printf '%s\n' "$LEGACY_AGENT" | tail -2
+	contains "an agent refuses a control plane without the capability route" \
+		"predates" "$LEGACY_AGENT"
+
+	# 2. The control plane refuses a policy on a worker that advertises nothing.
+	if ! docker run -d --name sandrpod-pg-legacy-poder \
+		-v /var/run/docker.sock:/var/run/docker.sock \
+		-v "$WORK:/pg" \
+		-e SANDRPOD_TOOLBOX_IMAGE="$TOOLBOX_IMAGE" \
+		--add-host=host.docker.internal:host-gateway \
+		"$IMAGE" /pg/poder -api-url="http://host.docker.internal:$LEGACY_PORT" -region=local \
+		-emulate-legacy >/dev/null 2>&1; then
+		info "skipping the worker half of the legacy phase: the container did not start"
+	else
+		for _ in $(seq 1 30); do
+			curl -s "http://127.0.0.1:$LEGACY_PORT/api/v1/poders" | grep -q '"state":"ONLINE"' && break
+			sleep 1
+		done
+		LEGACY_CODE=$(curl -s -o "$WORK/legacy-create.json" -w '%{http_code}' \
+			-X POST "http://127.0.0.1:$LEGACY_PORT/api/v1/sandboxes" \
+			-H 'Content-Type: application/json' \
+			-d '{"name":"legacy-walled","region":"local","provider_type":"local",
+			     "network":{"allowed_domains":["example.com"]}}')
+		check "a policy on a legacy worker is refused with 409" "409" "$LEGACY_CODE"
+		contains "…and the message names the capability" "worker capability unavailable" \
+			"$(cat "$WORK/legacy-create.json")"
+
+		PLAIN_CODE=$(curl -s -o /dev/null -w '%{http_code}' \
+			-X POST "http://127.0.0.1:$LEGACY_PORT/api/v1/sandboxes" \
+			-H 'Content-Type: application/json' \
+			-d '{"name":"legacy-plain","region":"local","provider_type":"local"}')
+		check "a sandbox without a policy still runs on a legacy worker" "201" "$PLAIN_CODE"
+		docker rm -f sandrpod-pg-legacy-poder >/dev/null 2>&1
+	fi
+
+	kill "$LEGACY_PID" >/dev/null 2>&1
 fi
 
 log "result"
