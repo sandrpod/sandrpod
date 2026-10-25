@@ -358,6 +358,19 @@ docker network rm pg-net
 rm -rf /tmp/pg
 ```
 
+## B'. 舰队检查：CLI 建策略，容器里生效
+
+`hack/playground/run.sh` 最后一节覆盖另一种部署：容器沙箱，策略用 CLI 设定。它会**从被测
+源码构建** worker 和 egress sidecar，用
+`--allow-domain example.com --deny-domain blocked.test` 建沙箱，然后在容器内断言：
+白名单主机 200、被禁主机 403 且带 `X-Deny-Reason: denied_domain`。
+
+值得单独写一段，是因为它的第一版失败了，而失败本身才是重点：用**已发布的**
+`poder:latest`（2026-08-30，早于 egress 那批改动）时，沙箱状态 `RUNNING`、策略从 API
+读回完全正确，而容器**完全没有被围起来**——没有代理环境变量、没有内部网络、没有 sidecar。
+这就是发布说明里写的"混合版本"隐患，在真机上复现了一遍。所以这一节现在从源码构建两个镜像，
+并且在 toolbox 镜像拉不到时跳过（并说明原因）。
+
 ## C. 这次走查证明了什么
 
 | 层 | 检查 | 证据 |

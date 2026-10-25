@@ -46,6 +46,22 @@ deployment can notice.
 
 ### Added
 
+- **The TypeScript SDK can manage egress**: `createSandbox(..., { network })` and
+  `getEgress`/`setEgress`/`clearEgress`, mirroring the Python client. Verified
+  against a live server from Node (create with a policy, read it back, replace,
+  execute, clear, delete).
+- **The CLI takes the common case as flags**: `--allow-domain` / `--deny-domain`
+  (repeatable) on `create` and `egress set`, merged into a `--egress-policy` file
+  when both are given. `egress set` now requires only one of the two.
+- **The playground proves the fleet path too**: a policy created through the CLI,
+  enforced by the real sidecar in a real container (allowed host 200, denied host
+  403 with `X-Deny-Reason: denied_domain`). It builds the worker and the egress
+  sidecar from the tree under test — its first version used the published
+  `poder:latest`, which predates the egress work, ignored the `network` field and
+  ran the sandbox completely unwalled while reporting `RUNNING`. That is the
+  mixed-version hazard in the upgrade notes, reproduced: the phase now builds
+  from source and skips loudly when an image is unavailable.
+
 - **The CLI can manage egress.** `create --egress-policy file.json` pins the
   allow-list at creation, and `egress get` / `egress set` / `egress clear` read
   and edit it afterwards (`set` takes a file, `-` for stdin, or inline JSON; the

@@ -263,6 +263,102 @@ for line in sys.stdin:
 printf '%s\n' "$AUDIT_OUT"
 contains "the termination is recorded with the credential name" "credentials=['OPENAI_API_KEY']" "$AUDIT_OUT"
 
+# ── 5. the fleet path: a policy created through the CLI, enforced in a container
+#
+# The agent track proves the laptop. This one proves the other deployment: a
+# container sandbox whose policy was set from the CLI is actually walled, which
+# is the claim a `PUT /egress` on its own cannot make.
+log "fleet: a CLI-created policy, enforced in a real container"
+TOOLBOX_IMAGE=${SANDRPOD_TOOLBOX_IMAGE:-ghcr.io/sandrpod/toolbox:latest}
+FLEET_SKIPPED=0
+if ! docker image inspect "$TOOLBOX_IMAGE" >/dev/null 2>&1; then
+	if ! docker pull -q "$TOOLBOX_IMAGE" >/dev/null 2>&1; then
+		info "skipping the fleet phase: $TOOLBOX_IMAGE is not available (private registry?)"
+		FLEET_SKIPPED=1
+	fi
+fi
+
+if [ "$FLEET_SKIPPED" = "0" ]; then
+	ctl() { PYTHONPATH="$ROOT/pkg/sdk/python" python3 -m sandrpod_cli --api-url "$API" "$@"; }
+	fleet_exec() {
+		python3 - "$API" "$1" <<'PYX'
+import json, sys, urllib.request
+api, code = sys.argv[1], sys.argv[2]
+req = urllib.request.Request(
+    api + "/api/v1/sandboxes/execute?sandbox=fleet-egress",
+    data=json.dumps({"language": "bash", "code": code, "timeout": 60}).encode(),
+    headers={"Content-Type": "application/json"}, method="POST")
+with urllib.request.urlopen(req, timeout=120) as r:
+    d = json.load(r)
+sys.stdout.write((d.get("stdout") or "") + (d.get("stderr") or ""))
+PYX
+	}
+
+	# Build the worker from *this* tree. The published poder image is whatever
+	# was tagged last: the first version of this phase used `poder:latest`,
+	# which predates the egress work, silently ignored the `network` field and
+	# ran the sandbox unwalled — the mixed-version hazard the release notes
+	# warn about, demonstrated by this very check.
+	CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -o "$WORK/poder" ./cmd/poder || exit 1
+
+	# The sidecar image has to come from this tree too, for the same reason the
+	# worker does: the pod's egress proxy is a published image otherwise, and a
+	# stale one is exactly the thing this check exists to notice.
+	EGRESS_IMAGE=sandrpod-egress-proxy:playground
+	if ! docker image inspect "$EGRESS_IMAGE" >/dev/null 2>&1; then
+		if ! DOCKER_BUILDKIT=0 docker build -q -f docker/Dockerfile.egress \
+			-t "$EGRESS_IMAGE" . >"$WORK/egress-build.log" 2>&1; then
+			info "skipping the fleet phase: cannot build the egress sidecar image ($(tail -2 "$WORK/egress-build.log" | tr '\n' ' '))"
+			FLEET_SKIPPED=1
+		fi
+	fi
+	if ! docker run -d --name sandrpod-pg-poder \
+		-v /var/run/docker.sock:/var/run/docker.sock \
+		-v "$WORK:/pg" \
+		-e SANDRPOD_TOOLBOX_IMAGE="$TOOLBOX_IMAGE" \
+		-e SANDRPOD_EGRESS_IMAGE="$EGRESS_IMAGE" \
+		--add-host=host.docker.internal:host-gateway \
+		"$IMAGE" /pg/poder -api-url="http://host.docker.internal:$PORT" -region=local \
+		>/dev/null 2>&1; then
+		info "skipping the fleet phase: the worker container did not start"
+		FLEET_SKIPPED=1
+	fi
+fi
+
+if [ "$FLEET_SKIPPED" = "0" ]; then
+	for _ in $(seq 1 30); do
+		curl -s "$API/api/v1/poders" | grep -q '"state":"ONLINE"' && break
+		sleep 1
+	done
+
+	if ctl create fleet-egress --provider local \
+		--allow-domain example.com --deny-domain blocked.test >"$WORK/fleet-create.log" 2>&1; then
+		pass "the CLI created a sandbox with a policy"
+	else
+		fail "the CLI could not create a sandbox: $(tail -3 "$WORK/fleet-create.log" | tr '\n' ' ')"
+	fi
+
+	contains "the policy reads back through the CLI" "blocked.test" \
+		"$(ctl egress get fleet-egress 2>&1)"
+
+	# The denial is read over plain HTTP on purpose: a refused CONNECT has no
+	# origin response for `curl -D` to print, so the X-Deny-Reason header is
+	# only visible on the forward path — which is the same proxy and the same
+	# decision, and gives the check something to assert.
+	FLEET_OUT=$(fleet_exec '
+printf "allow="; curl -s -o /dev/null -w "%{http_code}" https://example.com/
+printf "\ndeny="; curl -s -o /dev/null -w "%{http_code}" http://blocked.test/
+printf "\ndeny_code="; curl -s -D - -o /dev/null http://blocked.test/ | tr -d "\r" | sed -n "s/^X-Deny-Reason: //p"
+')
+	printf '%s\n' "$FLEET_OUT"
+	contains "an allow-listed host answers in the container" "allow=200" "$FLEET_OUT"
+	contains "an unlisted host is refused by the sidecar" "deny=403" "$FLEET_OUT"
+	contains "…with the reason in the header" "deny_code=denied_domain" "$FLEET_OUT"
+
+	ctl delete fleet-egress >/dev/null 2>&1
+	docker rm -f sandrpod-pg-poder >/dev/null 2>&1
+fi
+
 log "result"
 if [ "$FAILED" -ne 0 ]; then
 	printf '\033[31mplayground FAILED\033[0m — logs kept in %s\n' "$WORK"

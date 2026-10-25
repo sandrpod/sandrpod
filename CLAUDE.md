@@ -274,6 +274,7 @@ sandrpod-cli fs replace <name> <file> <pattern> <new-value>
 # 出网策略（egress）
 sandrpod-cli egress get <name>                              # 打印策略 JSON；"null" = 未配置
 sandrpod-cli egress set <name> policy.json                  # 支持文件 / - (stdin) / 内联 JSON
+sandrpod-cli create <name> --allow-domain a.example --deny-domain b.example   # 快捷写法（可重复）
 sandrpod-cli egress clear <name> [-y]                       # 移除策略（≠ set {}，空对象是“拒绝一切”）
 ```
 

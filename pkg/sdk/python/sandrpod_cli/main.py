@@ -45,6 +45,28 @@ def load_egress_policy(source):
     return policy
 
 
+def merge_egress(base, allow_domains, deny_domains):
+    """Fold --allow-domain/--deny-domain into a policy (or build one).
+
+    The flags are sugar for the common case; a file still wins for anything
+    richer (per-domain reasons, strict_allowlist), and the two compose: the
+    flags are unioned into whatever the file said, keeping the file's order so
+    a generated policy stays readable.
+    """
+    if not allow_domains and not deny_domains:
+        return base
+    policy = dict(base or {})
+    for key, extra in (("allowed_domains", allow_domains), ("denied_domains", deny_domains)):
+        if not extra:
+            continue
+        current = list(policy.get(key) or [])
+        for entry in extra:
+            if entry not in current:
+                current.append(entry)
+        policy[key] = current
+    return policy
+
+
 def load_config():
     """加载配置文件"""
     if CONFIG_FILE.exists():
@@ -224,13 +246,18 @@ def list_sandboxes(ctx):
 @click.option("--egress-policy", metavar="FILE", default=None,
               help="Egress allow-list JSON (path, or - for stdin). Schema: allowed_domains, "
                    "denied_domains, denied_domain_reasons, strict_allowlist")
+@click.option("--allow-domain", "allow_domains", multiple=True, metavar="HOST[:PORT]",
+              help="Allow a destination (repeatable); merged into --egress-policy if both are given")
+@click.option("--deny-domain", "deny_domains", multiple=True, metavar="HOST[:PORT]",
+              help="Refuse a destination (repeatable)")
 @click.option("--wait-timeout", default=900, help="Seconds to wait for the sandbox to reach RUNNING (default 900)")
 @click.pass_context
-def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, cpu, memory, no_wait, wait_timeout, egress_policy):
+def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, cpu, memory,
+           no_wait, wait_timeout, egress_policy, allow_domains, deny_domains):
     """Create a sandbox (waits for it to reach RUNNING; cloud provisioning can take minutes)"""
     import time as _time
     client = ctx.obj["client"]
-    network = load_egress_policy(egress_policy)
+    network = merge_egress(load_egress_policy(egress_policy), allow_domains, deny_domains)
     try:
         # --poder: create directly on a specific Poder (fast, returns a sandbox
         # record, not a scheduler job).
@@ -347,12 +374,18 @@ def egress_get(ctx, name):
 
 @egress.command(name="set")
 @click.argument("name")
-@click.argument("policy_source", metavar="FILE|-|JSON")
+@click.argument("policy_source", metavar="[FILE|-|JSON]", required=False)
+@click.option("--allow-domain", "allow_domains", multiple=True, metavar="HOST[:PORT]")
+@click.option("--deny-domain", "deny_domains", multiple=True, metavar="HOST[:PORT]")
 @click.pass_context
-def egress_set(ctx, name, policy_source):
-    """Replace the egress policy. Takes a file, `-` for stdin, or inline JSON."""
+def egress_set(ctx, name, policy_source, allow_domains, deny_domains):
+    """Replace the egress policy: a file, `-` for stdin, inline JSON, or flags."""
     client = ctx.obj["client"]
-    policy = load_egress_policy(policy_source)
+    if policy_source is None and not allow_domains and not deny_domains:
+        click.echo("Error: give a policy (FILE, -, or JSON) or at least one "
+                   "--allow-domain/--deny-domain", err=True)
+        sys.exit(1)
+    policy = merge_egress(load_egress_policy(policy_source), allow_domains, deny_domains)
     try:
         out = client.set_egress(name, policy)
     except Exception as e:

@@ -385,6 +385,24 @@ rm -rf /tmp/pg
 
 ---
 
+## B'. Fleet check: a CLI-created policy, enforced in a container
+
+The last section of `hack/playground/run.sh` covers the other deployment: a
+container sandbox whose policy was set through the CLI. It builds the worker and
+the egress sidecar **from the tree under test**, creates a sandbox with
+`--allow-domain example.com --deny-domain blocked.test`, and asserts from inside
+the container that the allowed host answers 200 while the denied one is refused
+403 with `X-Deny-Reason: denied_domain`.
+
+It is worth its own paragraph because its first version failed, and the failure
+was the interesting part: with the *published* `poder:latest` image (2026-08-30,
+predating the egress work) the sandbox came up `RUNNING`, the policy read back
+correctly from the API, and the container ran **completely unwalled** — no proxy
+env, no internal network, no sidecar. That is the mixed-version hazard from the
+release notes, demonstrated on a real machine. The phase now builds both images
+from source for exactly that reason, and skips (with a message) if the toolbox
+image is not pullable.
+
 ## C. What this walkthrough proved
 
 | Layer | Check | Evidence |

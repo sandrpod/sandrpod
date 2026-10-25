@@ -27,6 +27,19 @@ export interface Sandbox {
   last_activity?: string;
 }
 
+/**
+ * Egress allow-list for a sandbox (docs/EGRESS_POLICY.md). The same shape the
+ * API takes on create and on `PUT .../egress`. Entries are `host[:port]`, with
+ * a leading `*.` for subdomains; unknown keys are rejected by the server.
+ */
+export interface EgressPolicy {
+  allowed_domains?: string[];
+  denied_domains?: string[];
+  denied_domain_reasons?: Record<string, string>;
+  /** When true, anything not explicitly allowed is refused (the default). */
+  strict_allowlist?: boolean;
+}
+
 export interface CreateSandboxOptions {
   region?: string;
   providerType?: string;
@@ -37,6 +50,11 @@ export interface CreateSandboxOptions {
   memoryMB?: number;
   /** Return a job immediately instead of blocking until RUNNING. */
   async?: boolean;
+  /**
+   * Egress allow-list (docs/EGRESS_POLICY.md). Omitted = the deployment default;
+   * `{}` = a wall that allows nothing. Those are different requests.
+   */
+  network?: EgressPolicy;
 }
 
 export interface Job {
@@ -224,6 +242,7 @@ export class SandrPodClient {
     if (opts.ttlSeconds) body["ttl_seconds"] = opts.ttlSeconds;
     if (opts.cpuCores) body["cpu_cores"] = opts.cpuCores;
     if (opts.memoryMB) body["memory_mb"] = opts.memoryMB;
+    if (opts.network !== undefined) body["network"] = opts.network;
     if (opts.async ?? waitUntilRunning) body["async"] = true;
 
     const resp = await this.request<{ job_id?: string; status?: string; sandbox: Sandbox }>(
@@ -256,6 +275,37 @@ export class SandrPodClient {
       }
     }
     throw new Error(`timed out waiting for sandbox ${name} to reach RUNNING`);
+  }
+
+  /** The sandbox's egress policy, or null when none is configured. */
+  async getEgress(name: string): Promise<EgressPolicy | null> {
+    const resp = await this.request<{ sandbox: string; policy: EgressPolicy | null }>(
+      "GET",
+      `/api/v1/sandboxes/${encodeURIComponent(name)}/egress`,
+    );
+    return resp.policy ?? null;
+  }
+
+  /**
+   * Replace the egress policy. Applies to the sandbox's next connection.
+   *
+   * `{}` allows nothing; use {@link clearEgress} to go back to "unconfigured".
+   */
+  async setEgress(name: string, policy: EgressPolicy): Promise<EgressPolicy | null> {
+    const resp = await this.request<{ sandbox: string; policy: EgressPolicy | null }>(
+      "PUT",
+      `/api/v1/sandboxes/${encodeURIComponent(name)}/egress`,
+      policy,
+    );
+    return resp.policy ?? null;
+  }
+
+  /** Remove the policy (not the same as setting an empty one). */
+  async clearEgress(name: string): Promise<void> {
+    await this.request<unknown>(
+      "DELETE",
+      `/api/v1/sandboxes/${encodeURIComponent(name)}/egress`,
+    );
   }
 
   async deleteSandbox(name: string): Promise<void> {
