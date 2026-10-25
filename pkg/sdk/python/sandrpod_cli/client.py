@@ -129,6 +129,7 @@ class CLIClient:
         ttl_seconds: int = 0,
         cpu_cores: float = 0,
         memory_mb: int = 0,
+        network: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         创建 Sandbox
@@ -162,6 +163,9 @@ class CLIClient:
             data["cpu_cores"] = float(cpu_cores)
         if memory_mb:
             data["memory_mb"] = int(memory_mb)
+        if network is not None:
+            # Egress allow-list, as the same JSON shape PUT /egress takes.
+            data["network"] = network
         resp = self._request("POST", "/api/v1/sandboxes", json=data)
         return resp.json()
 
@@ -546,6 +550,7 @@ class CLIClient:
         provider_type: str = "local",
         instance_type: str = "",
         image: str = "",
+        network: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """
         在指定 Poder 上直接创建 Sandbox（跳过调度器），返回 sandbox 记录。
@@ -559,7 +564,30 @@ class CLIClient:
             data["instance_type"] = instance_type
         if image:
             data["image_id"] = image
+        if network is not None:
+            data["network"] = network
         resp = self._request("POST", f"/api/v1/poders/{poder_id}/sandboxes", json=data)
+        return resp.json()
+
+    # ========== 出网策略 (egress) ==========
+
+    def get_egress(self, name: str) -> Dict[str, Any]:
+        """读取沙箱的出网策略：{"sandbox": …, "policy": {…} | null}。
+
+        policy 为 null 表示这个沙箱没有策略（容器沙箱 = 不设限；agent 沙箱 =
+        由 agent 自己的启动参数决定）。
+        """
+        resp = self._request("GET", f"/api/v1/sandboxes/{name}/egress")
+        return resp.json()
+
+    def set_egress(self, name: str, policy: Dict[str, Any]) -> Dict[str, Any]:
+        """替换出网策略（下一次连接生效；不改已有连接）。"""
+        resp = self._request("PUT", f"/api/v1/sandboxes/{name}/egress", json=policy)
+        return resp.json()
+
+    def clear_egress(self, name: str) -> Dict[str, Any]:
+        """移除出网策略（回到“未配置”），与 set 空对象不同：空对象是“拒绝一切”。"""
+        resp = self._request("DELETE", f"/api/v1/sandboxes/{name}/egress")
         return resp.json()
 
     # ========== Session 操作 ==========

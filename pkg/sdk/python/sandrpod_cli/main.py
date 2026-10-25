@@ -18,6 +18,33 @@ CONFIG_FILE = CONFIG_DIR / "config.yaml"
 DEFAULT_API_URL = "http://localhost:8080"
 
 
+def load_egress_policy(source):
+    """Read an egress policy from a file, "-" (stdin), or a JSON string.
+
+    Returning None means "no policy configured", which is different from an
+    empty object: `{}` is a policy that allows nothing (and, for a container
+    sandbox, walls it off), while None leaves the sandbox unconfigured.
+    """
+    if source is None:
+        return None
+    try:
+        if source == "-":
+            raw = sys.stdin.read()
+        elif os.path.exists(source):
+            with open(source, "r", encoding="utf-8") as fh:
+                raw = fh.read()
+        else:
+            raw = source  # allow inline JSON on the command line
+        policy = json.loads(raw)
+    except Exception as e:
+        click.echo(f"Error: cannot read egress policy from {source}: {e}", err=True)
+        sys.exit(1)
+    if not isinstance(policy, dict):
+        click.echo("Error: an egress policy is a JSON object (allowed_domains, …)", err=True)
+        sys.exit(1)
+    return policy
+
+
 def load_config():
     """加载配置文件"""
     if CONFIG_FILE.exists():
@@ -194,18 +221,22 @@ def list_sandboxes(ctx):
 @click.option("--cpu", default=0.0, help="CPU cores limit for the sandbox container (local/docker poders; 0 = unlimited)")
 @click.option("--memory", default=0, help="Memory limit in MiB for the sandbox container (local/docker poders; 0 = unlimited)")
 @click.option("--no-wait", is_flag=True, help="Return immediately with the job id instead of waiting for RUNNING")
+@click.option("--egress-policy", metavar="FILE", default=None,
+              help="Egress allow-list JSON (path, or - for stdin). Schema: allowed_domains, "
+                   "denied_domains, denied_domain_reasons, strict_allowlist")
 @click.option("--wait-timeout", default=900, help="Seconds to wait for the sandbox to reach RUNNING (default 900)")
 @click.pass_context
-def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, cpu, memory, no_wait, wait_timeout):
+def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, cpu, memory, no_wait, wait_timeout, egress_policy):
     """Create a sandbox (waits for it to reach RUNNING; cloud provisioning can take minutes)"""
     import time as _time
     client = ctx.obj["client"]
+    network = load_egress_policy(egress_policy)
     try:
         # --poder: create directly on a specific Poder (fast, returns a sandbox
         # record, not a scheduler job).
         if poder:
             sb = client.create_sandbox_on_poder(
-                poder, name, region, provider_type, instance_type, image
+                poder, name, region, provider_type, instance_type, image, network=network
             )
             click.echo(f"Sandbox:  {sb.get('name', name)}")
             click.echo(f"State:    {sb.get('state', 'N/A')}")
@@ -221,7 +252,9 @@ def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, c
     # connection drops mid-way we just fall through to polling).
     job_id = None
     try:
-        resp = client.create_sandbox(name, region, provider_type, instance_type, image, async_=True, ttl_seconds=ttl, cpu_cores=cpu, memory_mb=memory)
+        resp = client.create_sandbox(name, region, provider_type, instance_type, image,
+                                     async_=True, ttl_seconds=ttl, cpu_cores=cpu,
+                                     memory_mb=memory, network=network)
         job_id = resp.get("job_id")
         click.echo(f"Sandbox:  {resp.get('sandbox', {}).get('name', name)}")
         click.echo(f"Job ID:   {job_id or 'N/A'}")
@@ -287,6 +320,66 @@ def get_sandbox(ctx, name):
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
+
+
+@cli.group()
+def egress():
+    """Egress allow-list of a sandbox (who it may reach, and why not)."""
+
+
+@egress.command(name="get")
+@click.argument("name")
+@click.pass_context
+def egress_get(ctx, name):
+    """Show the egress policy (JSON; `null` means none is configured)."""
+    client = ctx.obj["client"]
+    try:
+        out = client.get_egress(name)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    policy = out.get("policy")
+    if policy is None:
+        click.echo(f"{name}: no egress policy configured")
+        return
+    click.echo(json.dumps(policy, indent=2, sort_keys=True))
+
+
+@egress.command(name="set")
+@click.argument("name")
+@click.argument("policy_source", metavar="FILE|-|JSON")
+@click.pass_context
+def egress_set(ctx, name, policy_source):
+    """Replace the egress policy. Takes a file, `-` for stdin, or inline JSON."""
+    client = ctx.obj["client"]
+    policy = load_egress_policy(policy_source)
+    try:
+        out = client.set_egress(name, policy)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    click.echo(f"Egress policy of '{name}' updated (applies to the next connection):")
+    click.echo(json.dumps(out.get("policy"), indent=2, sort_keys=True))
+
+
+@egress.command(name="clear")
+@click.argument("name")
+@click.option("--yes", "-y", is_flag=True, help="Do not ask for confirmation")
+@click.pass_context
+def egress_clear(ctx, name, yes):
+    """Remove the policy, returning the sandbox to "unconfigured".
+
+    Not the same as setting `{}`: an empty policy allows nothing.
+    """
+    client = ctx.obj["client"]
+    if not yes:
+        click.confirm(f"Remove the egress policy of '{name}'?", abort=True)
+    try:
+        client.clear_egress(name)
+    except Exception as e:
+        click.echo(f"Error: {e}", err=True)
+        sys.exit(1)
+    click.echo(f"Egress policy of '{name}' removed")
 
 
 @cli.command()

@@ -135,6 +135,26 @@ Two storage-level notes, because they are the parts that surprise people:
   carrying bytes until it closes. For "stop everything now", delete the
   sandbox — that closes the tunnel and the container with it.
 
+### 2.3b From the CLI
+
+The same policy the HTTP API takes, with the file as the unit of work:
+
+```bash
+sandrpod-cli create build-1 --egress-policy policy.json     # at create time
+sandrpod-cli egress get  build-1                            # print it; "null" = none
+sandrpod-cli egress set  build-1 policy.json                # replace (file, - for stdin, or inline JSON)
+sandrpod-cli egress clear build-1 -y                        # remove it
+```
+
+`egress clear` is not `egress set {}`: an empty policy allows nothing (a wall
+with an empty allow-list), while cleared means unconfigured — which for a
+container sandbox means no egress sidecar at all, and for an agent sandbox means
+"whatever the agent's own flags say". Pick deliberately.
+
+A policy set on a running sandbox applies to its **next** connection; the proxy
+reads it per request, and the agent in `-egress-mode=server` picks it up at its
+next sync.
+
 ### 2.4 Decider mode: the agent holds no rules
 
 `-egress-mode=decider` is for the deployment that wants the rules to live in

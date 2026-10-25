@@ -44,6 +44,17 @@ deployment can notice.
   without the image, gets the new one. Pin tags in production if that timing
   matters.
 
+### Added
+
+- **The CLI can manage egress.** `create --egress-policy file.json` pins the
+  allow-list at creation, and `egress get` / `egress set` / `egress clear` read
+  and edit it afterwards (`set` takes a file, `-` for stdin, or inline JSON; the
+  server's validation errors surface as-is). `egress clear` needed a new
+  `DELETE /api/v1/sandboxes/{name}/egress`, because `PUT {}` is not "unset" — an
+  empty policy is a wall with an empty allow-list. Both distinctions are in the
+  help text, and `CLIClient` grew `get_egress`/`set_egress`/`clear_egress` plus
+  a `network=` argument on both create paths for anyone using it as a SDK.
+
 ### Fixed
 
 A review of everything borrowed from sandbox-runtime found and fixed these.

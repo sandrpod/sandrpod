@@ -188,6 +188,7 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 - `GET /api/v1/sandboxes/{name}/egress` - Egress policy of a sandbox (`{"sandbox":…,"policy":{…}|null}`); the agent in `-egress-mode=server` polls this
 - `POST /api/v1/policy/decide` - Per-connection verdict (`{"sandbox","host","port"}` → `{"allow","code","rule","reason"}`); `-egress-mode=decider` calls it for every destination. Answers 200 with a denial in-band: an HTTP error would surface as "decider unavailable", which is a different fact
 - `PUT /api/v1/sandboxes/{name}/egress` - Replace the policy (validated; applies to the sandbox's next connection)
+- `DELETE /api/v1/sandboxes/{name}/egress` - Remove the policy (back to "unconfigured"; not the same as `PUT {}`, which allows nothing)
 
 **Poder Nodes**
 - `GET /api/v1/poders` - List Poder nodes
@@ -229,6 +230,7 @@ sandrpod-cli create <name> --provider gcp --region asia-east1-a --instance-type 
 sandrpod-cli create <name> --provider local --image ghcr.io/sandrpod/toolbox:latest
 sandrpod-cli create <name> --poder <poder-id>          # 指定 poder 直建（跳过调度器）
 sandrpod-cli create <name> --ttl 3600 --cpu 2 --memory 2048  # 闲置 TTL(秒) + CPU 核 + 内存(MiB)
+sandrpod-cli create <name> --egress-policy policy.json      # 建时带出网白名单（同 PUT /egress 的 JSON）
 sandrpod-cli create <name> --no-wait                   # 异步：立即返回 job id，不等 RUNNING
 sandrpod-cli start/stop/delete <name>
 sandrpod-cli logs <name> [--tail N]
@@ -268,6 +270,11 @@ sandrpod-cli poder delete <poder-id> [-y] [--keep-vm]  # --keep-vm: 只删记录
 # 文件操作
 sandrpod-cli fs ls|cat|write|mkdir|rm|mv|search|grep|info|upload|download <name> ...
 sandrpod-cli fs replace <name> <file> <pattern> <new-value>
+
+# 出网策略（egress）
+sandrpod-cli egress get <name>                              # 打印策略 JSON；"null" = 未配置
+sandrpod-cli egress set <name> policy.json                  # 支持文件 / - (stdin) / 内联 JSON
+sandrpod-cli egress clear <name> [-y]                       # 移除策略（≠ set {}，空对象是“拒绝一切”）
 ```
 
 ### langchain-sandrpod（Python SDK for deepagents）

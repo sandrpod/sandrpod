@@ -1012,6 +1012,21 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 					w.Header().Set("Content-Type", "application/json")
 					json.NewEncoder(w).Encode(map[string]any{"sandbox": name, "policy": policy})
 					return
+				case http.MethodDelete:
+					// Remove the policy, back to "unconfigured". Distinct from
+					// PUT {} — an empty policy allows nothing, which is a wall
+					// with no allow-list, not the absence of one.
+					if err := sandboxStore.Update(name, func(s *podpkg.SandboxInfo) {
+						s.Network = nil
+						s.LastActivity = time.Now()
+					}); err != nil {
+						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
+					}
+					notifyEvent("sandbox.egress.cleared", map[string]any{"name": name})
+					w.Header().Set("Content-Type", "application/json")
+					json.NewEncoder(w).Encode(map[string]any{"sandbox": name, "policy": nil})
+					return
 				default:
 					http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 					return
