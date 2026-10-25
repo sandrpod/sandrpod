@@ -23,6 +23,25 @@ Two tracks:
 
 ---
 
+## 0. One command instead of §B
+
+Track B is scripted — same checks, same expectations, exits non-zero with the
+failing assertion named:
+
+```bash
+./hack/playground/run.sh          # PORT=18080 by default; KEEP=1 leaves it up
+```
+
+It runs nightly and on pull requests that touch this area
+(`.github/workflows/playground.yml`), because it needs `--privileged` and two
+containers while the unit suite needs neither. It is slower and it is worth it:
+its first run found four bugs the unit tests had passed through, all of which
+only appear once the layers are wired together.
+
+The rest of this page is the same walkthrough by hand, which is what you want
+when a check fails: the script tells you *that* something broke, this tells you
+*what it should look like*.
+
 ## 0. Prerequisites
 
 ```bash

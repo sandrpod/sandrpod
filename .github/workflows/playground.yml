@@ -1,0 +1,70 @@
+name: Playground
+
+# The assembled product, checked end to end: a real agent in a privileged
+# container with the permission gate, the kernel sandbox, its own network
+# namespace, the egress policy and credential masking all on at once.
+#
+# Why nightly rather than per-push: it needs --privileged, two containers and
+# about a minute, and it is slow relative to the unit suite. Why at all: its
+# first manual run found four bugs that every unit test in the repository
+# passed through, because they only appear once the layers are wired together
+# (a bwrap path that execve could not resolve, a child environment overwritten
+# by the credential setup, termination limited to port 443, and audit fields
+# that never reached the record).
+#
+# Run it by hand when touching anything in this area:
+#   gh workflow run playground
+
+on:
+  schedule:
+    # 03:17 UTC, an odd minute on purpose: GitHub queues everything at :00 and
+    # a busy runner pool is where flaky timing hides.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "pkg/egress/**"
+      - "pkg/sandbox/**"
+      - "pkg/toolbox/sandbox.go"
+      - "pkg/permission/**"
+      - "cmd/agent/**"
+      - "hack/playground/**"
+      - ".github/workflows/playground.yml"
+
+jobs:
+  playground:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check the Docker daemon is available
+        run: docker info --format '{{.ServerVersion}} {{.Architecture}}'
+
+      # The script builds its own binaries (agent for linux, the upstream for
+      # both host and container) and cleans up after itself, including on
+      # failure. It exits non-zero with the failing check named.
+      - name: Run the playground
+        run: ./hack/playground/run.sh
+
+      # When a check fails the useful thing is the agent's own log: it reports
+      # which layers came up and what each denial looked like.
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          docker logs sandrpod-pg-agent 2>&1 | tail -40 || true
+          docker logs sandrpod-pg-echo 2>&1 | tail -10 || true
+          ls -la /tmp/sandrpod-pg.*/ 2>/dev/null || true
+
+      - name: Clean up
+        if: always()
+        run: |
+          docker rm -f sandrpod-pg-agent sandrpod-pg-echo 2>/dev/null || true
+          docker network rm sandrpod-pg-net 2>/dev/null || true

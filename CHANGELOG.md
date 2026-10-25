@@ -10,6 +10,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Added
 
+- **The playground as a script, and a nightly job that runs it**
+  (`hack/playground/run.sh`, `.github/workflows/playground.yml`). The manual
+  walkthrough in `docs/PLAYGROUND.md` §B is now one command: it builds the agent
+  for Linux, starts a control plane and an upstream, runs the agent in a
+  privileged container with every layer on, and asserts each outcome — the
+  hard-locked key is unreadable, a git hook cannot be written, `.git/config`
+  stays readable, an allow-listed host answers, an unlisted one is refused with
+  `X-Deny-Reason`, the sandbox holds a sentinel while the upstream logs the real
+  key, a cleartext credential is refused, and the audit records the termination
+  with the credential name. It exits non-zero with the failing assertion named,
+  keeps the containers on failure, and cleans up otherwise. Nightly plus on PRs
+  that touch egress, sandbox, the gate or the agent — it needs `--privileged`
+  and two containers, and its first run found four bugs that only appear once
+  the layers are assembled.
+
 - **`docs/APP_INTEGRATION.md` and `docs/PLAYGROUND.md`** (both with Chinese
   versions). The first answers "what does upgrading do to my application": the
   API diff is empty, three things are visible inside the sandbox, four kinds of
