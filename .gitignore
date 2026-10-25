@@ -80,3 +80,8 @@ credentials.json
 
 # Local media / marketing assets (video scripts, recordings, etc.)
 /media/
+
+# Internal working notes — competitor reads, pricing snapshots, draft strategy.
+# Kept on the machine, never published: the repo is public and these documents
+# quote other companies' pages and price lists.
+devdoc/
