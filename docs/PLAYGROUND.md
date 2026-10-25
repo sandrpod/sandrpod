@@ -78,10 +78,20 @@ Expected: `API server listening on :18080`.
 ### A.2 Start a worker
 
 ```bash
-go run ./cmd/poder -api-url=http://localhost:18080 -region=local
+docker run -d --name pg-poder --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e API_URL=http://host.docker.internal:18080 \
+  -e SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:latest \
+  --add-host=host.docker.internal:host-gateway \
+  ghcr.io/sandrpod/poder:latest
 ```
 
 Expected: it registers and polls for jobs.
+
+**Start it in Docker, not with `go run`, on macOS.** A host-run poder cannot
+reach a container's bridge IP (Docker Desktop runs the daemon inside a VM), so
+every `execute` sits for the whole timeout and then answers 500/503 while the
+sandbox looks perfectly RUNNING. On Linux either form works.
 
 ### A.3 Create a sandbox with a policy
 

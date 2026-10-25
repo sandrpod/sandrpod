@@ -64,10 +64,19 @@ go run ./cmd/server -port 18080 -db sqlite:/tmp/pg/sandrpod.db
 ### A.2 起一个 worker
 
 ```bash
-go run ./cmd/poder -api-url=http://localhost:18080 -region=local
+docker run -d --name pg-poder --network host \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e API_URL=http://host.docker.internal:18080 \
+  -e SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:latest \
+  --add-host=host.docker.internal:host-gateway \
+  ghcr.io/sandrpod/poder:latest
 ```
 
 应当看到它注册成功并开始轮询 job。
+
+**macOS 上必须用 Docker 起，别用 `go run`。** 宿主上跑的 poder 够不着容器的
+bridge IP（Docker Desktop 的 daemon 在虚拟机里），于是每次 `execute` 都会卡满超时
+再返回 500/503，而沙箱看起来一直是 RUNNING。Linux 上两种都行。
 
 ### A.3 建一个带策略的沙箱
 

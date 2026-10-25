@@ -230,7 +230,8 @@ print(Sandbox.create().commands.run("echo hello from SandrPod").stdout)
 - **生产部署（带 TLS 和真实域名）** —— 基准形态：PostgreSQL + 通配证书 + 打开 E2B 接口。`docker compose -f docker/docker-compose.prod.yml up -d --wait`，从空机器起步的完整过程（DNS、证书、续期、验收扫描）见 **[docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)**。
 - **仅 PostgreSQL**（不含 TLS 终结）：`docker compose -f docker/docker-compose.pg.yml up -d` —— 横向扩展见 [docs/MULTI_INSTANCE_DEPLOYMENT.md](docs/MULTI_INSTANCE_DEPLOYMENT.md)。
 - **从源码构建**（贡献者）：`docker compose -f docker/docker-compose.local.yml up -d --build`
-- **直接跑 Go**：`go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db`，再用上面的 `docker run …/poder` 一行命令或 `go run ./cmd/poder -api-url=http://localhost:8080` 加一个 worker。
+- **直接跑 Go**：`go run ./cmd/server -port 8080 -db sqlite:./data/sandrpod.db`，再加一个 worker：用上面的 `docker run …/poder` 一行命令（macOS 上只有这种能用——
+宿主上跑的 poder 够不着容器的 bridge IP），Linux 上 `go run ./cmd/poder -api-url=http://localhost:8080` 也行。
 - **完全不用 Docker** —— 把任意机器变成沙箱：`go run ./cmd/agent -api-url=http://localhost:8080 -name=my-machine`
 
 默认的 `docker-compose.yml` 用 SQLite 持久化（`sandrpod-data` 卷），沙箱和 token 重启不丢。

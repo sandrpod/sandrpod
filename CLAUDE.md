@@ -54,6 +54,10 @@ go run ./cmd/server -port 8080 -db "postgres://…" -node-url http://10.0.1.6:80
 go run ./cmd/server -port 8080 -public-url https://api.example.com -db sqlite:./data/sandrpod.db
 
 # Run Poder (requires Docker socket; -network 指定容器网络，默认 bridge)
+#   On macOS run it in Docker instead (see the next block): a poder on the host
+#   cannot reach a container's bridge IP (Docker Desktop runs the daemon in a VM),
+#   so `execute` hangs for the full timeout and then answers 500/503. On Linux
+#   both work. This costs an hour if you hit it without knowing.
 go run ./cmd/poder -api-url=http://localhost:8080 -region=local
 go run ./cmd/poder -api-url=http://localhost:8080 -region=local -network=sandrpod
 
