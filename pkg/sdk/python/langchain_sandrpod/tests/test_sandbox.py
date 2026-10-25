@@ -8,6 +8,7 @@ import httpx
 import pytest
 import respx
 
+from langchain_sandrpod.client import SandrPodClient
 from langchain_sandrpod.sandbox import SandrPodSandbox
 
 
@@ -145,6 +146,9 @@ def test_execute_uses_default_timeout():
 @respx.mock
 def test_upload_files_success():
     respx.post(
+        f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/toolbox/files/folder"
+    ).mock(return_value=httpx.Response(200))
+    respx.post(
         f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/toolbox/files/upload"
     ).mock(
         return_value=httpx.Response(
@@ -171,6 +175,9 @@ def test_upload_files_invalid_path():
 @respx.mock
 def test_upload_files_multiple():
     respx.post(
+        f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/toolbox/files/folder"
+    ).mock(return_value=httpx.Response(200))
+    respx.post(
         f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/toolbox/files/upload"
     ).mock(
         return_value=httpx.Response(
@@ -192,6 +199,9 @@ def test_upload_files_multiple():
 
 @respx.mock
 def test_upload_files_server_error():
+    respx.post(
+        f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/toolbox/files/folder"
+    ).mock(return_value=httpx.Response(200))
     respx.post(
         f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/toolbox/files/upload"
     ).mock(
@@ -386,19 +396,33 @@ _TB = f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/toolbox"
 
 
 @respx.mock
-def test_write_overwrites_without_preflight():
-    """write 改为覆盖语义：不再 GET /files/info 预检，直接建目录+上传（截断）。"""
-    info = respx.get(f"{_TB}/files/info")  # 必须一次都不调
-    respx.post(f"{_TB}/files/folder").mock(return_value=httpx.Response(200))
+def test_write_refuses_an_existing_file():
+    """write 只建新文件：协议是 "error if file exists"，edit 才是改写路径。
+
+    覆盖会把“我想改这一行”变成“整文件被替换”，一个写错就没有了。
+    """
+    info = respx.get(f"{_TB}/files/info").mock(return_value=httpx.Response(200))  # 已存在
     upload = respx.post(f"{_TB}/files/upload").mock(return_value=httpx.Response(200))
 
     sb = _make_sandbox()
     res = sb.write("/w/f.txt", "hello")
 
-    assert res.error is None
-    assert res.path == "/w/f.txt"
-    assert not info.called, "覆盖语义下 write 不应做存在性预检"
-    assert upload.called
+    assert res.error is not None and "already exists" in res.error
+    assert info.called
+    assert not upload.called, "已存在时不应上传（工具链的 upload 会截断）"
+
+
+@respx.mock
+def test_write_new_file_creates_parents():
+    info = respx.get(f"{_TB}/files/info").mock(return_value=httpx.Response(404))
+    folder = respx.post(f"{_TB}/files/folder").mock(return_value=httpx.Response(200))
+    upload = respx.post(f"{_TB}/files/upload").mock(return_value=httpx.Response(200))
+
+    sb = _make_sandbox()
+    res = sb.write("/w/f.txt", "hello")
+
+    assert res.error is None and res.path == "/w/f.txt"
+    assert info.called and folder.called and upload.called
 
 
 @respx.mock
@@ -428,3 +452,61 @@ def test_delete_missing_returns_not_found():
     assert res.path is None
     assert res.error and "not found" in res.error.lower()
     assert not dele.called
+
+
+# ------------------------------------------------------------------ #
+# Egress policy                                                       #
+# ------------------------------------------------------------------ #
+# deepagents has no egress concept, so these are ours: an operator or an
+# agent author narrowing one run below the deployment default.
+
+
+@respx.mock
+def test_get_egress_returns_policy():
+    respx.get(f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/egress").mock(
+        return_value=httpx.Response(
+            200, json={"sandbox": SB_NAME, "policy": {"allowed_domains": ["example.com"]}}
+        )
+    )
+    sb = _make_sandbox()
+    assert sb.get_egress() == {"allowed_domains": ["example.com"]}
+
+
+@respx.mock
+def test_get_egress_unconfigured_is_none():
+    respx.get(f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/egress").mock(
+        return_value=httpx.Response(200, json={"sandbox": SB_NAME, "policy": None})
+    )
+    assert _make_sandbox().get_egress() is None
+
+
+@respx.mock
+def test_set_and_clear_egress():
+    put = respx.put(f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/egress").mock(
+        return_value=httpx.Response(
+            200, json={"sandbox": SB_NAME, "policy": {"allowed_domains": ["a.example"]}}
+        )
+    )
+    delete = respx.delete(f"{BASE_URL}/api/v1/sandboxes/{SB_NAME}/egress").mock(
+        return_value=httpx.Response(200, json={"sandbox": SB_NAME, "policy": None})
+    )
+    sb = _make_sandbox()
+    assert sb.set_egress({"allowed_domains": ["a.example"]}) == {"allowed_domains": ["a.example"]}
+    assert put.called
+    sb.clear_egress()
+    assert delete.called
+
+
+@respx.mock
+def test_create_sandbox_sends_egress_only_when_given():
+    create = respx.post(f"{BASE_URL}/api/v1/sandboxes").mock(
+        return_value=httpx.Response(200, json={"name": "n", "state": "RUNNING"})
+    )
+    client = SandrPodClient(api_url=BASE_URL)
+    client.create_sandbox("n", egress={"allowed_domains": ["example.com"]})
+    assert json.loads(create.calls[-1].request.content)["network"] == {
+        "allowed_domains": ["example.com"]
+    }
+
+    client.create_sandbox("n2")
+    assert "network" not in json.loads(create.calls[-1].request.content)

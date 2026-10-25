@@ -1,5 +1,31 @@
 # langchain-sandrpod
 
+## Egress (optional, ours, not deepagents')
+
+`deepagents` knows files and a shell: `SandboxBackendProtocol` has no network
+concept, and `SandboxProvider.get_or_create(**kwargs)` rejects unknown keywords,
+so nothing upstream will call an egress API. It is exposed anyway, for the two
+people who need it:
+
+```python
+with client.sandbox("run-1", egress={"allowed_domains": ["*.pypi.org"]}) as sb:
+    sb.execute("pip install requests")          # works
+    sb.set_egress({"allowed_domains": []})      # tighten for one step
+    sb.get_egress()                             # read it back (None = unconfigured)
+    sb.clear_egress()                           # remove the policy
+```
+
+`{}` and `None` are different requests: an empty policy allows nothing, while
+clearing it returns the sandbox to "no policy configured" (for a container
+sandbox that means no egress sidecar at all). See `docs/EGRESS_POLICY.md`.
+
+## Conformance with langchain's sandbox suite
+
+`langchain_tests.integration_tests.sandboxes.SandboxIntegrationTests` can be run
+against this backend; `docs/APP_INTEGRATION.md` records the last result and what
+it means (69/86, and every failure that remains is one deepagents' own
+`LocalShellBackend` also fails).
+
 SandrPod sandbox integration for [Deep Agents](https://github.com/langchain-ai/deepagents).
 
 ## Installation

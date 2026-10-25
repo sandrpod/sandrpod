@@ -106,6 +106,32 @@ tell the model "this is a policy" and invite it to look for a way around.
 
 ---
 
+## 4a. The LangChain / deepagents backend
+
+`pkg/sdk/python/langchain_sandrpod` implements deepagents'
+`SandboxBackendProtocol` (files + a shell). Two things worth knowing:
+
+**Egress is not part of that protocol.** `SandboxBackendProtocol` has no network
+concept, and `SandboxProvider.get_or_create(**kwargs)` rejects unknown keywords,
+so upstream will never call an egress API. Ours exposes one anyway —
+`client.sandbox(..., egress={...})` and `sb.get_egress()` / `set_egress()` /
+`clear_egress()` — because the two people who need it are the operator shaping a
+deployment and the author narrowing a single run below that default. An agent
+cannot widen what it was given: the policy lives in the sandbox record and the
+server validates it.
+
+**Conformance.** langchain ships `SandboxIntegrationTests` for backend
+implementations. Run against this one: **69/86**, and — the part that matters —
+**every remaining failure is one deepagents' own `LocalShellBackend` also
+fails** (glob path shape, binary previews, async/large-payload cases). The
+interesting overlap: we pass 18 tests upstream fails (write with unicode, spaces,
+long content; edit; large stdout; `ls` of nested directories), because the
+toolbox does those natively. Three were genuinely ours and are fixed: `write`
+now creates *new* files only (the protocol says "error if file exists", and
+overwriting is what `edit` is for), `read(limit=0)` returns nothing instead of
+everything, and `upload_files` creates the parent directory the protocol makes it
+responsible for.
+
 ## 5. Three deployment profiles
 
 ### A. Local development — do nothing

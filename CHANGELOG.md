@@ -57,6 +57,19 @@ deployment can notice.
 
 ### Fixed
 
+- **The langchain backend did not follow the sandbox protocol in three places.**
+  Checked against langchain's own `SandboxIntegrationTests` (86 tests) and
+  against deepagents' `LocalShellBackend` as a control: `write` overwrote an
+  existing file where the protocol says "error if file exists" (and `edit` is the
+  path for changing one); `read(limit=0)` returned the whole file instead of
+  nothing; and `upload_files` did not create the parent directory, which the
+  protocol makes it responsible for — that single omission accounted for seven
+  failing conformance cases. 69/86 pass now, and every remaining failure is one
+  deepagents' own backend fails too, with 18 the other way (we pass where it
+  does not).
+
+### Fixed
+
 A review of everything borrowed from sandbox-runtime found and fixed these.
 Each one has a regression test; the two marked “playground” were found by
 running the assembled product.

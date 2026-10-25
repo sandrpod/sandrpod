@@ -42,6 +42,10 @@ import re
 
 import httpx
 
+#: BaseSandbox's cap on a base64 preview; kept in sync with upstream when it is
+#: importable, and pinned to the same value otherwise.
+MAX_BINARY_BYTES = 500 * 1024
+
 try:
     from deepagents.backends.protocol import (
         EditResult,
@@ -58,6 +62,7 @@ try:
         WriteResult,
     )
     from deepagents.backends.sandbox import BaseSandbox
+
 except ImportError as exc:
     raise ImportError(
         "langchain-sandrpod requires the deepagents package.\n"
@@ -529,6 +534,10 @@ class SandrPodSandbox(BaseSandbox):
             return FileDownloadResponse(
                 path=path, content=None, error="file_not_found",
             )
+        if not resp.is_success and "is a directory" in resp.text.lower():
+            return FileDownloadResponse(
+                path=path, content=None, error="is_directory",
+            )
         if resp.is_success:
             return FileDownloadResponse(
                 path=path, content=resp.content, error=None,
@@ -561,6 +570,15 @@ class SandrPodSandbox(BaseSandbox):
             dir_path, filename = _split_dir_basename(path)
             if not filename:
                 results.append(FileUploadResponse(path=path, error="invalid_path"))
+                continue
+
+            # The protocol makes upload responsible for the parent path: a
+            # caller uploading into a directory that does not exist yet is
+            # normal, and the toolbox's upload endpoint refuses it.
+            if dir_path and self._mkdir_p(dir_path) is not None:
+                results.append(
+                    FileUploadResponse(path=path, error="permission_denied")
+                )
                 continue
 
             try:
@@ -666,6 +684,14 @@ class SandrPodSandbox(BaseSandbox):
         try:
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
+            if len(raw) > MAX_BINARY_BYTES:
+                # Same cap and message as BaseSandbox: base64 of a large binary
+                # is both useless to a model and enough to blow a transport.
+                return ReadResult(
+                    error=f"Binary file exceeds maximum preview size of "
+                    f"{MAX_BINARY_BYTES} bytes ({len(raw)} bytes). "
+                    f"Use download_files() to retrieve it."
+                )
             return ReadResult(
                 file_data=FileData(
                     content=base64.b64encode(raw).decode("ascii"),
@@ -677,10 +703,12 @@ class SandrPodSandbox(BaseSandbox):
         lines = text.splitlines(keepends=True)
         total = len(lines)
         offset = max(int(offset), 0)
-        if limit is None or limit <= 0:
+        if limit is None:
+            # Unlimited is expressed by omitting the limit; an explicit 0 means
+            # zero lines, which the standard suite checks.
             page = lines[offset:]
         else:
-            page = lines[offset : offset + int(limit)]
+            page = lines[offset : offset + max(int(limit), 0)]
         content = "".join(page)
 
         # 单次输出上限保护
@@ -699,22 +727,26 @@ class SandrPodSandbox(BaseSandbox):
         file_path: str,
         content: str,
     ) -> WriteResult:
-        """Create or **overwrite** a file — the deepagents write contract: create if absent, overwrite if present.
+        """Create a **new** file; an existing path is an error.
 
-        Three steps:
-          1. validate the path shape
-          2. create parent directories with ``POST /files/folder`` (mkdir -p
-             semantics, idempotent)
-          3. write the contents with ``POST /files/upload``
+        The protocol is explicit — "write content to a new file in the
+        filesystem, error if file exists" — and both the reference backends and
+        langchain's sandbox conformance suite enforce it. Overwriting is what
+        :meth:`edit` is for, and conflating the two is how an agent silently
+        destroys a file it meant to modify.
 
-        History: early deepagents made write fail on an existing file; the
-        contract later became overwrite. The sandbox's ``/files/upload``
-        already opens with ``O_CREATE|O_TRUNC``, so dropping the existence
-        pre-check yields overwrite semantics — safe for both the old and new
-        deepagents, and the less surprising behaviour.
+        Steps: validate the path, create parent directories (mkdir -p), then
+        upload. The existence check is a stat before the upload, because the
+        toolbox's upload truncates.
         """
         if not _is_valid_path(file_path):
             return WriteResult(error=f"Invalid path: {file_path}")
+
+        if self._file_exists(file_path):
+            return WriteResult(
+                error=f"Cannot write to {file_path} because it already exists. "
+                f"Read and then make an edit, or write to a new path."
+            )
 
         # 确保父目录存在（MkdirAll 幂等，父目录已在则不动）
         parent, _ = _split_dir_basename(file_path)
@@ -953,6 +985,41 @@ class SandrPodSandbox(BaseSandbox):
             {"path": fp} for fp in (data.get("files") or [])
         ]
         return GlobResult(matches=matches)
+
+    # ------------------------------------------------------------------
+    # Egress policy
+    # ------------------------------------------------------------------
+    #
+    # deepagents has no notion of egress: `SandboxBackendProtocol` is files plus
+    # a shell, and `SandboxProvider.get_or_create(**kwargs)` explicitly rejects
+    # unknown keywords, so nothing upstream will ever call these. They exist for
+    # the two humans in the loop — the operator who shapes the deployment, and
+    # the agent author who wants a single run to be narrower than the
+    # deployment's default. An agent cannot widen what it was given: the server
+    # validates, and the policy belongs to the sandbox record.
+
+    def get_egress(self) -> dict[str, Any]:
+        """The sandbox's egress policy (``None`` when unconfigured)."""
+        resp = self._http.get(f"/api/v1/sandboxes/{self._sandbox_name}/egress")
+        resp.raise_for_status()
+        return resp.json().get("policy")
+
+    def set_egress(self, policy: dict[str, Any]) -> dict[str, Any]:
+        """Replace the egress policy. Applies to the next connection.
+
+        `{}` is a policy that allows nothing; use :meth:`clear_egress` to go
+        back to "unconfigured".
+        """
+        resp = self._http.put(
+            f"/api/v1/sandboxes/{self._sandbox_name}/egress", json=policy
+        )
+        resp.raise_for_status()
+        return resp.json().get("policy")
+
+    def clear_egress(self) -> None:
+        """Remove the policy (not the same as setting an empty one)."""
+        resp = self._http.delete(f"/api/v1/sandboxes/{self._sandbox_name}/egress")
+        resp.raise_for_status()
 
     # ------------------------------------------------------------------
     # Per-sandbox resource stats (toolbox /metrics)
