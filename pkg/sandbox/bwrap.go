@@ -136,9 +136,17 @@ func BuildBwrapArgs(policy Policy) ([]string, error) {
 		"--new-session",
 		// Drop every capability. When the agent runs as root (a system service
 		// is the natural deployment) bwrap does not create a user namespace, so
-		// without this the sandbox holds real root and `umount` would lift every
-		// mask above. It is a no-op for an unprivileged agent.
+		// without this the sandbox holds real root and a single `umount` would
+		// lift every mask above. It is a no-op for an unprivileged agent.
 		"--cap-drop", "ALL",
+	}
+	if os.Geteuid() == 0 {
+		// ...but a root agent also has to work on a tree it does not own (the
+		// user's home), which is what these two caps are for. They are the
+		// narrowest pair that does the job: DAC_OVERRIDE to open files whose
+		// mode denies root, READ_SEARCH to traverse the directories above
+		// them. CAP_SYS_ADMIN, the one that would undo the mounts, stays gone.
+		args = append(args, "--cap-add", "CAP_DAC_OVERRIDE", "--cap-add", "CAP_DAC_READ_SEARCH")
 	}
 	if policy.NetworkNone {
 		if !policy.Relay.Complete() {

@@ -51,6 +51,12 @@ the natural deployment): bubblewrap only creates a user namespace for an
 unprivileged caller, so without it the sandbox would hold real root and a single
 `umount` would lift every mask above. It is a no-op for an unprivileged agent.
 
+A root agent adds two capabilities back, `CAP_DAC_OVERRIDE` and
+`CAP_DAC_READ_SEARCH`, because it is usually serving a tree owned by the person
+at the machine: without them a command in the sandbox gets EACCES on the user's
+own work directory. They are the narrowest pair that reads those files; the one
+that would undo the mounts, `CAP_SYS_ADMIN`, stays dropped.
+
 On macOS it is a generated Seatbelt profile under `sandbox-exec`, with the same
 shape: `(deny default)`, `(allow file-read*)` then `(deny file-read* …)` for the
 hardlocks (later rules win in SBPL), and `(allow file-write* …)` for the work
