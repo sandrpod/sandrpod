@@ -185,6 +185,7 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 - `POST /api/v1/sandboxes/execute` - Execute code (proxied to worker via tunnel)
 - `GET /api/v1/sandboxes/stream` - Stream execution output
 - `GET /api/v1/sandboxes/{name}/toolbox/*` - Proxy to Toolbox (files upload/download etc.)
+- `GET /api/v1/capabilities` - What this control plane can do (`egress_policy`, `egress_decider`, ...). The agent probes it before starting `-egress-mode=server|decider` and exits with a clear message when the server predates the endpoints, instead of running deny-all and looking like an outage
 - `GET /api/v1/sandboxes/{name}/egress` - Egress policy of a sandbox (`{"sandbox":…,"policy":{…}|null}`); the agent in `-egress-mode=server` polls this
 - `POST /api/v1/policy/decide` - Per-connection verdict (`{"sandbox","host","port"}` → `{"allow","code","rule","reason"}`); `-egress-mode=decider` calls it for every destination. Answers 200 with a denial in-band: an HTTP error would surface as "decider unavailable", which is a different fact
 - `PUT /api/v1/sandboxes/{name}/egress` - Replace the policy (validated; applies to the sandbox's next connection)

@@ -84,6 +84,16 @@ func (p *PoderInfo) HasCapability(name string) bool {
 // starts containers with no route policy at all.
 const CapabilityEgress = "egress"
 
+// Control-plane capabilities, advertised by GET /api/v1/capabilities. They are
+// separate names from the worker's because they describe different halves of
+// the same feature (the rules the server stores, the decisions it makes).
+const (
+	// CapabilityEgressPolicy is GET/PUT/DELETE /api/v1/sandboxes/{name}/egress.
+	CapabilityEgressPolicy = "egress_policy"
+	// CapabilityEgressDecider is POST /api/v1/policy/decide.
+	CapabilityEgressDecider = "egress_decider"
+)
+
 // HeartbeatRequest carries usage stats sent by a Poder node on each heartbeat.
 // ContainerNames is the authoritative list of sandbox container names currently
 // running on this Poder; the Server uses it to reconcile RUNNING sandbox states.

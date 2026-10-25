@@ -135,6 +135,27 @@ Two storage-level notes, because they are the parts that surprise people:
   carrying bytes until it closes. For "stop everything now", delete the
   sandbox — that closes the tunnel and the container with it.
 
+### 2.2a The agent refuses a server it cannot rely on
+
+`-egress-mode=server` and `decider` need endpoints an older control plane does
+not have. Rather than start with deny-all and look like a network outage, the
+agent asks first:
+
+```
+GET /api/v1/capabilities -> {"capabilities":["egress_policy","egress_decider"], "version":"..."}
+```
+
+Against a server without that route the agent exits:
+
+```
+egress policy setup failed: egress: the control plane at http://... has no
+/api/v1/capabilities - it predates "egress_policy". Upgrade the server first,
+or run this agent with -egress-mode=enforce and a local policy
+```
+
+A 404 is the signal precisely because it is unambiguous: an absent route cannot
+mean "the sandbox is not registered yet" the way a missing record can.
+
 ### 2.3a Which worker runs a walled sandbox
 
 A worker advertises what it can enforce when it connects

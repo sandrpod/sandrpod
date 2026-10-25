@@ -170,6 +170,10 @@ for want in \
 	contains "startup reports: $want" "$want" "$AGENT_LOG"
 done
 contains "startup masks ~/.ssh" "masked ~/.ssh" "$AGENT_LOG"
+# The agent's server/decider modes only start against a control plane that
+# advertises them; the route is what it probes.
+contains "the control plane advertises egress_decider" "egress_decider" \
+	"$(curl -s "$API/api/v1/capabilities")"
 
 # ── 4. run code in the sandbox ──────────────────────────────────────────────
 run_code() { # run_code <code> -> prints stdout, then stderr on failure

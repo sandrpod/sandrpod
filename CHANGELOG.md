@@ -47,6 +47,19 @@ deployment can notice.
 
 ### Added
 
+- **The control plane states its capabilities, and the agent refuses a server it
+  cannot rely on** (`GET /api/v1/capabilities` -> `egress_policy`,
+  `egress_decider`). `-egress-mode=server|decider` probe it at startup: an older
+  server has no such route, and the agent now exits with
+  `the control plane at ... has no /api/v1/capabilities - it predates "egress_policy"...`
+  instead of starting deny-all and making every connection in the sandbox fail as
+  if the network were down. A 404 is the honest signal here: an absent route
+  cannot mean "not registered yet" the way a missing record can. Verified against
+  a server without the route and against a current one, where both modes start
+  and register.
+
+### Added
+
 - **The TypeScript SDK can manage egress**: `createSandbox(..., { network })` and
   `getEgress`/`setEgress`/`clearEgress`, mirroring the Python client. Verified
   against a live server from Node (create with a policy, read it back, replace,

@@ -40,6 +40,7 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/permission"
 	"github.com/sandrpod/sandrpod/pkg/relay"
 	"github.com/sandrpod/sandrpod/pkg/sandbox"
+	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/toolbox"
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
@@ -500,6 +501,9 @@ func installEgress() error {
 		// Per-connection decisions from the control plane. The agent holds no
 		// policy of its own: the proxy asks, the server answers, and a tightened
 		// rule applies to the next connection instead of the next poll.
+		if err := requireControlPlaneCapability(podpkg.CapabilityEgressDecider); err != nil {
+			return err
+		}
 		empty, err := egress.Parse(egress.Policy{})
 		if err != nil {
 			return err
@@ -514,6 +518,9 @@ func installEgress() error {
 	case "server":
 		// Policy from the control plane, refreshed in the background.
 		//
+		if err := requireControlPlaneCapability(podpkg.CapabilityEgressPolicy); err != nil {
+			return err
+		}
 		// It starts with an EMPTY policy — deny all — and only widens once a
 		// policy actually arrives. That ordering is the point: the sandbox is
 		// reachable through the tunnel from the moment the agent registers,
@@ -946,6 +953,53 @@ func splitList(s string) []string {
 		}
 	}
 	return out
+}
+
+// requireControlPlaneCapability refuses to start a mode the server cannot
+// serve. Without it the failure mode is silent and expensive to diagnose: an
+// old server answers 404 to the policy endpoint, the agent treats that as
+// "not registered yet", keeps deny-all, and every connection in the sandbox
+// fails as if the network were down.
+func requireControlPlaneCapability(need string) error {
+	base := strings.TrimRight(*apiURL, "/")
+	if base == "" {
+		return fmt.Errorf("egress: -api-url is required for this mode")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/api/v1/capabilities", nil)
+	if err != nil {
+		return err
+	}
+	if *token != "" {
+		req.Header.Set("Authorization", "Bearer "+*token)
+	}
+	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+	if err != nil {
+		return fmt.Errorf("egress: cannot ask the control plane what it supports: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return fmt.Errorf("egress: the control plane at %s has no /api/v1/capabilities — it predates "+
+			"%q. Upgrade the server first, or run this agent with -egress-mode=enforce and a local policy",
+			base, need)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("egress: control plane answered %s to the capability probe", resp.Status)
+	}
+	var out struct {
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out); err != nil {
+		return fmt.Errorf("egress: cannot read the control plane's capabilities: %w", err)
+	}
+	for _, c := range out.Capabilities {
+		if c == need {
+			return nil
+		}
+	}
+	return fmt.Errorf("egress: the control plane does not advertise %q (it offers %v) — "+
+		"upgrade the server, or use -egress-mode=enforce", need, out.Capabilities)
 }
 
 // netnsWanted reports whether this run should put sandboxed processes in their

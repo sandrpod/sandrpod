@@ -146,9 +146,19 @@ func TestInstallEgress_InjectsProxyAndEnforces(t *testing.T) {
 
 // ─── control-plane policy (mode=server) ─────────────────────────────────────
 
+// withControlPlane points the agent at a fake control plane. The capability
+// route is answered for it — a real server has it, and the agent refuses to
+// start in server/decider mode without it (see
+// TestRequireControlPlaneCapability for the refusals).
 func withControlPlane(t *testing.T, handler http.HandlerFunc) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(handler)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/capabilities" {
+			_, _ = io.WriteString(w, `{"capabilities":["egress_policy","egress_decider"]}`)
+			return
+		}
+		handler(w, r)
+	}))
 	t.Cleanup(srv.Close)
 	oldURL, oldToken, oldName := *apiURL, *token, *name
 	*apiURL, *token, *name = srv.URL, "test-token", "sb-egress"
@@ -608,4 +618,66 @@ func withCredentialFlags(t *testing.T, names, files string, plaintext bool) {
 	oldNames, oldFiles, oldPlain := *credentialMask, *credentialMaskFiles, *credentialPlaintext
 	*credentialMask, *credentialMaskFiles, *credentialPlaintext = names, files, plaintext
 	t.Cleanup(func() { *credentialMask, *credentialMaskFiles, *credentialPlaintext = oldNames, oldFiles, oldPlain })
+}
+
+// ─── control-plane capability probe ────────────────────────────────────────
+
+func TestRequireControlPlaneCapability(t *testing.T) {
+	cases := []struct {
+		name    string
+		handler http.HandlerFunc
+		wantErr string
+	}{
+		{
+			name: "advertised",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, `{"capabilities":["egress_policy","egress_decider"]}`)
+			},
+		},
+		{
+			name: "server predates the endpoint",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				http.NotFound(w, r)
+			},
+			wantErr: "predates",
+		},
+		{
+			name: "endpoint exists, capability does not",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, `{"capabilities":["egress_policy"]}`)
+			},
+			wantErr: "does not advertise",
+		},
+		{
+			name: "insufficient privileges is not a silent pass",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+			},
+			wantErr: "answered 403",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(tc.handler)
+			defer srv.Close()
+			oldURL, oldToken := *apiURL, *token
+			*apiURL, *token = srv.URL, "t"
+			t.Cleanup(func() { *apiURL, *token = oldURL, oldToken })
+
+			err := requireControlPlaneCapability("egress_decider")
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected a refusal")
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("error %q does not mention %q", err, tc.wantErr)
+			}
+		})
+	}
 }

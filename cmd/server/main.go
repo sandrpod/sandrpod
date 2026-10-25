@@ -768,6 +768,27 @@ func buildMux(cfg serverConfig, stores podpkg.Stores, tunnelStore, directStore *
 	}))
 
 	// === Sandbox API ===
+	// GET /api/v1/capabilities — what this control plane can do, so a client can
+	// refuse to start in a mode the server cannot serve instead of discovering
+	// it per request. 404 on an older server is the signal, which is why the
+	// endpoint exists at all: an absent route is unambiguous.
+	mux.HandleFunc("/api/v1/capabilities", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"version": version,
+			// Capability names are stable identifiers: a client asks for the
+			// one it needs and fails loudly when it is not there.
+			"capabilities": []string{
+				podpkg.CapabilityEgressPolicy,  // GET/PUT/DELETE /sandboxes/{name}/egress
+				podpkg.CapabilityEgressDecider, // POST /policy/decide
+			},
+		})
+	}))
+
 	mux.HandleFunc("/api/v1/sandboxes", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		ident := identityFrom(r)
 		switch r.Method {
