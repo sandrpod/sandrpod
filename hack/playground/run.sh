@@ -380,16 +380,31 @@ fi
 log "legacy: the two refusals that guard a mixed-version fleet"
 
 LEGACY_PORT=$((PORT + 1))
-if ! "$WORK/server" -port "$LEGACY_PORT" -db "sqlite:$WORK/legacy.db" -emulate-legacy \
-	>"$WORK/legacy-server.log" 2>&1 & then
-	info "skipping the legacy phase: the server did not start"
-else
-	LEGACY_PID=$!
-	for _ in $(seq 1 40); do
-		curl -s -o /dev/null "http://127.0.0.1:$LEGACY_PORT/api/v1/sandboxes" && break
-		sleep 0.5
-	done
+LEGACY_PID=""
+legacy_cleanup() {
+	[ -n "$LEGACY_PID" ] && kill "$LEGACY_PID" >/dev/null 2>&1
+	docker rm -f sandrpod-pg-legacy-poder >/dev/null 2>&1
+}
+legacy_skip() {
+	info "skipping the legacy phase: $1"
+	legacy_cleanup
+}
 
+"$WORK/server" -port "$LEGACY_PORT" -db "sqlite:$WORK/legacy.db" -emulate-legacy \
+	>"$WORK/legacy-server.log" 2>&1 &
+LEGACY_PID=$!
+LEGACY_READY=0
+for _ in $(seq 1 40); do
+	if curl -s -o /dev/null "http://127.0.0.1:$LEGACY_PORT/api/v1/sandboxes"; then
+		LEGACY_READY=1
+		break
+	fi
+	sleep 0.5
+done
+
+if [ "$LEGACY_READY" = "0" ]; then
+	legacy_skip "the legacy server did not come up ($(tail -2 "$WORK/legacy-server.log" | tr '\n' ' '))"
+else
 	# 1. The agent refuses a control plane it cannot rely on.
 	LEGACY_AGENT=$("$WORK/agent-host" -api-url "http://127.0.0.1:$LEGACY_PORT" \
 		-name legacy-probe -egress-mode=server \
@@ -399,15 +414,13 @@ else
 		"predates" "$LEGACY_AGENT"
 
 	# 2. The control plane refuses a policy on a worker that advertises nothing.
-	if ! docker run -d --name sandrpod-pg-legacy-poder \
+	if docker run -d --name sandrpod-pg-legacy-poder \
 		-v /var/run/docker.sock:/var/run/docker.sock \
 		-v "$WORK:/pg" \
 		-e SANDRPOD_TOOLBOX_IMAGE="$TOOLBOX_IMAGE" \
 		--add-host=host.docker.internal:host-gateway \
 		"$IMAGE" /pg/poder -api-url="http://host.docker.internal:$LEGACY_PORT" -region=local \
 		-emulate-legacy >/dev/null 2>&1; then
-		info "skipping the worker half of the legacy phase: the container did not start"
-	else
 		for _ in $(seq 1 30); do
 			curl -s "http://127.0.0.1:$LEGACY_PORT/api/v1/poders" | grep -q '"state":"ONLINE"' && break
 			sleep 1
@@ -415,8 +428,7 @@ else
 		LEGACY_CODE=$(curl -s -o "$WORK/legacy-create.json" -w '%{http_code}' \
 			-X POST "http://127.0.0.1:$LEGACY_PORT/api/v1/sandboxes" \
 			-H 'Content-Type: application/json' \
-			-d '{"name":"legacy-walled","region":"local","provider_type":"local",
-			     "network":{"allowed_domains":["example.com"]}}')
+			-d '{"name":"legacy-walled","region":"local","provider_type":"local","network":{"allowed_domains":["example.com"]}}')
 		check "a policy on a legacy worker is refused with 409" "409" "$LEGACY_CODE"
 		contains "…and the message names the capability" "worker capability unavailable" \
 			"$(cat "$WORK/legacy-create.json")"
@@ -426,10 +438,11 @@ else
 			-H 'Content-Type: application/json' \
 			-d '{"name":"legacy-plain","region":"local","provider_type":"local"}')
 		check "a sandbox without a policy still runs on a legacy worker" "201" "$PLAIN_CODE"
-		docker rm -f sandrpod-pg-legacy-poder >/dev/null 2>&1
+	else
+		info "skipping the worker half of the legacy phase: the container did not start"
 	fi
 
-	kill "$LEGACY_PID" >/dev/null 2>&1
+	legacy_cleanup
 fi
 
 log "result"
