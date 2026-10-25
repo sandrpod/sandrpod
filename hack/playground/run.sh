@@ -241,15 +241,23 @@ CLEAR_OUT=$(run_code 'curl -s -D - -o /dev/null http://example.com/ -H "Authoriz
 contains "a masked credential is refused over HTTP" "masked_credential_cleartext" "$CLEAR_OUT"
 
 log "audit: which secret went where"
-AUDIT_OUT=$(python3 - "$WORK" <<'PY'
-import json, sys, glob
-for path in glob.glob(sys.argv[1] + "/audit/*.log"):
-    for line in open(path):
+# Read it from inside the container: on Linux the file is written by root and
+# is 0600, so the host-side runner cannot open it (and a glob over an
+# unreadable directory fails silently — which is how this check passed on
+# macOS and failed on CI).
+AUDIT_OUT=$(docker exec "$AGENT" sh -c 'cat /pg/audit/*.log' 2>/dev/null | python3 -c '
+import json, sys
+for line in sys.stdin:
+    line = line.strip()
+    if not line:
+        continue
+    try:
         d = json.loads(line)
-        if d.get("source") == "egress" and d.get("terminated"):
-            print("terminated=yes credentials=%s host=%s" % (d.get("credentials"), d.get("host")))
-PY
-)
+    except json.JSONDecodeError:
+        continue
+    if d.get("source") == "egress" and d.get("terminated"):
+        print("terminated=yes credentials=%s host=%s" % (d.get("credentials"), d.get("host")))
+')
 printf '%s\n' "$AUDIT_OUT"
 contains "the termination is recorded with the credential name" "credentials=['OPENAI_API_KEY']" "$AUDIT_OUT"
 
