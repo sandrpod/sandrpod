@@ -1128,6 +1128,19 @@ func installOSSandbox(tb *toolbox.Server) error {
 		}
 	}
 	toolbox.SetSandbox(w, policy)
+	// From here the file-side policy is rebuilt per spawn: a .git created
+	// inside the sandbox, a hardlock added or unlocked at runtime, or a rotated
+	// credentials file must reach the kernel and not only the gate. The static
+	// parts — the relay, the network namespace, the macOS narrowing — are
+	// carried over from `policy`, because they are decided once at startup.
+	toolbox.SetSandboxPolicyFunc(func() sandbox.Policy {
+		p := policy
+		fresh := sandboxPolicyFor(tb.Executor().GetWorkDirForPermission(), *mandatoryDenyDepth)
+		p.ReadDeny = fresh.ReadDeny
+		p.WriteDeny = fresh.WriteDeny
+		p.ReadSubstitute = fresh.ReadSubstitute
+		return p
+	})
 
 	log.Printf("os sandbox: %s active — work_dir=%s writable, %d hard-locked path(s) masked, %d persistence path(s) read-only",
 		w.Name(), workDir, len(policy.ReadDeny), len(policy.WriteDeny))

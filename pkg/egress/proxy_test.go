@@ -379,8 +379,17 @@ func TestProxyEnv_Shape(t *testing.T) {
 			t.Errorf("ProxyEnv missing %q:\n%s", want, env)
 		}
 	}
-	if strings.Contains(env, "NO_PROXY") {
-		t.Error("NO_PROXY must not be set: it is a bypass list")
+	// NO_PROXY is a bypass list: it must be present but empty, so that a value
+	// inherited from the agent's environment is replaced rather than passed on.
+	lines := strings.Split(env, "\n")
+	emptied := map[string]bool{}
+	for _, l := range lines {
+		if l == "NO_PROXY=" || l == "no_proxy=" {
+			emptied[l] = true
+		}
+	}
+	if !emptied["NO_PROXY="] || !emptied["no_proxy="] {
+		t.Errorf("NO_PROXY must be set empty, not inherited:\n%s", env)
 	}
 	if !strings.Contains(s.ProxyURL(), "127.0.0.1:") {
 		t.Errorf("proxy must bind loopback, got %q", s.ProxyURL())

@@ -128,6 +128,9 @@ const (
 	// credential over plain HTTP. Substituting there would expose the real
 	// value to the network, and forwarding it would send a bogus credential.
 	CodeMaskedPlaintext = "masked_credential_cleartext"
+	// CodeAuthRequired is a missing or wrong proxy token. It is a refusal like
+	// any other and is counted and audited as one.
+	CodeAuthRequired = "proxy_auth_required"
 )
 
 // Parse validates and compiles a policy. It returns an error rather than a
@@ -346,7 +349,9 @@ func compileRule(raw string) (Rule, error) {
 		if len(host) <= 3 {
 			return Rule{}, fmt.Errorf("%q: wildcard needs a domain after it", raw)
 		}
-		r.Host = host[1:]
+		// canonicalHost strips a trailing dot; a rule stored as
+		// "*.example.com." could never match "a.example.com".
+		r.Host = "." + canonicalHost(strings.TrimPrefix(host[1:], "."))
 		r.Wildcard = true
 		return r, nil
 	}
@@ -361,7 +366,9 @@ func compileRule(raw string) (Rule, error) {
 	if err := validateHostname(host); err != nil {
 		return Rule{}, fmt.Errorf("%q: %w", raw, err)
 	}
-	r.Host = host
+	// Same canonical form the request side uses, so "example.com." in a policy
+	// is not a silently dead entry.
+	r.Host = canonicalHost(host)
 	return r, nil
 }
 

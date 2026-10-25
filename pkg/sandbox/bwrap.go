@@ -50,7 +50,14 @@ func (b *Bwrap) Available() error {
 	// A sandbox that cannot start is worse than none: probe with the cheapest
 	// possible invocation. This catches a kernel without unprivileged user
 	// namespaces, and a bwrap that is not setuid where it needs to be.
-	probe := exec.Command(path, "--ro-bind", "/", "/", "--unshare-pid", "--", "/bin/true")
+	// Probe with the real plan shape, not a minimal one: the flags that can
+	// make bwrap exit (a mount point it cannot create, a symlink destination,
+	// a capability it lacks) only fail for the plan that is actually used.
+	probeArgs, err := BuildBwrapArgs(Policy{WorkDir: os.TempDir()})
+	if err != nil {
+		return fmt.Errorf("cannot render a sandbox plan: %w", err)
+	}
+	probe := exec.Command(path, append(probeArgs, "--", "/bin/true")...)
 	if out, err := probe.CombinedOutput(); err != nil {
 		return fmt.Errorf("bubblewrap cannot start here (%v): %s", err, strings.TrimSpace(string(out)))
 	}
@@ -90,12 +97,24 @@ func (b *Bwrap) Command(policy Policy, path string, args []string) (string, []st
 	// Next to the relay binary, which sits on the writable tmpfs /run — the
 	// socket directory is mounted read-only and would refuse the file.
 	ready := strings.TrimSuffix(filepath.Dir(r.BinaryInSandbox), "/") + "/relay.ready"
+	relayLog := strings.TrimSuffix(filepath.Dir(r.BinaryInSandbox), "/") + "/relay.log"
+	socketIn := strings.TrimSuffix(r.SocketDirInSandbox, "/") + "/" + r.SocketName
+	// shq quotes a value for /bin/sh. The relay's fields are constants today,
+	// but the plan is exported and a quote in one of them would otherwise end
+	// the argument and start a command.
+	q := func(v string) string { return "'" + strings.ReplaceAll(v, "'", `'\''`) + "'" }
+	// The relay's own output goes to a file, not to the command's stderr: a
+	// "relay: dial …: connection refused" line appearing in a Python program's
+	// stderr is a support ticket. If the relay never becomes ready, or died,
+	// the command is not run at all — running it without a proxy would produce
+	// failures indistinguishable from a policy denial.
 	script := fmt.Sprintf(
-		`"%s" relay --listen %s --unix "%s" --ready "%s" & `+
-			`i=0; while [ ! -e "%s" ]; do i=$((i+1)); [ $i -gt 500 ] && break; sleep 0.01; done; exec "$@"`,
-		r.BinaryInSandbox, r.Listen,
-		strings.TrimSuffix(r.SocketDirInSandbox, "/")+"/"+r.SocketName,
-		ready, ready)
+		`%s relay --listen %s --unix %s --ready %s >%s 2>&1 & relay_pid=$!; `+
+			`i=0; while [ ! -e %s ]; do i=$((i+1)); [ $i -gt 500 ] && break; sleep 0.01; done; `+
+			`if [ ! -e %s ] || ! kill -0 "$relay_pid" 2>/dev/null; then `+
+			`echo "sandrpod: the egress relay did not start (see %s)" >&2; exit 125; fi; exec "$@"`,
+		q(r.BinaryInSandbox), q(r.Listen), q(socketIn), q(ready), q(relayLog),
+		q(ready), q(ready), relayLog)
 	full := append(bwrapArgs, "--", "/bin/sh", "-c", script, "sh", path)
 	full = append(full, args...)
 	return b.binary(), full, nil
@@ -110,7 +129,16 @@ func BuildBwrapArgs(policy Policy) ([]string, error) {
 		"--proc", "/proc",
 		"--die-with-parent",
 		"--unshare-pid",
+		// IPC and UTS are cheap and close two shared channels: SysV shared
+		// memory / message queues, and the host's hostname.
+		"--unshare-ipc",
+		"--unshare-uts",
 		"--new-session",
+		// Drop every capability. When the agent runs as root (a system service
+		// is the natural deployment) bwrap does not create a user namespace, so
+		// without this the sandbox holds real root and `umount` would lift every
+		// mask above. It is a no-op for an unprivileged agent.
+		"--cap-drop", "ALL",
 	}
 	if policy.NetworkNone {
 		if !policy.Relay.Complete() {
@@ -147,19 +175,6 @@ func BuildBwrapArgs(policy Policy) ([]string, error) {
 		args = append(args, "--bind", dir, dir)
 	}
 
-	// Masked files: the fake is bound read-only over the real path, so the
-	// sandbox reads sentinels and the real bytes are not in its namespace.
-	// Mounted after the writable binds, which is what makes it win.
-	for _, m := range policy.ReadSubstitute {
-		if _, err := os.Stat(m.RealPath); err != nil {
-			continue
-		}
-		if _, err := os.Stat(m.FakePath); err != nil {
-			continue
-		}
-		args = append(args, "--ro-bind", m.FakePath, m.RealPath)
-	}
-
 	// Read-only islands inside the writable tree. Applied after the writable
 	// binds above, which is what makes them win: a later mount at the same
 	// path replaces the earlier one. The source and target are the same path,
@@ -186,8 +201,57 @@ func BuildBwrapArgs(policy Policy) ([]string, error) {
 			args = append(args, "--tmpfs", p)
 			continue
 		}
-		// /dev/null reads as empty and rejects writes with ENOSPC/EACCES.
+		// /dev/null reads as empty; the mount is what makes writes fail.
 		args = append(args, "--ro-bind", "/dev/null", p)
 	}
+
+	// The proxy's socket directory is bound early (it must exist before the
+	// relay starts), which means the writable /tmp bind above re-exposes it at
+	// its host path: without this island a sandbox could unlink proxy.sock and
+	// kill its own egress. Re-bound read-only here, after the writable binds.
+	if policy.Relay.Complete() {
+		args = append(args, "--ro-bind", policy.Relay.SocketDir, policy.Relay.SocketDir)
+	}
+
+	// Masked files go last: a hardlock directory that contains one of them
+	// (the default seeds include ~/.aws, and the documented example masks
+	// ~/.aws/credentials) would otherwise be tmpfs'd over the substitution and
+	// the tool would find no file at all. A sentinel file there exposes
+	// nothing, so mounting it after the mask is not a weakening.
+	for _, m := range policy.ReadSubstitute {
+		real, ok := resolveExisting(m.RealPath)
+		if !ok {
+			continue
+		}
+		fake, ok := resolveExisting(m.FakePath)
+		if !ok {
+			// Fail closed. Skipping the substitution would leave the real
+			// credential readable inside the sandbox, which is exactly the
+			// thing the operator asked to prevent.
+			return nil, fmt.Errorf("masked file %s has no sentinel copy (%s); refusing to start a sandbox that would expose it",
+				m.RealPath, m.FakePath)
+		}
+		args = append(args, "--ro-bind", fake, real)
+	}
 	return args, nil
+}
+
+// resolveExisting resolves a path the way the mount plan needs it: absolute,
+// symlink-free, and existing. Symlinks matter because bwrap refuses to mount on
+// a symlink destination.
+func resolveExisting(p string) (string, bool) {
+	if p == "" {
+		return "", false
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", false
+	}
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return "", false
+	}
+	return abs, true
 }

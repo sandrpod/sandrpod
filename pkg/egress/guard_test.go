@@ -168,7 +168,10 @@ func TestVet_UnresolvableNameIsNotAPolicyDenial(t *testing.T) {
 
 func firstNonLoopbackInterfaceAddr(t *testing.T) string {
 	t.Helper()
-	addrs := currentInterfaceAddrs()
+	addrs, err := currentInterfaceAddrs()
+	if err != nil {
+		return ""
+	}
 	for ip := range addrs {
 		if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsMulticast() || ip.IsUnspecified() {
 			continue

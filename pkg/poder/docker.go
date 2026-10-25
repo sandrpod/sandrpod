@@ -177,6 +177,16 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 		retErr = fmt.Errorf("failed to create container: %w", err)
 		return nil, retErr
 	}
+	// From here on a failure must not leave a container behind: it is attached
+	// to the per-pod network, so leaving it would also make that network
+	// impossible to remove, and the next CreatePod with the same name would
+	// fail on a name collision. Registered after the egress teardown so it
+	// runs first (defers are LIFO) and the network can actually go away.
+	defer func() {
+		if retErr != nil {
+			_ = p.dockerClient.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+		}
+	}()
 
 	// Start the container
 	if err := p.dockerClient.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {

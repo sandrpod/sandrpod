@@ -8,6 +8,72 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Fixed
+
+A review of everything borrowed from sandbox-runtime found and fixed these.
+Each one has a regression test; the two marked “playground” were found by
+running the assembled product.
+
+- **The interactive PTY path never went through the sandbox.**
+  `ProcManager.Start` returned from its PTY branch before `wrapSandbox`, so
+  `POST /procmgr/start` with `pty: true` ran a shell completely outside
+  bubblewrap/Seatbelt — the one path an interactive session uses.
+- **A SigV4 request was never re-signed when masking was on.** Header
+  substitution rewrote the credential scope to the real access key *before*
+  `ResignAWS` looked for the sentinel, so the lookup missed and the request went
+  upstream with a signature over a key id it did not match: every masked AWS
+  call failed with `SignatureDoesNotMatch`. Re-signing now recognises both
+  spellings, and the canonical query is built from the raw bytes the client
+  signed instead of re-encoded parsed values.
+- **The terminated path forwarded the proxy's own headers upstream**, including
+  `Proxy-Authorization`, which carries the sandbox token. Hop-by-hop headers are
+  stripped before forwarding, and the `Connection:` token list is now honoured
+  (the HTTP path deleted `Connection` before reading it, so marked headers
+  travelled anyway).
+- **A masked credentials file inside a hardlocked directory was invisible.**
+  The substitution was mounted before the hardlock masks, and the default seeds
+  hardlock `~/.aws` wholesale — so the documented `-credential-mask-files
+  ~/.aws/credentials` produced a sandbox with no credentials file at all.
+  Substitutions are mounted last, and a missing sentinel copy now refuses the
+  spawn instead of falling back to the real file.
+- **An inherited `NO_PROXY` silently disabled the proxy.** The child environment
+  is the agent's environment plus ours, so a `NO_PROXY` from the launching shell
+  survived and every proxy-aware client went direct. It is set empty now, and
+  `ALL_PROXY` is omitted entirely when the proxy listens on a unix socket.
+- **The SOCKS tunnel dropped bytes the client sent with the handshake.** The
+  handshake parser buffers up to 4 KiB; splicing the raw connection discarded
+  whatever a pipelining client had already sent. The buffered reader is now
+  re-attached, as the HTTP CONNECT path already did.
+- **A transient accept error permanently killed a listener** (SOCKS, and the
+  relay's equivalent), and the relay wrapper ran the command even when the relay
+  never started — with no proxy and no diagnostic. Both retry or fail loudly
+  now, and the relay's own log goes to a file instead of the command's stderr.
+- **`.github/config` was shaded read-only as if it were git's config** in the
+  kernel plan (a `contains ".git"` test matches `.github`), while the gate
+  allowed it: the two layers disagreed about the same path.
+- **A sandbox could unlink its own proxy socket.** The socket directory is in
+  `/tmp`, which is bound writable; the read-only bind over it now comes after
+  the writable binds, so it wins.
+- **Path lists were not symlink-resolved.** bubblewrap refuses to mount on a
+  symlink destination (dotfile-managed `~/.aws` is a symlink), and Seatbelt
+  matches resolved paths (`/var` vs `/private/var` on macOS): every plan now
+  carries resolved paths.
+- **`CreatePod` could leave an orphaned container** when a step after
+  `ContainerCreate` failed, which also blocked removal of the per-pod egress
+  network.
+- Smaller: the truncated-upstream-body case now aborts instead of delivering a
+  well-formed short response; token/argument refusals are counted and audited
+  like every other refusal (the stats used to stay at zero); the decider cache is
+  bounded; a trailing-dot allow entry (`example.com.`) matches; an interface
+  enumeration failure denies instead of allowing for 30 seconds; an out-of-range
+  CONNECT port is a 400 rather than a silent 443; the 502 body no longer carries
+  the vetted IP.
+- **The sandbox policy is rebuilt for every spawn** (`SetSandboxPolicyFunc`), so
+  a `.git` created inside the sandbox, a hardlock unlocked in the tray, or a
+  rotated credentials file reaches the kernel and not only the gate. It also
+  drops `--cap-drop ALL` and `--unshare-ipc`/`--unshare-uts` into the plan, and
+  the plan is what the probe now exercises.
+
 ### Added
 
 - **The playground as a script, and a nightly job that runs it**

@@ -73,3 +73,19 @@ func TestSandboxName(t *testing.T) {
 		t.Errorf("SandboxName = %q, want fake", got)
 	}
 }
+
+// The interactive path used to return before the wrap, so a PTY session ran
+// outside the sandbox entirely. Whatever startPTY does afterwards, the wrapper
+// must have been consulted first.
+func TestSandbox_PTYStartGoesThroughTheWrapper(t *testing.T) {
+	fw := &fakeWrapper{}
+	SetSandbox(fw, sandbox.Policy{})
+	t.Cleanup(func() { SetSandbox(nil, sandbox.Policy{}) })
+
+	m := NewProcManager()
+	// The PTY may not be available in this environment; that is not the point.
+	_, _ = m.Start(ProcStartConfig{Cmd: "/bin/true", PTY: true})
+	if len(fw.polices) == 0 {
+		t.Fatal("a PTY session started without consulting the sandbox wrapper")
+	}
+}

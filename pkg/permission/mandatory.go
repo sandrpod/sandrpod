@@ -176,12 +176,10 @@ func MandatoryDenyPaths(root string, depth int) []string {
 				return nil
 			}
 		}
-		// .git/hooks/* and .git/config: the directory itself is masked by the
-		// caller, so individual files under it do not need listing.
-		if strings.Contains(path, string(filepath.Separator)+".git"+string(filepath.Separator)+"config") ||
-			strings.Contains(path, string(filepath.Separator)+".git") && strings.EqualFold(base, "config") {
-			out = append(out, path)
-		}
+		// .git/hooks and .git/config are collected by gitDirsUnder below, which
+		// matches the .git directory itself. An inline "contains /.git" test
+		// looks equivalent and is not: it also matches .github/, which then had
+		// its config shaded as if it were git's.
 		return nil
 	})
 

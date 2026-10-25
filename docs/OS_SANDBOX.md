@@ -41,8 +41,15 @@ On Linux that is bubblewrap:
 ```
 bwrap --ro-bind / / --bind <work_dir> <work_dir> --bind /tmp /tmp
       --ro-bind /dev/null <hardlocked file> --tmpfs <hardlocked dir>
-      --dev /dev --proc /proc --die-with-parent --unshare-pid --new-session -- <cmd>
+      --dev /dev --proc /proc --die-with-parent
+      --unshare-pid --unshare-ipc --unshare-uts --new-session --cap-drop ALL
+      -- <cmd>
 ```
+
+`--cap-drop ALL` matters when the agent runs as root (a systemd system service is
+the natural deployment): bubblewrap only creates a user namespace for an
+unprivileged caller, so without it the sandbox would hold real root and a single
+`umount` would lift every mask above. It is a no-op for an unprivileged agent.
 
 On macOS it is a generated Seatbelt profile under `sandbox-exec`, with the same
 shape: `(deny default)`, `(allow file-read*)` then `(deny file-read* …)` for the
@@ -127,6 +134,15 @@ os sandbox:   masked /home/alice/.sandrpod/permissions.json
   a proof: a missing mask or an allow that is broader than intended is a hole.
   The hardlocked paths are masked explicitly rather than kept out by a rule, so
   the failure mode is visible (a path is either mounted over or it is not).
+- **Two residuals of the mount model, stated rather than implied.** The
+  write-protected paths (`.git/hooks`, `.bashrc`, …) are read-only *mounts*, so:
+  (a) a **hardlink** to one of them, created inside the writable tree, writes the
+  same inode — directories cannot be linked, so `.git/hooks` itself is safe, but
+  a protected *file* is not; (b) the list is rebuilt for every spawn, so a command
+  that creates `.git/hooks` and writes into it *in the same command* wins — the
+  protection applies from the next spawn, and a `git init` followed by a commit
+  in one shell is the case to keep in mind. Closing both needs Landlock, not
+  bind mounts.
 - **macOS semantics are unverified.** See the table above.
 
 ### 4a. The network, on Linux

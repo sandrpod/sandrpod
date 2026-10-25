@@ -150,6 +150,13 @@ func (m *ProcManager) Start(cfg ProcStartConfig) (uint32, error) {
 	}
 	mp.cond = sync.NewCond(&mp.mu)
 
+	// The sandbox wraps every spawn, PTY or not. This used to sit after the
+	// PTY branch, which returned early: an interactive /process session ran a
+	// shell completely outside the OS sandbox.
+	if err := wrapSandbox(cmd); err != nil {
+		return 0, err
+	}
+
 	if cfg.PTY {
 		// startPTY calls cmd.Start internally; output+input share the master.
 		ptmx, err := startPTY(cmd, cfg.Rows, cfg.Cols)
@@ -168,9 +175,6 @@ func (m *ProcManager) Start(cfg ProcStartConfig) (uint32, error) {
 		return mp.info.PID, nil
 	}
 
-	if err := wrapSandbox(cmd); err != nil {
-		return 0, err
-	}
 	// Own process group, so Signal can reach the whole tree. Without this,
 	// killing `sh -c "…"` leaves grandchildren alive holding the pipe write
 	// ends — the end event then stalls until they exit on their own (the PTY

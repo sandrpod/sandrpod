@@ -108,6 +108,13 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 	case policy.ProxyOnlyPort > 0:
 		b.WriteString(fmt.Sprintf("(allow network-outbound (remote ip %s))\n",
 			sbplString(fmt.Sprintf("localhost:%d", policy.ProxyOnlyPort))))
+		// DNS goes through mDNSResponder over a unix socket; without this the
+		// narrowing also breaks name resolution, and every failure looks like
+		// "the network is down".
+		b.WriteString("(allow network-outbound (remote unix-socket \"/var/run/mDNSResponder\"))\n")
+		// A local server (a dev server, a Jupyter kernel) is not egress: let it
+		// listen, since the proxy is about where traffic goes.
+		b.WriteString("(allow network-bind (local ip \"localhost:*\"))\n")
 	default:
 		b.WriteString("(allow network-outbound)\n")
 	}
@@ -137,17 +144,22 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 	if len(rules) > 0 {
 		b.WriteString("(allow file-write* " + strings.Join(rules, " ") + ")\n")
 	}
-	// Masked files degrade to a read deny on macOS: there is no mount to
-	// substitute under, so the honest fallback is "you cannot read it", which
-	// breaks the tool rather than handing it the real value.
-	for _, m := range policy.ReadSubstitute {
-		b.WriteString(fmt.Sprintf("(deny file-read* (literal %s))\n", sbplString(m.RealPath)))
-	}
-
 	// Mandatory-deny paths inside the writable tree: readable (the allow of
 	// file-read* stands), not writable. Later rules win, so these come last.
 	for _, p := range expanded(policy.WriteDeny) {
 		b.WriteString(fmt.Sprintf("(deny file-write* (subpath %s))\n", sbplString(p)))
+	}
+
+	// Masked files degrade to a read deny on macOS: there is no mount to
+	// substitute under, so the honest fallback is "you cannot read it", which
+	// breaks the tool rather than handing it the real value. Applied last so a
+	// broader allow above cannot re-open it.
+	for _, m := range policy.ReadSubstitute {
+		p := m.RealPath
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			p = resolved
+		}
+		b.WriteString(fmt.Sprintf("(deny file-read* (literal %s))\n", sbplString(p)))
 	}
 	return b.String(), nil
 }

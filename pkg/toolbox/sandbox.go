@@ -24,18 +24,39 @@ import (
 )
 
 var (
-	sandboxMu      sync.RWMutex
-	sandboxWrapper sandbox.Wrapper
-	sandboxPolicy  sandbox.Policy
+	sandboxMu         sync.RWMutex
+	sandboxWrapper    sandbox.Wrapper
+	sandboxPolicy     sandbox.Policy
+	sandboxPolicyFunc func() sandbox.Policy
 )
 
 // SetSandbox installs (or clears, with a nil wrapper) the OS sandbox applied to
 // every process the toolbox spawns.
+//
+// The policy passed here is the fallback; when a policy function is installed
+// (SetSandboxPolicyFunc) it is recomputed for every spawn instead.
 func SetSandbox(w sandbox.Wrapper, policy sandbox.Policy) {
 	sandboxMu.Lock()
 	defer sandboxMu.Unlock()
 	sandboxWrapper = w
 	sandboxPolicy = policy
+	if w == nil {
+		sandboxPolicyFunc = nil
+	}
+}
+
+// SetSandboxPolicyFunc installs a policy *producer* instead of a fixed policy,
+// called once per spawn. It exists because the policy is not static:
+//
+//   - the write-deny walk only sees paths that exist, and `git init` inside the
+//     sandbox creates .git/hooks after startup — a snapshot would leave that
+//     hook writable, which is the exact vector the list is for;
+//   - a hardlock added or unlocked at runtime must reach the kernel too, or the
+//     gate and the sandbox disagree about the same path.
+func SetSandboxPolicyFunc(f func() sandbox.Policy) {
+	sandboxMu.Lock()
+	defer sandboxMu.Unlock()
+	sandboxPolicyFunc = f
 }
 
 // SandboxName reports the installed backend ("bwrap", "seatbelt", or "" for
@@ -54,9 +75,15 @@ func SandboxName() string {
 func wrapSandbox(cmd *exec.Cmd) error {
 	sandboxMu.RLock()
 	w, policy := sandboxWrapper, sandboxPolicy
+	provider := sandboxPolicyFunc
 	sandboxMu.RUnlock()
 	if w == nil {
 		return nil
+	}
+	if provider != nil {
+		// Recomputed per spawn: the write-deny walk only sees paths that exist,
+		// and `git init` inside the sandbox creates .git/hooks after startup.
+		policy = provider()
 	}
 	path, args, err := sandbox.Apply(w, policy, cmd.Path, cmd.Args[1:])
 	if err != nil {

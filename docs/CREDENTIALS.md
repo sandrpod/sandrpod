@@ -49,9 +49,17 @@ implementation is checked against AWS's published example signature
 the same error as a wrong secret, which is a bug that hides for months.
 
 File masking on Linux binds the fake over the real path, so the real bytes are
-not in the sandbox's namespace at all. On macOS there is no mount to substitute
-under, so the path is **denied** instead: the tool breaks rather than reading the
-real value. That is a worse experience and a better failure.
+not in the sandbox's namespace at all. The substitution is mounted *after* the
+hardlock masks, which is what makes the documented example work at all: the
+default seeds hardlock `~/.aws` as a whole, so a substitution applied before that
+mask would have been wiped out and the tool would have found no file. A sentinel
+file inside a masked directory exposes nothing, so the order costs nothing.
+
+If the sentinel copy is missing (cleaned up, rotated, unreadable) the spawn is
+**refused** rather than run with the real file readable: a credential that was
+meant to be masked and is not is the one failure this feature cannot degrade
+into. On macOS there is no mount to substitute under, so the path is denied
+instead: the tool breaks rather than reading the real value.
 
 ---
 

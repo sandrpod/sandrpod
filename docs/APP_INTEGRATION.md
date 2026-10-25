@@ -42,9 +42,16 @@ OPENAI_API_KEY=fake_value_4b1f…          # when masking is on
 ```
 
 Practically every client library honours these, so "network works" is unchanged.
-Worth knowing: the credential variable holds a **sentinel**, not the secret. Code
-that compares it, hashes it, or ships it to a third party is looking at a fake —
-that is the point.
+Two details worth knowing:
+
+- the credential variable holds a **sentinel**, not the secret. Code that
+  compares it, hashes it, or ships it to a third party is looking at a fake —
+  that is the point;
+- `NO_PROXY` is set **empty** on purpose. It is a bypass list, so a value
+  inherited from the agent's own environment would let every proxy-aware client
+  step around the policy. If your workload needs a direct connection to one
+  host, that is an operator decision (the allow-list), not an environment
+  variable.
 
 ### 2.2 Failures are structured, not timeouts
 

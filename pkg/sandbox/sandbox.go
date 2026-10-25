@@ -227,6 +227,13 @@ func expanded(paths []string) []string {
 			continue
 		}
 		p = filepath.Clean(p)
+		// Resolve symlinks. bwrap refuses to mount on a symlink destination
+		// ("Can't mount on symlink destination"), and Seatbelt matches the
+		// resolved path, so on macOS /var/... vs /private/var/... would miss.
+		// Dotfile managers make ~/.aws and ~/.ssh symlinks routinely.
+		if resolved, err := filepath.EvalSymlinks(p); err == nil {
+			p = resolved
+		}
 		if _, err := os.Lstat(p); err != nil {
 			continue
 		}

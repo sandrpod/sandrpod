@@ -67,6 +67,12 @@ type Masker struct {
 	bySentinel map[string]Credential
 	// aws maps a sentinel access key id to the real triple.
 	aws map[string]awsPair
+	// awsByReal maps the real access key id to the same triple. It exists
+	// because header substitution runs before re-signing: by the time a SigV4
+	// request is examined its Credential scope already holds the real key, and
+	// looking only for the sentinel would silently skip the signature — the
+	// request would go upstream signed with a key id it does not match.
+	awsByReal map[string]awsPair
 	// plaintext allowed: substitution on cleartext requests
 	allowPlaintext bool
 }
@@ -85,6 +91,7 @@ func NewMasker(values map[string]string) (*Masker, error) {
 		byName:     make(map[string]string, len(values)),
 		bySentinel: make(map[string]Credential, len(values)),
 		aws:        make(map[string]awsPair),
+		awsByReal:  make(map[string]awsPair),
 	}
 	names := make([]string, 0, len(values))
 	for n := range values {
@@ -121,11 +128,13 @@ func (m *Masker) LinkAWS(accessKey, secret, sessionToken string) error {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.aws[sentinel] = awsPair{
+	pair := awsPair{
 		accessKey:    m.bySentinel[m.byName[accessKey]].Value,
 		secret:       m.bySentinel[m.byName[secret]].Value,
 		sessionToken: sessionTokenValue(m, sessionToken),
 	}
+	m.aws[sentinel] = pair
+	m.awsByReal[pair.accessKey] = pair
 	return nil
 }
 
@@ -320,6 +329,11 @@ func (m *Masker) ResignAWS(req *http.Request) (bool, error) {
 	}
 	m.mu.RLock()
 	pair, linked := m.aws[scope.SentinelKey]
+	if !linked {
+		// The key may already have been substituted in place by the header
+		// pass that runs first; recognise that spelling too.
+		pair, linked = m.awsByReal[scope.SentinelKey]
+	}
 	m.mu.RUnlock()
 	if !linked {
 		return false, nil
@@ -409,24 +423,68 @@ func hexSHA256(b []byte) string {
 }
 
 // canonicalQueryString renders the query per SigV4: sorted by encoded name,
-// then encoded value, with no trailing newline. Values are already encoded by
-// the parser, so the raw form is what the client signed.
+// then encoded value, with no trailing newline.
+//
+// The bytes are taken from RawQuery rather than re-encoded from parsed values.
+// Re-encoding changes what the client signed — `%2F` becomes `/`, a literal `+`
+// becomes `%20`, an empty parameter keeps or loses its `=` — and a signature
+// over different bytes is a SignatureDoesNotMatch the caller cannot debug.
 func canonicalQueryString(u *url.URL) string {
-	q := u.Query()
-	keys := make([]string, 0, len(q))
-	for k := range q {
-		keys = append(keys, k)
+	if u.RawQuery == "" {
+		return ""
 	}
-	sort.Strings(keys)
-	var parts []string
-	for _, k := range keys {
-		vals := q[k]
-		sort.Strings(vals)
-		for _, v := range vals {
-			parts = append(parts, awsEscape(k)+"="+awsEscape(v))
+	type param struct{ key, val string }
+	params := make([]param, 0, strings.Count(u.RawQuery, "&")+1)
+	for _, pair := range strings.Split(u.RawQuery, "&") {
+		if pair == "" {
+			continue
+		}
+		k, v, _ := strings.Cut(pair, "=")
+		params = append(params, param{key: k, val: v})
+	}
+	sort.Slice(params, func(i, j int) bool {
+		if params[i].key != params[j].key {
+			return params[i].key < params[j].key
+		}
+		return params[i].val < params[j].val
+	})
+	var b strings.Builder
+	for i, p := range params {
+		if i > 0 {
+			b.WriteByte('&')
+		}
+		// The parameters already arrive percent-encoded from the client; only
+		// the unreserved escapes are normalised, which is what the spec says
+		// (RFC 3986 uppercase hex).
+		b.WriteString(normalizePercent(p.key))
+		b.WriteByte('=')
+		b.WriteString(normalizePercent(p.val))
+	}
+	return b.String()
+}
+
+// normalizePercent uppercases percent escapes and encodes bytes that the client
+// should not have sent raw. Everything else is passed through untouched.
+func normalizePercent(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '%' && i+2 < len(s):
+			b.WriteByte('%')
+			b.WriteString(strings.ToUpper(s[i+1 : i+3]))
+			i += 2
+		case c == '+' || c == ' ':
+			b.WriteString("%20")
+		case c >= 'A' && c <= 'Z', c >= 'a' && c <= 'z', c >= '0' && c <= '9',
+			c == '-', c == '_', c == '.', c == '~':
+			b.WriteByte(c)
+		default:
+			b.WriteString("%")
+			b.WriteString(strings.ToUpper(hex.EncodeToString([]byte{c})))
 		}
 	}
-	return strings.Join(parts, "&")
+	return b.String()
 }
 
 // awsEscape is the URI-encoding SigV4 specifies (RFC 3986 unreserved only,

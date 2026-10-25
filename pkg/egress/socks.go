@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"strings"
 	"time"
@@ -54,13 +55,33 @@ const (
 	socksAuthFail    = 0x01
 )
 
-// acceptSOCKS accepts connections until the listener closes.
+// errSOCKSNoAuth is a missing or wrong token, reported as a refusal rather
+// than as a protocol error.
+var errSOCKSNoAuth = errors.New("socks: missing or wrong token")
+
+// acceptSOCKS accepts connections until the listener closes. Transient errors
+// (a momentarily exhausted fd table, which a busy sandbox can cause) are retried
+// with a backoff: returning on them would silently remove the sandbox's only
+// SOCKS path for the life of the process.
 func (s *Server) acceptSOCKS() {
+	backoff := 5 * time.Millisecond
 	for {
 		conn, err := s.socksLn.Accept()
 		if err != nil {
-			return // listener closed
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				continue
+			}
+			log.Printf("egress: socks accept: %v (retrying in %s)", err, backoff)
+			time.Sleep(backoff)
+			if backoff < time.Second {
+				backoff *= 2
+			}
+			continue
 		}
+		backoff = 5 * time.Millisecond
 		go s.handleSOCKS(conn)
 	}
 }
@@ -75,6 +96,10 @@ func (s *Server) handleSOCKS(conn net.Conn) {
 	br := bufio.NewReader(conn)
 
 	if err := s.socksNegotiate(conn, br); err != nil {
+		if errors.Is(err, errSOCKSNoAuth) {
+			s.record(Event{Kind: CodeSOCKS, Code: CodeAuthRequired,
+				Reason: "the SOCKS proxy needs its sandbox token"})
+		}
 		return
 	}
 
@@ -120,7 +145,10 @@ func (s *Server) handleSOCKS(conn net.Conn) {
 	if err := socksReplyOK(conn); err != nil {
 		return
 	}
-	s.splice(conn, upstream)
+	// br may hold bytes the client sent right after the CONNECT request (an
+	// optimistic TLS ClientHello, a protocol banner). Splicing the raw conn
+	// would drop them.
+	s.splice(newBufferedConn(conn, br), upstream)
 }
 
 // socksNegotiate picks the auth method and runs the RFC 1929 exchange.
@@ -167,7 +195,7 @@ func (s *Server) socksNegotiate(conn net.Conn, br *bufio.Reader) error {
 	}
 	if !s.tokenMatches(string(pass)) {
 		_, _ = conn.Write([]byte{socksAuthVersion, socksAuthFail})
-		return fmt.Errorf("socks: bad token")
+		return errSOCKSNoAuth
 	}
 	_, err := conn.Write([]byte{socksAuthVersion, socksAuthOK})
 	return err

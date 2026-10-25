@@ -14,7 +14,10 @@ import (
 )
 
 func TestBuildBwrapArgs_Shape(t *testing.T) {
-	dir := t.TempDir()
+	// Paths in the plan are resolved (bwrap refuses to mount on a symlink), and
+	// on macOS /var is a symlink to /private/var, so the expectations resolve
+	// theirs too.
+	dir := resolvedTempDir(t)
 	work := filepath.Join(dir, "work")
 	ssh := filepath.Join(dir, "ssh")
 	if err := os.MkdirAll(work, 0o755); err != nil {
@@ -105,7 +108,7 @@ func TestBuildBwrapArgs_NeverBindsRootWritable(t *testing.T) {
 }
 
 func TestBuildSeatbeltProfile_Shape(t *testing.T) {
-	dir := t.TempDir()
+	dir := resolvedTempDir(t)
 	work := filepath.Join(dir, "work")
 	ssh := filepath.Join(dir, "ssh")
 	for _, p := range []string{work, ssh} {
@@ -175,14 +178,37 @@ func TestResolve_Modes(t *testing.T) {
 }
 
 func TestExpanded(t *testing.T) {
-	dir := t.TempDir()
+	dir := resolvedTempDir(t)
 	f := filepath.Join(dir, "f")
 	if err := os.WriteFile(f, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Duplicates collapse, missing and relative paths are dropped.
 	got := expanded([]string{f, f, filepath.Join(dir, "missing"), "relative/path", ""})
 	if len(got) != 1 || got[0] != f {
 		t.Errorf("expanded = %v, want just %q", got, f)
+	}
+}
+
+// A symlinked path is resolved before it reaches the mount plan: bwrap refuses
+// to mount on a symlink destination, so leaving it unresolved fails every spawn
+// for the (common) dotfile-managed setup.
+func TestExpanded_ResolvesSymlinks(t *testing.T) {
+	dir := resolvedTempDir(t)
+	real := filepath.Join(dir, "real")
+	if err := os.MkdirAll(real, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	got := expanded([]string{link})
+	if len(got) != 1 {
+		t.Fatalf("expanded = %v", got)
+	}
+	if got[0] != real {
+		t.Errorf("symlink not resolved: got %q, want %q", got[0], real)
 	}
 }
 
@@ -210,8 +236,15 @@ func TestBwrapCommand_RelayWrap(t *testing.T) {
 	if !strings.Contains(joined, `exec "$@"`) {
 		t.Error("the wrapper must exec \"$@\" so argv is not re-parsed")
 	}
-	if !strings.Contains(joined, "relay --listen 127.0.0.1:3128 --unix \"/run/sandrpod/egress/proxy.sock\"") {
+	// The relay's arguments are single-quoted: a quote or space in one of them
+	// (they are exported fields) must not be able to end the argument.
+	if !strings.Contains(joined, "relay --listen '127.0.0.1:3128' --unix '/run/sandrpod/egress/proxy.sock'") {
 		t.Errorf("relay invocation missing:\n%s", joined)
+	}
+	// A relay that never becomes ready must stop the command rather than run
+	// it with no egress at all.
+	if !strings.Contains(joined, "exit 125") {
+		t.Errorf("the wrapper does not fail when the relay does not start:\n%s", joined)
 	}
 	// The dangerous argument must appear as an argv element, untouched.
 	if args[len(args)-1] != `print("hi; rm -rf /")` {
@@ -241,4 +274,15 @@ func TestBuildSeatbeltProfile_ProxyOnlyPort(t *testing.T) {
 	if strings.Contains(none, "(allow network-outbound") {
 		t.Error("NetworkNone must allow no outbound at all")
 	}
+}
+
+// resolvedTempDir is t.TempDir with symlinks resolved, matching what the plan
+// contains.
+func resolvedTempDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(dir); err == nil {
+		return resolved
+	}
+	return dir
 }

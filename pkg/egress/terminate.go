@@ -150,6 +150,13 @@ func (s *Server) serveTerminated(w http.ResponseWriter, r *http.Request, tr *htt
 	}
 	out.Header = r.Header.Clone()
 
+	// This is a re-originated request, not a relayed one: the proxy's own
+	// headers (Proxy-Authorization carries the sandbox token) and the client's
+	// hop-by-hop set must not travel upstream. Without this the upstream sees
+	// the token, and `Connection: keep-alive` on a fresh connection is a
+	// protocol lie.
+	stripHopByHop(out.Header)
+
 	// Refuse a cleartext hop: this path is only used when we terminated, so a
 	// sentinel here means the client sent it over TLS and we substitute. The
 	// plain-HTTP path has its own refusal (see serveHTTP).
@@ -268,6 +275,16 @@ func withBuffered(c net.Conn, brw *bufio.ReadWriter) net.Conn {
 type bufferedConn struct {
 	net.Conn
 	r *bufio.Reader
+}
+
+// newBufferedConn re-attaches bytes already read from c that belong to the byte
+// stream after the protocol handshake. Without it a pipelining client loses its
+// first payload bytes: the handshake parser buffers more than the handshake.
+func newBufferedConn(c net.Conn, r *bufio.Reader) net.Conn {
+	if r == nil || r.Buffered() == 0 {
+		return c
+	}
+	return &bufferedConn{Conn: c, r: r}
 }
 
 func (b *bufferedConn) Read(p []byte) (int, error) { return b.r.Read(p) }

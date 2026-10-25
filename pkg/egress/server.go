@@ -273,7 +273,14 @@ func (s *Server) decide(ctx context.Context, host string, port int) Verdict {
 		return s.policy.Load().Decide(host, port)
 	}
 	key := host + ":" + itoa(port)
-	if ttl := s.opts.DecideCacheTTL; ttl > 0 {
+	if len(key) > 512 {
+		// A name longer than this is not a destination anyone resolves; it is
+		// a way to grow the cache for free.
+		return Verdict{Code: CodeNotAllowed, Host: host, Port: port,
+			Reason: "the destination name is too long to evaluate"}
+	}
+	ttl := s.opts.DecideCacheTTL
+	if ttl > 0 {
 		s.verdictMu.Lock()
 		if c, ok := s.verdicts[key]; ok && time.Now().Before(c.until) {
 			s.verdictMu.Unlock()
@@ -295,9 +302,20 @@ func (s *Server) decide(ctx context.Context, host string, port int) Verdict {
 	if v.Port == 0 {
 		v.Port = port
 	}
-	if s.opts.DecideCacheTTL > 0 {
+	if ttl > 0 {
 		s.verdictMu.Lock()
-		s.verdicts[key] = cachedVerdict{verdict: v, until: time.Now().Add(s.opts.DecideCacheTTL)}
+		// Sweep expired entries once the map is large enough to matter: a
+		// sandbox controls the destination names, so an unbounded cache is a
+		// way to make the agent's memory grow by asking for names.
+		if len(s.verdicts) >= 1024 {
+			now := time.Now()
+			for k, c := range s.verdicts {
+				if now.After(c.until) {
+					delete(s.verdicts, k)
+				}
+			}
+		}
+		s.verdicts[key] = cachedVerdict{verdict: v, until: time.Now().Add(ttl)}
 		s.verdictMu.Unlock()
 	}
 	return v
@@ -378,8 +396,13 @@ func (s *Server) ProxyURL() string {
 	return "http://sandbox:" + s.token + "@" + s.HTTPAddr()
 }
 
-// SOCKSURL is the credential-bearing SOCKS5 URL.
+// SOCKSURL is the credential-bearing SOCKS5 URL, or "" when there is no SOCKS
+// listener (unix-socket mode). An empty result must not be emitted as
+// ALL_PROXY: an unparsable proxy URL is treated by some clients as "no proxy".
 func (s *Server) SOCKSURL() string {
+	if s.SOCKSAddr() == "" {
+		return ""
+	}
 	return "socks5://sandbox:" + s.token + "@" + s.SOCKSAddr()
 }
 
@@ -388,19 +411,32 @@ func (s *Server) SOCKSURL() string {
 // because tools disagree about which they read (curl reads lower case first,
 // many Java/Node libraries read upper case).
 //
-// NO_PROXY is deliberately NOT set: it is a bypass list, and a sandbox that
-// can name hosts in it can step around the policy.
+// NO_PROXY is set to empty rather than left alone: it is a bypass list, so an
+// inherited value (common in CI and corporate shells) would let every
+// proxy-aware client skip the proxy. The child environment is the agent's
+// environment plus these values, so "not set" is not the same as "empty".
 func (s *Server) ProxyEnv() []string {
 	httpURL := s.ProxyURL()
-	socksURL := s.SOCKSURL()
-	return []string{
+	env := []string{
 		"HTTP_PROXY=" + httpURL, "http_proxy=" + httpURL,
 		"HTTPS_PROXY=" + httpURL, "https_proxy=" + httpURL,
-		"ALL_PROXY=" + socksURL, "all_proxy=" + socksURL,
+	}
+	if socksURL := s.SOCKSURL(); socksURL != "" {
+		// In unix-socket mode there is no SOCKS listener; emitting an
+		// unparsable ALL_PROXY would be read by some clients as "no proxy".
+		env = append(env, "ALL_PROXY="+socksURL, "all_proxy="+socksURL)
+	}
+	return append(env,
 		// Node's built-in fetch/http read the proxy env only when asked to.
 		// Node 22.21+ and 24.5+ honour this; older runtimes ignore it.
 		"NODE_USE_ENV_PROXY=1",
-	}
+		// NO_PROXY is a bypass list, and the child environment is the agent's
+		// environment plus these values. An inherited NO_PROXY would let every
+		// proxy-aware client skip the proxy entirely — with no kernel floor on
+		// a machine without -os-sandbox, that is the whole policy gone. Set
+		// explicitly empty so the merge replaces whatever was inherited.
+		"NO_PROXY=", "no_proxy=",
+	)
 }
 
 // Stats reports how many connections were allowed and denied so far. Denials

@@ -259,18 +259,24 @@ func (d *dialer) isOwnAddr(ip netip.Addr) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	if d.ownAddrs == nil || time.Since(d.ownAt) > ownAddrCacheTTL {
-		d.ownAddrs = currentInterfaceAddrs()
+		addrs, err := currentInterfaceAddrs()
+		if err != nil {
+			// Fail closed and do not cache: "I cannot tell which addresses are
+			// mine" must not mean "none of them are".
+			return true
+		}
+		d.ownAddrs = addrs
 		d.ownAt = time.Now()
 	}
 	_, ok := d.ownAddrs[ip.Unmap()]
 	return ok
 }
 
-func currentInterfaceAddrs() map[netip.Addr]struct{} {
+func currentInterfaceAddrs() (map[netip.Addr]struct{}, error) {
 	out := make(map[netip.Addr]struct{}, 8)
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return out
+		return nil, err
 	}
 	for _, iface := range ifaces {
 		addrs, err := iface.Addrs()
@@ -290,7 +296,7 @@ func currentInterfaceAddrs() map[netip.Addr]struct{} {
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
 // DenyError is a refusal from the address check, carried as an error so the

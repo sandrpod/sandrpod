@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
@@ -53,6 +54,11 @@ var hopByHop = map[string]bool{
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if !s.authorized(r.Header.Get("Proxy-Authorization")) {
+		// Counted and audited like every other refusal: a wrong token is
+		// either a misconfiguration or someone probing the proxy, and both are
+		// things an operator wants to see.
+		s.record(Event{Kind: kindOf(r), Host: r.Host, Code: CodeAuthRequired,
+			Reason: "missing or wrong proxy token", Method: r.Method})
 		w.Header().Set("Proxy-Authenticate", `Basic realm="sandrpod-egress"`)
 		s.writeDeny(w, http.StatusProxyAuthRequired, "proxy_auth_required",
 			"this proxy needs its sandbox token: use the HTTP_PROXY/HTTPS_PROXY values the sandbox was started with")
@@ -69,6 +75,8 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 // handleForward re-issues a plain-HTTP request to its absolute-form target.
 func (s *Server) handleForward(w http.ResponseWriter, r *http.Request) {
 	if r.URL == nil || r.URL.Host == "" {
+		s.record(Event{Kind: CodeHTTP, Host: r.Host, Code: CodeNotAllowed,
+			Reason: "not an absolute request URI", Method: r.Method})
 		s.writeDeny(w, http.StatusBadRequest, "bad_request",
 			"the proxy expects an absolute request URI (http://host/path)")
 		return
@@ -91,6 +99,8 @@ func (s *Server) handleForward(w http.ResponseWriter, r *http.Request) {
 			// Opted in: substitute in place on the cleartext request.
 			s.masker().substituteHeaders(r.Header)
 		} else if carriesSentinel(r) {
+			s.record(Event{Kind: CodeHTTP, Host: host, Port: port, Code: CodeMaskedPlaintext,
+				Reason: "masked credential over plain HTTP", Method: r.Method})
 			s.writeDeny(w, http.StatusForbidden, CodeMaskedPlaintext,
 				"the request carries a masked credential over plain HTTP; a masked credential is only "+
 					"sent over HTTPS, because cleartext would expose the real value to the network")
@@ -156,6 +166,8 @@ func (s *Server) handleConnect(w http.ResponseWriter, r *http.Request) {
 	hj, ok := w.(http.Hijacker)
 	if !ok {
 		conn.Close()
+		s.record(Event{Kind: CodeConnect, Host: host, Port: port, Code: CodeNotAllowed,
+			Reason: "connection cannot be hijacked", Method: r.Method})
 		s.writeDeny(w, http.StatusInternalServerError, "no_hijack",
 			"the proxy cannot take over this connection")
 		return
@@ -222,8 +234,11 @@ func (s *Server) fail(w http.ResponseWriter, r *http.Request, host string, port 
 		s.writeDeny(w, http.StatusForbidden, deny.Verdict.Code, deny.Verdict.Reason)
 		return
 	}
+	// The error text carries the vetted address ("dial tcp 10.0.0.7:80: …"),
+	// which guard.go deliberately keeps out of what the sandbox sees.
+	log.Printf("egress: upstream %s:%d unreachable: %v", host, port, err)
 	s.writeDeny(w, http.StatusBadGateway, "upstream_unreachable",
-		fmt.Sprintf("could not connect to %s:%d (%v)", host, port, err))
+		fmt.Sprintf("could not connect to %s:%d", host, port))
 }
 
 // deny answers a policy refusal: 403, the code in a header tools can read,
@@ -286,23 +301,31 @@ func streamCopy(w http.ResponseWriter, body io.Reader) {
 			}
 		}
 		if err != nil {
+			// Abort rather than end the handler: net/http would otherwise
+			// finish the chunked framing, and the client would see a complete,
+			// silently truncated body.
+			if err != io.EOF {
+				panic(http.ErrAbortHandler)
+			}
 			return
 		}
 	}
 }
 
 func stripHopByHop(h http.Header) {
-	for _, name := range []string{"Connection", "Proxy-Connection", "Keep-Alive",
-		"Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade"} {
-		h.Del(name)
-	}
-	// Connection may also name additional hop-by-hop headers.
+	// Connection names additional hop-by-hop headers, so it has to be read
+	// before it is deleted — the loop below used to run after h.Del("Connection")
+	// and therefore over an empty list.
 	for _, v := range h.Values("Connection") {
 		for _, token := range strings.Split(v, ",") {
 			if name := strings.TrimSpace(token); name != "" {
 				h.Del(name)
 			}
 		}
+	}
+	for _, name := range []string{"Connection", "Proxy-Connection", "Keep-Alive",
+		"Proxy-Authenticate", "Proxy-Authorization", "Te", "Trailer", "Transfer-Encoding", "Upgrade"} {
+		h.Del(name)
 	}
 }
 

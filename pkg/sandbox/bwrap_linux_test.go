@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -234,5 +235,38 @@ func TestBwrap_ReadSubstitution(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "fake_value_xyz") {
 		t.Fatalf("the sandbox did not see the substitute: %q", out)
+	}
+}
+
+// The toolbox starts bwrap in its own process group (setSysProcAttr) so it can
+// kill the whole tree. If --new-session needs setsid() and setsid() fails for a
+// process-group leader, that combination kills every spawn.
+func TestBwrap_StartsAsProcessGroupLeader(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("bubblewrap is Linux-only")
+	}
+	w := &Bwrap{Path: "bwrap"}
+	if err := w.Available(); err != nil {
+		t.Skipf("bubblewrap unavailable: %v", err)
+	}
+
+	work, err := os.MkdirTemp("/var/tmp", "sandrpod-pg-")
+	if err != nil {
+		t.Skipf("no scratch dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(work) })
+
+	path, args, err := w.Command(Policy{WorkDir: work}, "/bin/sh", []string{"-c", "echo ok"})
+	if err != nil {
+		t.Fatalf("Command: %v", err)
+	}
+	cmd := exec.Command(path, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("the sandboxed command failed to start as a process-group leader: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ok") {
+		t.Fatalf("unexpected output: %q", out)
 	}
 }
