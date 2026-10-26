@@ -312,9 +312,17 @@ PYX
 	# stale one is exactly the thing this check exists to notice.
 	EGRESS_IMAGE=sandrpod-egress-proxy:playground
 	if ! docker image inspect "$EGRESS_IMAGE" >/dev/null 2>&1; then
-		if ! DOCKER_BUILDKIT=0 docker build -q -f docker/Dockerfile.egress \
+		# BuildKit, not the legacy builder: the Dockerfile selects its build
+		# stage with `FROM --platform=$BUILDPLATFORM`, which the legacy builder
+		# cannot parse. That difference is not cosmetic — with the legacy path
+		# this phase failed and *skipped itself* on CI for several runs, which
+		# is exactly the kind of silence a fleet check exists to prevent. A
+		# build failure is our bug, so it fails the run rather than skipping;
+		# only a missing base image is excusable, and that is reported by the
+		# build error's own text.
+		if ! docker buildx build --load -f docker/Dockerfile.egress \
 			-t "$EGRESS_IMAGE" . >"$WORK/egress-build.log" 2>&1; then
-			info "skipping the fleet phase: cannot build the egress sidecar image ($(tail -2 "$WORK/egress-build.log" | tr '\n' ' '))"
+			fail "cannot build the egress sidecar image: $(tail -2 "$WORK/egress-build.log" | tr '\n' ' ')"
 			FLEET_SKIPPED=1
 		fi
 	fi
