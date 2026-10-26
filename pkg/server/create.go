@@ -98,6 +98,12 @@ func runSandboxCreate(
 		_ = sandboxStore.Update(req.Name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateError })
 	}
 
+	// Placement: the caller's tenant decides which workers are eligible. It
+	// never reaches the wire — the poder does not need to know.
+	if requester.Tenant != "" {
+		req.Workspace = requester.Tenant
+	}
+
 	// The choke point: every path that provisions a sandbox passes through
 	// here, so a new entry point cannot silently skip the deployment's gate.
 	// Handlers already refused early for a better error surface; Admission is

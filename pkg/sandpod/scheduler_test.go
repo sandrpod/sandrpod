@@ -18,7 +18,7 @@ import (
 // mockPoderRepo is a minimal implementation of PoderRepository for testing.
 type mockPoderRepo struct {
 	selectBestFn    func(region, providerType string) (*PoderInfo, error)
-	selectBestForFn func(region, providerType string, require []string) (*PoderInfo, error)
+	selectBestForFn func(region, providerType string, require []string, tenant string) (*PoderInfo, error)
 	listFn          func() []*PoderInfo
 }
 
@@ -45,9 +45,9 @@ func (m *mockPoderRepo) SelectBest(region, providerType string) (*PoderInfo, err
 	return m.selectBestFn(region, providerType)
 }
 
-func (m *mockPoderRepo) SelectBestFor(region, providerType string, require []string) (*PoderInfo, error) {
+func (m *mockPoderRepo) SelectBestFor(region, providerType string, require []string, tenant string) (*PoderInfo, error) {
 	if m.selectBestForFn != nil {
-		return m.selectBestForFn(region, providerType, require)
+		return m.selectBestForFn(region, providerType, require, tenant)
 	}
 	p, err := m.selectBestFn(region, providerType)
 	if err != nil || p == nil || len(require) == 0 {
@@ -521,7 +521,7 @@ func TestSchedule_EgressNeedsACapablePoder(t *testing.T) {
 	repo := &mockPoderRepo{
 		selectBestFn: func(region, providerType string) (*PoderInfo, error) { return old, nil },
 		// SelectBestFor filters by capability: an incapable fleet finds none.
-		selectBestForFn: func(region, providerType string, require []string) (*PoderInfo, error) {
+		selectBestForFn: func(region, providerType string, require []string, tenant string) (*PoderInfo, error) {
 			return nil, errors.New("no available poder found")
 		},
 		listFn: func() []*PoderInfo { return []*PoderInfo{old} },
@@ -544,5 +544,53 @@ func TestSchedule_EgressNeedsACapablePoder(t *testing.T) {
 		Name: "plain", ProviderType: "local",
 	}); err != nil {
 		t.Fatalf("a sandbox with no policy must still schedule: %v", err)
+	}
+}
+
+// A sandbox is placed only on a worker of its own tenant. An unscoped worker
+// (a self-hosted fleet) stays eligible, which is what keeps single-tenant
+// deployments working unchanged.
+func TestSchedule_TenantScopedPlacement(t *testing.T) {
+	mine := &PoderInfo{ID: "mine", State: PoderStateOnline, ProviderType: "local", Workspace: "acme",
+		Resources: PoderResources{MaxContainers: 10}}
+	theirs := &PoderInfo{ID: "theirs", State: PoderStateOnline, ProviderType: "local", Workspace: "other",
+		Resources: PoderResources{MaxContainers: 10}}
+	shared := &PoderInfo{ID: "shared", State: PoderStateOnline, ProviderType: "local",
+		Resources: PoderResources{MaxContainers: 10}}
+
+	repo := &mockPoderRepo{
+		selectBestFn: func(region, provider string) (*PoderInfo, error) { return theirs, nil },
+		selectBestForFn: func(region, provider string, require []string, tenant string) (*PoderInfo, error) {
+			for _, p := range []*PoderInfo{mine, theirs, shared} {
+				if tenant != "" && p.Workspace != "" && p.Workspace != tenant {
+					continue
+				}
+				return p, nil
+			}
+			return nil, errors.New("no available poder found")
+		},
+		listFn: func() []*PoderInfo { return []*PoderInfo{mine, theirs, shared} },
+	}
+	s := NewScheduler(repo, "", "")
+
+	job, err := s.ScheduleSandboxCreation(context.Background(), &CreateSandboxRequest{
+		Name: "scoped", ProviderType: "local", Workspace: "acme",
+	})
+	if err != nil {
+		t.Fatalf("schedule: %v", err)
+	}
+	if job.PoderID != "mine" {
+		t.Fatalf("placed on %q, want the tenant's own worker", job.PoderID)
+	}
+
+	// An unscoped request never lands on another tenant's worker either.
+	job, err = s.ScheduleSandboxCreation(context.Background(), &CreateSandboxRequest{
+		Name: "unscoped", ProviderType: "local",
+	})
+	if err != nil {
+		t.Fatalf("schedule: %v", err)
+	}
+	if job.PoderID == "theirs" {
+		t.Fatal("an unscoped request was placed on a scoped worker")
 	}
 }

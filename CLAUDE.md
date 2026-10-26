@@ -199,7 +199,7 @@ Sandbox states: `PENDING` → `STARTING` → `RUNNING` → `STOPPING` → `STOPP
 - `DELETE /api/v1/poders/{id}` - Delete Poder record（若在线则同时断开 tunnel）
 
 **WebSocket / Internal**
-- `GET /ws/poder/connect` - Poder registers via WebSocket tunnel (`tunnelStore`); headers carry its identity, resources and **capabilities** (`X-Poder-Capabilities: egress`). A sandbox that asks for a policy is only scheduled onto a worker that advertises the capability — the alternative is a sandbox reported as walled that runs unwalled.
+- `GET /ws/poder/connect` - Poder registers via WebSocket tunnel (`tunnelStore`); headers carry its identity, resources, **capabilities** (`X-Poder-Capabilities: egress`) and **tenant** (`X-Poder-Workspace`, or the worker identity's `Identity.Tenant`). A sandbox that asks for a policy is only scheduled onto a worker that advertises the capability — the alternative is a sandbox reported as walled that runs unwalled. Placement is tenant-scoped: a sandbox is only scheduled onto a worker with the same `Identity.Tenant`, or onto one with no tenant at all (self-hosted). `RoleWorker` passes the two routes a worker needs (this handshake, the job poll) and nothing else.
 - `GET /ws/sandbox/connect` - sandrpod-agent registers local machine as sandbox (`directStore`)
 - `GET /api/v1/jobs/poll` - Poder polls for pending CREATE/DELETE jobs
 

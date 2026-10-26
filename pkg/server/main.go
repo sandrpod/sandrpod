@@ -291,6 +291,22 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		})
 	}
 
+	// workerRoute is the gate for the two routes a worker (a poder) actually
+	// needs: the tunnel handshake and the job poll. Deliberately separate from
+	// adminOnly so a worker credential cannot reach the management API — a
+	// per-tenant join token must not be able to list or delete other tenants'
+	// sandboxes.
+	workerRoute := func(next http.HandlerFunc) http.HandlerFunc {
+		return authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			id := IdentityFrom(r)
+			if !id.IsAdmin() && !id.IsWorker() {
+				http.Error(w, "Forbidden: worker or admin token required", http.StatusForbidden)
+				return
+			}
+			next(w, r)
+		})
+	}
+
 	// Health check endpoint
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -311,7 +327,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 
 	// === Poder tunnel entry point ===
 	// Poder dials this endpoint on startup to register and establish a yamux reverse tunnel
-	mux.HandleFunc("/ws/poder/connect", adminOnly(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/ws/poder/connect", workerRoute(func(w http.ResponseWriter, r *http.Request) {
 		poderID := r.Header.Get("X-Poder-ID")
 		if poderID == "" {
 			http.Error(w, "X-Poder-ID header required", http.StatusBadRequest)
@@ -355,6 +371,10 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			// A worker that does not say what it can enforce can enforce
 			// nothing; the empty list is the honest default.
 			Capabilities: splitCapabilities(r.Header.Get("X-Poder-Capabilities")),
+			// Who owns this worker. A worker credential carries its tenant in
+			// the identity, so a hosted build does not need the header; a
+			// self-hosted fleet sends neither and stays unscoped.
+			Workspace: poderWorkspace(r),
 			Resources: podpkg.PoderResources{
 				CPUCores:      cpuCores,
 				MemoryBytes:   memBytes,
@@ -1515,7 +1535,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	}))
 
 	// === Job API (called by Poder Agent) ===
-	mux.HandleFunc("/api/v1/jobs/poll", adminOnly(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/jobs/poll", workerRoute(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -1638,6 +1658,16 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 // moved with this package: a stale `-X main.version` compiles fine and stamps
 // nothing, which is how a release ends up reporting "dev".
 var version = "dev"
+
+// poderWorkspace decides which tenant a joining worker belongs to: an explicit
+// header wins, otherwise the worker identity's tenant (how a hosted build's
+// join token reports it). Empty means an unscoped, single-tenant fleet.
+func poderWorkspace(r *http.Request) string {
+	if h := strings.TrimSpace(r.Header.Get("X-Poder-Workspace")); h != "" {
+		return h
+	}
+	return IdentityFrom(r).Tenant
+}
 
 // splitCapabilities parses the comma-separated capability header a worker sends
 // on connect. Whitespace and empty entries are dropped so a malformed header

@@ -23,7 +23,11 @@ type PoderInfo struct {
 	// connects ("egress" for the per-pod proxy). The control plane refuses to
 	// put a sandbox that needs a capability on a worker that does not have it,
 	// instead of creating one that looks walled and is not.
-	Capabilities  []string   `json:"capabilities,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	// Workspace is the tenant that owns this worker (empty for a self-hosted
+	// single-tenant fleet). A sandbox is only scheduled onto a worker whose
+	// workspace matches the requester's, or onto one with no workspace at all.
+	Workspace     string     `json:"workspace,omitempty"`
 	Usage         PoderUsage `json:"usage"`
 	LastHeartbeat time.Time  `json:"last_heartbeat"`
 	CreatedAt     time.Time  `json:"created_at"`
@@ -65,6 +69,7 @@ type RegisterPoderRequest struct {
 	VMID         string         `json:"vm_id,omitempty"` // cloud VM instance ID (aws/aliyun); empty for local/docker
 	Resources    PoderResources `json:"resources"`
 	Capabilities []string       `json:"capabilities,omitempty"`
+	Workspace    string         `json:"workspace,omitempty"`
 }
 
 // HasCapability reports whether this worker advertised the capability.
@@ -202,14 +207,14 @@ func (s *PoderStore) List() []*PoderInfo {
 // SelectBest returns the online Poder node with the lowest weighted load score,
 // suitable for scheduling a new container. An empty providerType matches any type.
 func (s *PoderStore) SelectBest(region, providerType string) (*PoderInfo, error) {
-	return s.SelectBestFor(region, providerType, nil)
+	return s.SelectBestFor(region, providerType, nil, "")
 }
 
 // SelectBestFor is SelectBest with a capability requirement: a sandbox that
 // asks for per-pod egress must not land on a worker that cannot enforce it,
 // because the alternative is a sandbox the control plane reports as walled
 // while it runs with no route policy at all.
-func (s *PoderStore) SelectBestFor(region, providerType string, require []string) (*PoderInfo, error) {
+func (s *PoderStore) SelectBestFor(region, providerType string, require []string, tenant string) (*PoderInfo, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -234,6 +239,12 @@ func (s *PoderStore) SelectBestFor(region, providerType string, require []string
 
 		// Skip nodes that have reached their container limit.
 		if poder.Usage.Containers >= poder.Resources.MaxContainers {
+			continue
+		}
+
+		// Skip nodes that belong to a different tenant. An empty tenant on the
+		// worker means "unscoped" — the self-hosted fleet — and stays eligible.
+		if tenant != "" && poder.Workspace != "" && poder.Workspace != tenant {
 			continue
 		}
 

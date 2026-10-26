@@ -88,6 +88,10 @@ var (
 	// anything — the control plane simply refuses to put a policy on it.
 	emulateLegacy = flag.Bool("emulate-legacy", envBool("EMULATE_LEGACY", false),
 		"TEST ONLY: do not advertise capabilities (behaves like an older worker)")
+	// workspace, when set, scopes this worker to one tenant: the control plane
+	// only places that tenant's sandboxes here. Empty = unscoped (self-hosted).
+	workspace = flag.String("workspace", env("SANDRPOD_WORKSPACE", ""),
+		"Tenant that owns this worker; the control plane will not place other tenants' sandboxes here (env: SANDRPOD_WORKSPACE)")
 	providerType      = flag.String("provider-type", env("PROVIDER_TYPE", "local"), "Provider type: local, docker, aws, aliyun, azure, gcp, tencent, digitalocean, hetzner, oracle")
 	vmInstanceID      = flag.String("vm-instance-id", env("VM_INSTANCE_ID", ""), "Cloud VM instance ID this Poder runs on (used for VM reclamation)")
 	poderIDFlag       = flag.String("poder-id", env("PODER_ID", ""), "Poder ID (auto-generated if not set)")
@@ -708,6 +712,9 @@ func connectTunnel(ctx context.Context, poderID string, mux http.Handler, p *pod
 				"the control plane will refuse to create sandboxes with an egress policy on it")
 		} else {
 			headers.Set("X-Poder-Capabilities", strings.Join(poderCapabilities, ","))
+			if *workspace != "" {
+				headers.Set("X-Poder-Workspace", *workspace)
+			}
 		}
 		headers.Set("X-Poder-VM-ID", *vmInstanceID)
 		headers.Set("X-Poder-CPU-Cores", strconv.Itoa(resources.CPUCores))

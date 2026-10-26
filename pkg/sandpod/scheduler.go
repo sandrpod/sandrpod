@@ -77,7 +77,7 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 	//    worker that advertises the capability; scheduling it onto an older one
 	//    would produce a sandbox reported as walled and running unwalled.
 	require := capabilityRequirement(req)
-	poder, err := s.poderStore.SelectBestFor(req.Region, providerType, require)
+	poder, err := s.poderStore.SelectBestFor(req.Region, providerType, require, req.Workspace)
 	if err == nil && poder != nil {
 		log.Printf("[Scheduler] Found available poder %s for provider %s", poder.ID, providerType)
 		return s.createJobForPoder(req, poder)

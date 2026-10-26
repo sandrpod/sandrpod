@@ -71,6 +71,10 @@ type CreateSandboxRequest struct {
 	// pass straight through the server → poder forwarding.
 	CPUCores float64 `json:"cpu_cores,omitempty"`
 	MemoryMB int64   `json:"memory_mb,omitempty"`
+	// Workspace is the tenant this sandbox belongs to. It is NOT part of the
+	// wire format: the control plane fills it from the caller's identity and
+	// uses it only to choose a worker. Empty means "no placement scoping".
+	Workspace string `json:"-"`
 	// Async makes POST /sandboxes return a job id immediately and provision in
 	// the background; poll GET /api/v1/jobs/{id} (or the sandbox state) for
 	// progress. Cloud provisioning takes minutes — long synchronous responses

@@ -29,8 +29,9 @@ import (
 
 // Token roles.
 const (
-	RoleAdmin = "admin"
-	RoleUser  = "user"
+	RoleAdmin  = "admin"
+	RoleUser   = "user"
+	RoleWorker = "worker"
 )
 
 // NamedToken is one entry of the -tokens-file.
@@ -197,9 +198,22 @@ func (x *apiKeyIndex) replace(toks []*podpkg.APIToken) {
 type Identity struct {
 	Name string
 	Role string
+	// Tenant, when set, scopes placement: a sandbox created by this identity
+	// may only be scheduled onto a worker that belongs to the same tenant.
+	// Empty means "no scoping" — the single-tenant, self-hosted case.
+	//
+	// It is a placement hint, not an authorization decision: authorization is
+	// still Role + the ownership check on each sandbox.
+	Tenant string
 }
 
 func (id Identity) IsAdmin() bool { return id.Role == RoleAdmin }
+
+// IsWorker reports a worker identity: the machine credential a poder uses to
+// join the fleet and take jobs. Workers are not administrators — they must not
+// read every sandbox or mint tokens — but they do have to pass the two routes
+// that exist for them (the tunnel handshake and the job poll).
+func (id Identity) IsWorker() bool { return id.Role == RoleWorker }
 
 // Authenticator decides who made a request. The default implementation is the
 // built-in token scheme (Config.Token, the tokens file, DB-issued keys); a
