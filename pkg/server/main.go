@@ -1428,6 +1428,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				// Direct-agent sandbox: remove record and disconnect agent tunnel.
 				sandboxStore.Delete(name)
 				directStore.Remove(name)
+				notifyEvent("sandbox.deleted", sandboxEvent(sb, nil))
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{"status": "deleted"})
 				return
@@ -1457,8 +1458,12 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				log.Printf("sandbox delete: poder tunnel %s unavailable, skipping container cleanup for %s", pID, name)
 			}
 
+			// The record is gone by now — it was removed above — so the event
+			// has to be built from what was captured before the delete. A
+			// metering sink needs owner and reserved resources here more than
+			// anywhere else: this is the event that closes a billing period.
 			ev := map[string]any{"name": name}
-			if sb, ok := sandboxStore.Get(name); ok {
+			if sb != nil {
 				ev = sandboxEvent(sb, nil)
 			}
 			notifyEvent("sandbox.deleted", ev)

@@ -3,10 +3,15 @@
 package server
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
+	"github.com/sandrpod/sandrpod/pkg/store"
+	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
 
 // A metering sink cannot reconstruct what a sandbox reserved from its name, so
@@ -47,5 +52,69 @@ func TestSandboxEvent_ZeroResourcesAndNoTTL(t *testing.T) {
 	}
 	if _, ok := ev["ttl_seconds"]; ok {
 		t.Error("ttl_seconds must be absent when no TTL was set")
+	}
+}
+
+// captureSink records events for assertions.
+type captureSink struct {
+	mu     sync.Mutex
+	events []struct {
+		Name string
+		Data map[string]any
+	}
+}
+
+func (c *captureSink) Emit(event string, data map[string]any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.events = append(c.events, struct {
+		Name string
+		Data map[string]any
+	}{event, data})
+}
+
+func (c *captureSink) find(name string) map[string]any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, e := range c.events {
+		if e.Name == name {
+			return e.Data
+		}
+	}
+	return nil
+}
+
+// Deleting a sandbox removes the record, so the event has to be built from what
+// was captured first. It is the event that closes a billing period — losing
+// owner and resources here means the last minute of usage is unattributable.
+func TestSandboxDeleted_CarriesBillingFields(t *testing.T) {
+	sink := &captureSink{}
+	old := events
+	events = sink
+	t.Cleanup(func() { events = old })
+
+	stores := store.NewMemoryStores()
+	if err := stores.Sandboxes.Add(&podpkg.SandboxInfo{
+		Name: "metered", Owner: "alice", State: podpkg.StateRunning,
+		ProviderType: "local", CPUCores: 2, MemoryMB: 2048, TTLSeconds: 600,
+		PoderID: "poder-1", ProxyURL: "tunnel://poder-1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := New(Config{}, stores, tunnel.NewTunnelStore(), tunnel.NewDirectTunnelStore())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sandboxes/metered", nil)
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete status %d: %s", rec.Code, rec.Body.String())
+	}
+
+	ev := sink.find("sandbox.deleted")
+	if ev == nil {
+		t.Fatal("no sandbox.deleted event")
+	}
+	if ev["owner"] != "alice" || ev["cpu_cores"] != 2.0 || ev["memory_mb"] != int64(2048) {
+		t.Fatalf("delete event lost the billing fields: %v", ev)
 	}
 }
