@@ -43,29 +43,64 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
 
+// Flag-backed settings. The values are ordinary package variables with
+// defaults; registerFlags binds them to a *private* FlagSet inside Main().
+//
+// They are deliberately NOT registered with flag.Int(...) at package init: this
+// package is imported by programs that have their own flags, and initialising
+// them on the process-wide FlagSet made every embedder panic with
+// "flag redefined: port". A program that only calls New() never touches the
+// command line, and gets the defaults below.
 var (
-	port            = flag.Int("port", 8080, "API server port")
-	help            = flag.Bool("help", false, "Show help")
-	token           = flag.String("token", os.Getenv("SANDRPOD_TOKEN"), "API token for authentication (env: SANDRPOD_TOKEN)")
-	offlineTimeout  = flag.Duration("offline-timeout", 30*time.Second, "Poder offline timeout")
-	localPoderGrace = flag.Duration("local-poder-grace", envDurationOr("SANDRPOD_LOCAL_PODER_GRACE", podpkg.LocalPoderGracePeriod),
-		"How long to wait for a local/docker poder to register before failing a create (env: SANDRPOD_LOCAL_PODER_GRACE)")
-	reapTimeout    = flag.Duration("reap-timeout", 10*time.Minute, "OFFLINE poder reclamation timeout (terminates cloud VM and deletes record)")
-	dbDSN          = flag.String("db", "", `persistence backend: empty=in-memory (default); sqlite:<path> (e.g. sqlite:./data/sandrpod.db); postgres://user:pass@host:5432/db?sslmode=require (production)`)
-	sandboxIdleTTL = flag.Duration("sandbox-idle-timeout", envDuration("SANDRPOD_SANDBOX_IDLE_TIMEOUT"), "Reap sandboxes idle longer than this, e.g. 2h (0 = disabled; env: SANDRPOD_SANDBOX_IDLE_TIMEOUT)")
-	poderIdleTTL   = flag.Duration("poder-idle-timeout", envDuration("SANDRPOD_PODER_IDLE_TIMEOUT"), "Reclaim cloud poders with no sandboxes after this, terminating the VM, e.g. 30m (0 = disabled; env: SANDRPOD_PODER_IDLE_TIMEOUT)")
-	publicURL      = flag.String("public-url", os.Getenv("SANDRPOD_PUBLIC_URL"), "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
-	nodeURL        = flag.String("node-url", os.Getenv("SANDRPOD_NODE_URL"), "Internal URL of THIS instance that peer instances reach it at (e.g. http://10.0.1.5:8080). Set on every instance in a load-balanced, PostgreSQL-backed multi-instance deployment so requests can be forwarded to the node holding a poder's tunnel. Empty = single-instance (no forwarding). (env: SANDRPOD_NODE_URL)")
+	port            = ptr(8080)  // API server port
+	help            = ptr(false) // Show help
+	token           = ptr(os.Getenv("SANDRPOD_TOKEN"))
+	offlineTimeout  = ptr(30 * time.Second)
+	localPoderGrace = ptr(envDurationOr("SANDRPOD_LOCAL_PODER_GRACE", podpkg.LocalPoderGracePeriod))
+	reapTimeout     = ptr(10 * time.Minute)
+	dbDSN           = ptr("")
+	sandboxIdleTTL  = ptr(envDuration("SANDRPOD_SANDBOX_IDLE_TIMEOUT"))
+	poderIdleTTL    = ptr(envDuration("SANDRPOD_PODER_IDLE_TIMEOUT"))
+	publicURL       = ptr(os.Getenv("SANDRPOD_PUBLIC_URL"))
+	nodeURL         = ptr(os.Getenv("SANDRPOD_NODE_URL"))
 	// -emulate-legacy hides the capability route so the nightly can prove the
 	// agent refuses an old control plane without keeping an old binary around.
 	// It only *removes* what this build advertises; it cannot widen anything.
-	emulateLegacy = flag.Bool("emulate-legacy", false, "TEST ONLY: behave like a build that predates the capability route (clients will refuse to start)")
-	tokensFile    = flag.String("tokens-file", os.Getenv("SANDRPOD_TOKENS_FILE"), "JSON file of named API tokens [{name,token,role}] adding to -token; role admin|user; hot-reloaded on change (env: SANDRPOD_TOKENS_FILE)")
-	tlsCert       = flag.String("tls-cert", os.Getenv("SANDRPOD_TLS_CERT"), "TLS certificate file; with -tls-key serves HTTPS (env: SANDRPOD_TLS_CERT)")
-	tlsKey        = flag.String("tls-key", os.Getenv("SANDRPOD_TLS_KEY"), "TLS private key file (env: SANDRPOD_TLS_KEY)")
-	rateLimit     = flag.Float64("rate-limit", float64(envInt("SANDRPOD_RATE_LIMIT")), "Requests/second per user token, 0 = unlimited (env: SANDRPOD_RATE_LIMIT)")
-	maxPerOwner   = flag.Int("max-sandboxes-per-owner", envInt("SANDRPOD_MAX_SANDBOXES_PER_OWNER"), "Max concurrent sandboxes per user token (0 = unlimited, admins exempt; env: SANDRPOD_MAX_SANDBOXES_PER_OWNER)")
+	emulateLegacy = ptr(false)
+	tokensFile    = ptr(os.Getenv("SANDRPOD_TOKENS_FILE"))
+	tlsCert       = ptr(os.Getenv("SANDRPOD_TLS_CERT"))
+	tlsKey        = ptr(os.Getenv("SANDRPOD_TLS_KEY"))
+	rateLimit     = ptr(float64(envInt("SANDRPOD_RATE_LIMIT")))
+	maxPerOwner   = ptr(envInt("SANDRPOD_MAX_SANDBOXES_PER_OWNER"))
 )
+
+// ptr returns a pointer to v, so the settings above keep the pointer shape the
+// rest of the package reads while being initialised to a usable default.
+func ptr[T any](v T) *T { return &v }
+
+// registerFlags binds the settings to fs. Called once from Main, so the
+// standard binary parses the same command line it always did and an embedding
+// program is free to define whatever flags it likes.
+func registerFlags(fs *flag.FlagSet) {
+	fs.IntVar(port, "port", *port, "API server port")
+	fs.BoolVar(help, "help", *help, "Show help")
+	fs.StringVar(token, "token", *token, "API token for authentication (env: SANDRPOD_TOKEN)")
+	fs.DurationVar(offlineTimeout, "offline-timeout", *offlineTimeout, "Poder offline timeout")
+	fs.DurationVar(localPoderGrace, "local-poder-grace", *localPoderGrace,
+		"How long to wait for a local/docker poder to register before failing a create (env: SANDRPOD_LOCAL_PODER_GRACE)")
+	fs.DurationVar(reapTimeout, "reap-timeout", *reapTimeout, "OFFLINE poder reclamation timeout (terminates cloud VM and deletes record)")
+	fs.StringVar(dbDSN, "db", *dbDSN, `persistence backend: empty=in-memory (default); sqlite:<path> (e.g. sqlite:./data/sandrpod.db); postgres://user:pass@host:5432/db?sslmode=require (production)`)
+	fs.DurationVar(sandboxIdleTTL, "sandbox-idle-timeout", *sandboxIdleTTL, "Reap sandboxes idle longer than this, e.g. 2h (0 = disabled; env: SANDRPOD_SANDBOX_IDLE_TIMEOUT)")
+	fs.DurationVar(poderIdleTTL, "poder-idle-timeout", *poderIdleTTL, "Reclaim cloud poders with no sandboxes after this, terminating the VM, e.g. 30m (0 = disabled; env: SANDRPOD_PODER_IDLE_TIMEOUT)")
+	fs.StringVar(publicURL, "public-url", *publicURL, "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
+	fs.StringVar(nodeURL, "node-url", *nodeURL, "Internal URL of THIS instance that peer instances reach it at (e.g. http://10.0.1.5:8080). Set on every instance in a load-balanced, PostgreSQL-backed multi-instance deployment so requests can be forwarded to the node holding a poder's tunnel. Empty = single-instance (no forwarding). (env: SANDRPOD_NODE_URL)")
+	fs.BoolVar(emulateLegacy, "emulate-legacy", *emulateLegacy, "TEST ONLY: behave like a build that predates the capability route (clients will refuse to start)")
+	fs.StringVar(tokensFile, "tokens-file", *tokensFile, "JSON file of named API tokens [{name,token,role}] adding to -token; role admin|user; hot-reloaded on change (env: SANDRPOD_TOKENS_FILE)")
+	fs.StringVar(tlsCert, "tls-cert", *tlsCert, "TLS certificate file; with -tls-key serves HTTPS (env: SANDRPOD_TLS_CERT)")
+	fs.StringVar(tlsKey, "tls-key", *tlsKey, "TLS private key file (env: SANDRPOD_TLS_KEY)")
+	fs.Float64Var(rateLimit, "rate-limit", *rateLimit, "Requests/second per user token, 0 = unlimited (env: SANDRPOD_RATE_LIMIT)")
+	fs.IntVar(maxPerOwner, "max-sandboxes-per-owner", *maxPerOwner, "Max concurrent sandboxes per user token (0 = unlimited, admins exempt; env: SANDRPOD_MAX_SANDBOXES_PER_OWNER)")
+}
 
 // poderTombstones remembers recently-deleted poder IDs so a deleted poder's
 // still-dying container can't re-register and leave a ghost OFFLINE record.
@@ -1611,7 +1646,11 @@ func splitCapabilities(raw string) []string {
 }
 
 func Main() {
-	flag.Parse()
+	// A private FlagSet: registering on flag.CommandLine is what made this
+	// package impossible to import from a program with its own flags.
+	fs := flag.NewFlagSet("sandrpod-server", flag.ExitOnError)
+	registerFlags(fs)
+	_ = fs.Parse(os.Args[1:])
 
 	// The scheduler holds this as a package var so the create path can read it
 	// without threading config through every call site. Assigned unconditionally:
@@ -1619,7 +1658,7 @@ func Main() {
 	podpkg.LocalPoderGracePeriod = *localPoderGrace
 
 	if *help {
-		flag.Usage()
+		fs.Usage()
 		os.Exit(0)
 	}
 
