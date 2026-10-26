@@ -85,8 +85,3 @@ credentials.json
 # Kept on the machine, never published: the repo is public and these documents
 # quote other companies' pages and price lists.
 devdoc/
-
-# The commercial build's prototype — a separate Go module that imports this one
-# (see cloud/README.md). Untracked for the same reason devdoc/ is: it is not
-# part of the open-source product.
-/cloud/
