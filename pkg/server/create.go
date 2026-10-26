@@ -84,15 +84,6 @@ func runSandboxCreate(
 	admission Admission,
 	requester Identity,
 ) (*podpkg.SandboxInfo, string, error) {
-	// The choke point: every path that provisions a sandbox passes through
-	// here, so a new entry point cannot silently skip the deployment's gate.
-	// Handlers already refused early for a better error surface; Admission is
-	// required to be idempotent for exactly this reason.
-	if admission != nil {
-		if err := admission.Admit(context.Background(), requester, req); err != nil {
-			return nil, preJobID, fmt.Errorf("failed to create sandbox: %w", err)
-		}
-	}
 	failBoth := func(jobID, msg string) {
 		notifyEvent("sandbox.error", map[string]any{
 			"name": req.Name, "provider": req.ProviderType, "error": msg,
@@ -105,6 +96,24 @@ func runSandboxCreate(
 			})
 		}
 		_ = sandboxStore.Update(req.Name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateError })
+	}
+
+	// The choke point: every path that provisions a sandbox passes through
+	// here, so a new entry point cannot silently skip the deployment's gate.
+	// Handlers already refused early for a better error surface; Admission is
+	// required to be idempotent for exactly this reason.
+	//
+	// A refusal here must also finish the job and the record. The async path
+	// has already written a PENDING sandbox by now, and a caller that polls it
+	// would wait forever for a state that is never coming.
+	if admission != nil {
+		if err := admission.Admit(context.Background(), requester, req); err != nil {
+			failBoth(preJobID, fmt.Sprintf("failed to create sandbox: %v", err))
+			// Wrap, not flatten: the caller's error mapping (409 for a missing
+			// capability, e2bcompat.ErrQuotaExceeded for the E2B surface) reads
+			// the chain.
+			return nil, preJobID, fmt.Errorf("failed to create sandbox: %w", err)
+		}
 	}
 
 	// 1. Schedule: reuse an available poder or provision a VM (minutes).
