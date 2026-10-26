@@ -1799,23 +1799,12 @@ func Main() {
 	//     gateway in path mode, for pointing the unmodified E2B SDK at over
 	//     http (E2B_API_URL + E2B_SANDBOX_URL = http://host:<port>,
 	//     E2B_VALIDATE_API_KEY=false). No DNS/TLS required. See docs/E2B_COMPAT.md.
-	e2bDepsVal := e2bDeps{
-		cfg:         cfg,
-		scheduler:   podpkg.NewScheduler(stores.Poders, cfg.APIURL, cfg.Token),
-		sandboxes:   stores.Sandboxes,
-		poders:      stores.Poders,
-		jobs:        stores.Jobs,
-		tunnelStore: tunnelStore,
-		directStore: directStore,
-		owners:      stores.TunnelOwners,
-		admission:   admissionFor(cfg, stores.Sandboxes),
-	}
 	if dom := os.Getenv("SANDRPOD_E2B_DOMAIN"); dom != "" {
-		handler = e2bHostRouter(dom, newE2BGateway(dom, e2bDepsVal), handler)
+		handler = e2bHostRouter(dom, NewE2BGateway(dom, cfg, stores, tunnelStore, directStore), handler)
 		log.Printf("E2B-compatible gateway enabled: api.%s (control plane) + <port>-<id>.%s (envd)", dom, dom)
 	}
 	if dbg := os.Getenv("SANDRPOD_E2B_DEBUG_PORT"); dbg != "" {
-		gw := newE2BGateway("", e2bDepsVal) // path mode, single-sandbox resolver
+		gw := NewE2BGateway("", cfg, stores, tunnelStore, directStore) // path mode
 		if os.Getenv("SANDRPOD_E2B_DEBUG_LOG") != "" {
 			inner := gw
 			gw = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

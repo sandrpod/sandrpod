@@ -131,6 +131,27 @@ func e2bHostRouter(domain string, gateway, next http.Handler) http.Handler {
 }
 
 // newE2BGateway builds the E2B-compatible handler.
+// NewE2BGateway returns the E2B-compatible gateway for a domain, or in path
+// mode when domain is empty.
+//
+// Exported so a program that embeds this package can mount the gateway without
+// running Main(): the commercial build serves /v2/sandboxes next to its own
+// portal API, and its isolation tests exercise both surfaces.
+func NewE2BGateway(domain string, cfg Config, stores podpkg.Stores,
+	tunnelStore, directStore *tunnel.TunnelStore) http.Handler {
+	return newE2BGateway(domain, e2bDeps{
+		cfg:         cfg,
+		scheduler:   podpkg.NewScheduler(stores.Poders, cfg.APIURL, cfg.Token),
+		sandboxes:   stores.Sandboxes,
+		poders:      stores.Poders,
+		jobs:        stores.Jobs,
+		tunnelStore: tunnelStore,
+		directStore: directStore,
+		owners:      stores.TunnelOwners,
+		admission:   admissionFor(cfg, stores.Sandboxes),
+	})
+}
+
 func newE2BGateway(domain string, d e2bDeps) http.Handler {
 	return e2bcompat.Handler(e2bcompat.Config{
 		Domain:          domain,
