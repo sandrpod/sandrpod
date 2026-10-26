@@ -275,6 +275,16 @@ func (d e2bDeps) authenticator() e2bcompat.Authenticator {
 		if key == "" {
 			return "", false, false
 		}
+		// A deployment that issues its own keys (a workspace-scoped API key,
+		// say) resolves them here; without this, every key the portal hands out
+		// is valid on /api/v1 and 401 on /v2/sandboxes.
+		if d.cfg.E2BAPIKeys != nil {
+			r, _ := http.NewRequest(http.MethodGet, "/", nil)
+			r.Header.Set("X-Sandrpod-Token", key)
+			if id, err := d.cfg.E2BAPIKeys.Authenticate(r); err == nil {
+				return id.Name, id.IsAdmin(), true
+			}
+		}
 		if id, ok := resolveToken(d.cfg, key); ok {
 			return id.Name, id.IsAdmin(), true
 		}

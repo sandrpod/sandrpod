@@ -181,6 +181,13 @@ type Config struct {
 	// reproduce.
 	Authenticator Authenticator
 
+	// E2BAPIKeys resolves a key presented to the E2B-compatible surface
+	// (X-API-KEY) into an identity. Nil means "use the token scheme above",
+	// which is right for a self-hosted install. A hosted build supplies its
+	// own so a workspace's API keys work on both surfaces instead of only one —
+	// otherwise /v2/sandboxes answers 401 to every key the portal issued.
+	E2BAPIKeys Authenticator
+
 	// Admission gates sandbox creation. Nil keeps the built-in rule
 	// (MaxSandboxesPerOwner). A build with quotas, metering or risk checks
 	// returns a refusal here instead of growing conditionals in the handler.

@@ -256,3 +256,38 @@ func TestSplitCapabilities(t *testing.T) {
 		}
 	}
 }
+
+// A hosted build issues its own API keys. They must work on /api/v1 *and* on
+// /v2/sandboxes — a key that authenticates on one surface and 401s on the other
+// is the kind of defect that only shows up when a customer uses the E2B SDK.
+func TestE2BGateway_UsesConfiguredAPIKeyResolver(t *testing.T) {
+	stores := store.NewMemoryStores()
+	calls := 0
+	resolver := authenticatorFunc(func(r *http.Request) (Identity, error) {
+		calls++
+		if r.Header.Get("X-Sandrpod-Token") == "" {
+			// the gateway hands the presented key over in this header
+			return Identity{}, ErrUnauthenticated
+		}
+		return Identity{Name: "workspace:acme", Role: RoleUser}, nil
+	})
+	cfg := Config{Token: "platform", E2BAPIKeys: resolver}
+	gw := NewE2BGateway("", cfg, stores, tunnel.NewTunnelStore(), tunnel.NewDirectTunnelStore())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/sandboxes", nil)
+	req.Header.Set("X-API-KEY", "sk_customer_key")
+	gw.ServeHTTP(rec, req)
+
+	if calls == 0 {
+		t.Fatal("the configured resolver was never consulted")
+	}
+	if rec.Code == http.StatusUnauthorized {
+		t.Fatalf("a key from the deployment's resolver was refused: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// authenticatorFunc adapts a function to the Authenticator interface.
+type authenticatorFunc func(*http.Request) (Identity, error)
+
+func (f authenticatorFunc) Authenticate(r *http.Request) (Identity, error) { return f(r) }
