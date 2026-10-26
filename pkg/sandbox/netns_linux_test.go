@@ -130,9 +130,13 @@ func TestNetnsRelay_ProxyIsTheOnlyWayOut(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Decisions are recorded so the test can assert them.
+	decisions := make(chan egress.Event, 16)
 	srv, err := egress.Start(egress.Options{
 		Policy:         compiled,
 		UnixSocketPath: filepath.Join(sockDir, "proxy.sock"),
+		Sink:           sinkFunc(func(e egress.Event) { decisions <- e }),
+		LogAllowed:     true,
 	})
 	if err != nil {
 		t.Fatalf("start egress on a unix socket: %v", err)
@@ -184,16 +188,21 @@ func TestNetnsRelay_ProxyIsTheOnlyWayOut(t *testing.T) {
 		t.Fatalf("unexpected output for the no-route check: %q (%v)", out, err)
 	}
 
-	// 2. Through the relay and the proxy, the allowed host works. Wait for the
-	//    relay to be listening; the wrapper starts it in the background.
-	deadline := time.Now().Add(10 * time.Second)
+	// 2. Through the relay and the proxy, the allowed host is allowed. The
+	//    assertion is the proxy's *decision*, not whether example.com answered:
+	//    requiring a live fetch made this test fail on runners with a bad link,
+	//    and "the runner had no route" was indistinguishable from "the proxy
+	//    refused". The request still crosses loopback inside the namespace, so
+	//    the relay and the socket are exercised either way.
+	deadline := time.Now().Add(15 * time.Second)
 	for {
-		out, _ = run(proxyEnv, "wget -T 5 -q -O /dev/null http://example.com/ && echo OK || echo FAIL")
-		if strings.Contains(out, "OK") {
+		_, _ = run(proxyEnv, "wget -T 5 -q -O /dev/null http://example.com/ || true")
+		if ev, ok := waitForDecision(decisions, "example.com", "allowed", 1*time.Second); ok {
+			_ = ev
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("allowed host never went through: %s", out)
+			t.Fatalf("allowed host never reached the proxy")
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -339,5 +348,28 @@ func TestNetnsRelay_MaskedCredentialReachesTheUpstream(t *testing.T) {
 
 	if seen != "Bearer "+real {
 		t.Fatalf("upstream saw %q, want the real credential", seen)
+	}
+}
+
+// sinkFunc adapts a function to egress.Sink, so a test can observe decisions.
+type sinkFunc func(egress.Event)
+
+func (f sinkFunc) RecordEgress(e egress.Event) { f(e) }
+
+// waitForDecision waits for an event about host with the given code, returning
+// the last event seen so a failure can say what actually happened.
+func waitForDecision(ch <-chan egress.Event, host, code string, timeout time.Duration) (egress.Event, bool) {
+	deadline := time.After(timeout)
+	var last egress.Event
+	for {
+		select {
+		case ev := <-ch:
+			last = ev
+			if ev.Host == host && ev.Code == code {
+				return ev, true
+			}
+		case <-deadline:
+			return last, false
+		}
 	}
 }
