@@ -156,6 +156,7 @@ func newE2BGateway(domain string, d e2bDeps) http.Handler {
 	return e2bcompat.Handler(e2bcompat.Config{
 		Domain:          domain,
 		Auth:            d.authenticator(),
+		Authz:           d.authz(),
 		Throttle:        d.throttle,
 		Authorize:       d.authorizeSandbox,
 		Sandboxes:       &e2bSandboxBackend{d},
@@ -262,6 +263,24 @@ func (d e2bDeps) throttle(ident string, admin bool) bool {
 		return true
 	}
 	return apiRateLimit.allow(ident)
+}
+
+// authz is the tenant-aware resolver: when the host supplied one (a hosted
+// build that issues workspace-scoped keys), the gateway uses it and placement
+// is scoped exactly as on the native API. Without it, Auth stays in charge.
+func (d e2bDeps) authz() func(key string) (e2bcompat.Identity, bool) {
+	if d.cfg.E2BAPIKeys == nil {
+		return nil
+	}
+	return func(key string) (e2bcompat.Identity, bool) {
+		r, _ := http.NewRequest(http.MethodGet, "/", nil)
+		r.Header.Set("X-Sandrpod-Token", key)
+		id, err := d.cfg.E2BAPIKeys.Authenticate(r)
+		if err != nil {
+			return e2bcompat.Identity{}, false
+		}
+		return e2bcompat.Identity{Name: id.Name, Tenant: id.Tenant, Admin: id.IsAdmin()}, true
+	}
 }
 
 func (d e2bDeps) authenticator() e2bcompat.Authenticator {
@@ -507,7 +526,7 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 	}
 	// The E2B client is identified by a name plus an admin flag; the admission
 	// gate takes an Identity, so build the equivalent one.
-	requester := Identity{Name: ident, Role: RoleUser}
+	requester := Identity{Name: ident, Role: RoleUser, Tenant: req.Tenant}
 	if admin {
 		requester.Role = RoleAdmin
 	}

@@ -25,6 +25,7 @@ const (
 	ctxIdent ctxKey = iota
 	ctxSandbox
 	ctxAdmin
+	ctxTenant
 )
 
 // Authenticator validates a presented E2B key. identity is the string backends
@@ -32,6 +33,15 @@ const (
 // limits (the host's own notion of a privileged token). Return ok=false to
 // reject.
 type Authenticator func(key string) (identity string, admin bool, ok bool)
+
+// Identity is who a presented key belongs to, when the host can say more than a
+// name. Tenant scopes where that caller's sandboxes may be placed; a gateway
+// that only knows names leaves it empty.
+type Identity struct {
+	Name   string
+	Tenant string
+	Admin  bool
+}
 
 // Config wires the gateway.
 type Config struct {
@@ -41,6 +51,10 @@ type Config struct {
 	// everything is treated as control plane (useful for path-based testing).
 	Domain string
 	Auth   Authenticator
+	// Authz, when set, supersedes Auth and can also report the caller's tenant.
+	// Auth stays for hosts that only have names; a multi-tenant host uses this
+	// so that placement is scoped the same way it is on the native API.
+	Authz func(key string) (Identity, bool)
 	// Throttle, when set, is consulted after authentication with the resolved
 	// identity. Returning false rejects the request with 429. The host embeds
 	// its own limiter here: this gateway is usually dispatched to ahead of the
@@ -167,7 +181,17 @@ func Handler(cfg Config) http.Handler {
 		if key == "" {
 			key = r.Header.Get("X-Access-Token")
 		}
-		ident, admin, ok := cfg.Auth(key)
+		var ident string
+		var admin, ok bool
+		var tenant string
+		if cfg.Authz != nil {
+			// The richer resolver wins when the host supplied one.
+			if id, okz := cfg.Authz(key); okz {
+				ident, admin, ok, tenant = id.Name, id.Admin, true, id.Tenant
+			}
+		} else if cfg.Auth != nil {
+			ident, admin, ok = cfg.Auth(key)
+		}
 		if !ok {
 			if healthProbe {
 				writeErr(w, http.StatusBadGateway, "sandbox is not running")
@@ -189,6 +213,7 @@ func Handler(cfg Config) http.Handler {
 		}
 		r = r.WithContext(context.WithValue(r.Context(), ctxIdent, ident))
 		r = r.WithContext(context.WithValue(r.Context(), ctxAdmin, admin))
+		r = r.WithContext(context.WithValue(r.Context(), ctxTenant, tenant))
 
 		if cfg.Throttle != nil && !cfg.Throttle(ident, admin) {
 			writeErr(w, http.StatusTooManyRequests, "rate limit exceeded")
@@ -372,6 +397,13 @@ func identOf(r *http.Request) string {
 // adminOf reports whether the authenticated key is exempt from per-owner limits.
 func adminOf(r *http.Request) bool {
 	v, _ := r.Context().Value(ctxAdmin).(bool)
+	return v
+}
+
+// tenantOf returns the authenticated caller's tenant, empty on a host that does
+// not have them.
+func tenantOf(r *http.Request) string {
+	v, _ := r.Context().Value(ctxTenant).(string)
 	return v
 }
 

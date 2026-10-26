@@ -28,6 +28,10 @@ type NewSandbox struct {
 	AllowInternetAccess *bool             `json:"allow_internet_access,omitempty"`
 	Metadata            map[string]string `json:"metadata,omitempty"`
 	EnvVars             map[string]string `json:"envVars,omitempty"`
+	// Tenant is NOT part of E2B's wire format. The gateway fills it from the
+	// authenticated identity so the backend can scope placement the same way
+	// the native API does; a single-tenant host leaves it empty.
+	Tenant string `json:"-"`
 }
 
 // Sandbox is the POST /sandboxes (and resume) response.

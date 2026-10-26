@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sandrpod/sandrpod/pkg/e2bcompat"
 	"github.com/sandrpod/sandrpod/pkg/egress"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/store"
@@ -291,3 +292,75 @@ func TestE2BGateway_UsesConfiguredAPIKeyResolver(t *testing.T) {
 type authenticatorFunc func(*http.Request) (Identity, error)
 
 func (f authenticatorFunc) Authenticate(r *http.Request) (Identity, error) { return f(r) }
+
+// The E2B surface must scope placement the same way the native API does: a key
+// that belongs to a tenant creates sandboxes inside that tenant, not wherever
+// there happens to be capacity.
+func TestE2BGateway_CarriesTenantIntoPlacement(t *testing.T) {
+	stores := store.NewMemoryStores()
+	resolver := authenticatorFunc(func(r *http.Request) (Identity, error) {
+		if r.Header.Get("X-Sandrpod-Token") != "sk_acme" {
+			return Identity{}, ErrUnauthenticated
+		}
+		return Identity{Name: "workspace:acme", Role: RoleUser, Tenant: "acme"}, nil
+	})
+	cfg := Config{Token: "platform", E2BAPIKeys: resolver}
+
+	var gotTenant string
+	sandboxes := &recordingSandboxes{onCreate: func(req e2bcompat.NewSandbox) { gotTenant = req.Tenant }}
+	gw := newTestE2BGateway(cfg, stores, sandboxes)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/sandboxes", strings.NewReader(`{"templateID":"base"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-API-KEY", "sk_acme")
+	gw.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body.String())
+	}
+	if gotTenant != "acme" {
+		t.Fatalf("tenant at the backend = %q, want %q", gotTenant, "acme")
+	}
+}
+
+// recordingSandboxes is a minimal E2B backend that records the create request.
+type recordingSandboxes struct {
+	onCreate func(e2bcompat.NewSandbox)
+}
+
+func (r *recordingSandboxes) CreateSandbox(ident string, admin bool, req e2bcompat.NewSandbox) (e2bcompat.SandboxDetail, error) {
+	if r.onCreate != nil {
+		r.onCreate(req)
+	}
+	return e2bcompat.SandboxDetail{SandboxID: "sb-1", TemplateID: req.TemplateID}, nil
+}
+
+func (r *recordingSandboxes) GetSandbox(string, string) (e2bcompat.SandboxDetail, bool) {
+	return e2bcompat.SandboxDetail{}, false
+}
+
+func (r *recordingSandboxes) ListSandboxes(string, map[string]string) []e2bcompat.ListedSandbox {
+	return nil
+}
+
+func (r *recordingSandboxes) KillSandbox(string, string) bool       { return false }
+func (r *recordingSandboxes) SetTimeout(string, string, int32) bool { return true }
+func (r *recordingSandboxes) PauseSandbox(string, string) bool      { return false }
+func (r *recordingSandboxes) ResumeSandbox(string, string, int32) (e2bcompat.SandboxDetail, bool) {
+	return e2bcompat.SandboxDetail{}, false
+}
+func (r *recordingSandboxes) GetMetrics(string, string) ([]e2bcompat.SandboxMetric, bool) {
+	return nil, true
+}
+
+// newTestE2BGateway wires the real gateway around a recording backend, so the
+// test exercises the same authentication and placement plumbing production
+// uses.
+func newTestE2BGateway(cfg Config, stores podpkg.Stores, backend e2bcompat.SandboxBackend) http.Handler {
+	return e2bcompat.Handler(e2bcompat.Config{
+		Authz:     (&e2bDeps{cfg: cfg}).authz(),
+		Auth:      (&e2bDeps{cfg: cfg}).authenticator(),
+		Sandboxes: backend,
+	})
+}

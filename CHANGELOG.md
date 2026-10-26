@@ -50,6 +50,17 @@ deployment can notice.
 
 ### Added
 
+- **The E2B surface scopes placement like every other surface.** `e2bcompat.Config`
+  gained an optional `Authz func(key) (Identity, bool)` — the richer form of
+  `Auth`, which can also report the caller's tenant — and `NewSandbox` carries
+  that tenant to the backend on a field that is not part of E2B's wire format.
+  A hosted build that issues workspace-scoped keys now gets tenant-scoped
+  placement on `/v2/sandboxes` too, instead of sandboxes landing wherever there
+  was capacity. `Auth` keeps working unchanged for hosts that only have names;
+  `Authz` wins when both are set.
+
+### Added
+
 - **Sandbox create latency: 4.2s → 230ms (p50, measured).** The pode called
   `ImagePull` on every create, which costs a registry round-trip even when the
   image is already local (1.8s here) — the single largest part of the cold

@@ -85,6 +85,10 @@ func (c *controlPlane) handleSandboxes(w http.ResponseWriter, r *http.Request) {
 		if req.Timeout == 0 {
 			req.Timeout = DefaultTimeoutSeconds
 		}
+		// The tenant travels with the request so the backend can scope
+		// placement, exactly as the native API does. It is not part of E2B's
+		// wire format: the gateway fills it from the authenticated identity.
+		req.Tenant = tenantOf(r)
 		detail, err := c.backend.CreateSandbox(ident, adminOf(r), req)
 		if err != nil {
 			if errors.Is(err, ErrQuotaExceeded) {
