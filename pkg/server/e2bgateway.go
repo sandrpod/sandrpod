@@ -16,6 +16,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -41,6 +42,9 @@ type e2bDeps struct {
 	tunnelStore *tunnel.TunnelStore
 	directStore *tunnel.TunnelStore
 	owners      podpkg.TunnelOwnerRepository
+	// admission is the same gate the native API uses; the E2B surface maps its
+	// refusal onto E2B's own error type instead of inventing a second policy.
+	admission Admission
 }
 
 // forwardE2B backs e2bcompat's Forwarder hook. In multi-instance load mode a
@@ -145,7 +149,7 @@ func newE2BGateway(domain string, d e2bDeps) http.Handler {
 	})
 }
 
-// resolveSingleSandbox returns the identity's sole running sandbox. Used in
+// resolveSingleSandbox returns the Identity's sole running sandbox. Used in
 // HTTP debug mode, where the SDK is pointed at a fixed E2B_SANDBOX_URL and the
 // sandbox ID can't be read from the Host. Returns "" when there is not exactly
 // one candidate (ambiguous → let the envd call 404 clearly).
@@ -167,7 +171,7 @@ func (d e2bDeps) resolveSingleSandbox(ident string) string {
 }
 
 // authorizeSandbox is the data-plane ownership gate (e2bcompat.Config.Authorize):
-// the authenticated identity may act on the sandbox only if it owns it. Mirrors
+// the authenticated Identity may act on the sandbox only if it owns it. Mirrors
 // the control-plane e2bSandboxBackend.owns semantics exactly — ident=="" is the
 // auth-disabled/anonymous case, and an unowned (legacy) record stays world-
 // visible for back-compat, matching canAccessSandbox. An unknown sandbox is
@@ -224,13 +228,13 @@ func (b *e2bCodeBackend) RestartContext(name, contextID string) error {
 	return b.d.toolboxJSON(name, http.MethodPost, "code-interpreter/contexts/"+contextID+"/restart", nil, nil, nil)
 }
 
-// authenticator maps a presented E2B key to a SandrPod identity. When auth is
+// authenticator maps a presented E2B key to a SandrPod Identity. When auth is
 // disabled it accepts any e2b_<hex>-shaped key anonymously.
-// throttle applies the same per-identity rate limit the native API uses
+// throttle applies the same per-Identity rate limit the native API uses
 // (-rate-limit). e2bHostRouter dispatches to the gateway ahead of the native
 // auth middleware, so without this the limiter does not exist on this surface —
 // which is the one deployments actually expose. Anonymous callers (public
-// sandbox ports) are exempt: they share one identity, so a bucket would be a
+// sandbox ports) are exempt: they share one Identity, so a bucket would be a
 // single global cap on legitimate preview traffic.
 func (d e2bDeps) throttle(ident string, admin bool) bool {
 	if apiRateLimit == nil || admin || ident == "" {
@@ -251,22 +255,22 @@ func (d e2bDeps) authenticator() e2bcompat.Authenticator {
 			return "", false, false
 		}
 		if id, ok := resolveToken(d.cfg, key); ok {
-			return id.Name, id.isAdmin(), true
+			return id.Name, id.IsAdmin(), true
 		}
 		// Per-sandbox envd access tokens: the gateway mints these (envdToken)
 		// and stores them in a sandbox label. The SDK presents them for envd /
 		// code calls as Authorization: Bearer, so accept a key matching one and
-		// authenticate as the owning sandbox's identity. resolveToken only knows
+		// authenticate as the owning sandbox's Identity. resolveToken only knows
 		// server tokens; without this, every envd op 401s once server auth is on
 		// (the local, auth-off harness never exercised this path).
 		// A per-sandbox envd token authenticates as the owning sandbox's
-		// identity, which is never privileged.
+		// Identity, which is never privileged.
 		id, ok := d.envdTokenIdentity(key)
 		return id, false, ok
 	}
 }
 
-// envdTokenIdentity reports the identity owning the sandbox whose envd access
+// envdTokenIdentity reports the Identity owning the sandbox whose envd access
 // token equals key. Constant-time compare avoids leaking the token via timing.
 func (d e2bDeps) envdTokenIdentity(key string) (string, bool) {
 	for _, sb := range d.sandboxes.List() {
@@ -457,13 +461,6 @@ func e2bSubstrate() (provider, region, instanceType string) {
 }
 
 func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompat.NewSandbox) (e2bcompat.SandboxDetail, error) {
-	// Same per-owner cap the native POST /api/v1/sandboxes enforces. Without
-	// this the flag silently did nothing on the surface most deployments put on
-	// a public IP.
-	if !admin && quotaExceeded(b.d.sandboxes, ident, b.d.cfg.MaxSandboxesPerOwner) {
-		return e2bcompat.SandboxDetail{}, fmt.Errorf("%w (%d)",
-			e2bcompat.ErrQuotaExceeded, b.d.cfg.MaxSandboxesPerOwner)
-	}
 	name := "e2b" + randToken(8)
 	provider, region, instanceType := e2bSubstrate()
 	create := &podpkg.CreateSandboxRequest{
@@ -477,8 +474,28 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 	if strings.ContainsAny(req.TemplateID, "/:") {
 		create.ImageID = req.TemplateID
 	}
-	sb, _, err := runSandboxCreate(b.d.scheduler, b.d.sandboxes, b.d.poders, b.d.jobs, b.d.tunnelStore, create, "", ident)
+	// The E2B client is identified by a name plus an admin flag; the admission
+	// gate takes an Identity, so build the equivalent one.
+	requester := Identity{Name: ident, Role: RoleUser}
+	if admin {
+		requester.Role = RoleAdmin
+	}
+	// New supplies this, but an E2B gateway built directly (tests, embedding)
+	// can leave it unset — fall back to the same gate New would have built, so
+	// the quota rule does not depend on which constructor was used.
+	admission := b.d.admission
+	if admission == nil {
+		admission = admissionFor(b.d.cfg, b.d.sandboxes)
+	}
+	sb, _, err := runSandboxCreate(b.d.scheduler, b.d.sandboxes, b.d.poders, b.d.jobs, b.d.tunnelStore, create, "", ident, admission, requester)
 	if err != nil {
+		// The gate runs once, at the choke point, with the real request in
+		// hand; this boundary only translates its refusal into E2B's error
+		// vocabulary so an E2B client sees a quota error rather than a 500.
+		if errors.Is(err, ErrQuotaExceeded) {
+			return e2bcompat.SandboxDetail{}, fmt.Errorf("%w (%d)",
+				e2bcompat.ErrQuotaExceeded, b.d.cfg.MaxSandboxesPerOwner)
+		}
 		return e2bcompat.SandboxDetail{}, err
 	}
 	// Persist E2B metadata + template as labels so get/list round-trip them.

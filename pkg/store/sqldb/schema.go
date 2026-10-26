@@ -36,6 +36,10 @@ CREATE TABLE IF NOT EXISTS sandboxes (
     egress_policy  TEXT    NOT NULL DEFAULT '',
     owner          TEXT    NOT NULL DEFAULT '',
     ttl_seconds    INTEGER NOT NULL DEFAULT 0,
+    -- What the create request reserved (0 = the substrate default). Metering
+    -- reads these; they cannot be recovered once the request is gone.
+    cpu_cores      REAL    NOT NULL DEFAULT 0,
+    memory_mb      INTEGER NOT NULL DEFAULT 0,
     created_at     DATETIME NOT NULL,
     last_activity  DATETIME NOT NULL
 );
@@ -120,6 +124,8 @@ var columnMigrations = []string{
 	`ALTER TABLE jobs ADD COLUMN owner TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE sandboxes ADD COLUMN ttl_seconds INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE sandboxes ADD COLUMN egress_policy TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sandboxes ADD COLUMN cpu_cores REAL NOT NULL DEFAULT 0`,
+	`ALTER TABLE sandboxes ADD COLUMN memory_mb INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE poders ADD COLUMN capabilities TEXT NOT NULL DEFAULT ''`,
 }
 

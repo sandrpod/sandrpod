@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -19,6 +20,49 @@ import (
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
+
+// Admission gates sandbox creation: quota, metering, risk checks — whatever a
+// deployment wants to refuse before a container exists.
+//
+// It is called twice on purpose. The handlers call it early so a refusal is a
+// clean 4xx with the caller's request still in front of them; runSandboxCreate
+// calls it again at the choke point so a future entry point cannot skip it.
+// Implementations must therefore be idempotent: a second call for the same
+// request must reach the same verdict.
+type Admission interface {
+	Admit(ctx context.Context, id Identity, req *podpkg.CreateSandboxRequest) error
+}
+
+// ErrQuotaExceeded is the refusal an Admission returns when the caller is at
+// their limit. Callers map it to their own surface (429 for the native API,
+// e2bcompat.ErrQuotaExceeded for the E2B gateway).
+var ErrQuotaExceeded = errors.New("sandbox quota reached")
+
+// admissionFor returns the deployment's gate, or the built-in quota rule. Both
+// New and the E2B gateway need the same one, and it must be the same object:
+// a deployment that counts usage would otherwise count twice.
+func admissionFor(cfg Config, store podpkg.SandboxRepository) Admission {
+	if cfg.Admission != nil {
+		return cfg.Admission
+	}
+	return quotaAdmission{store: store, max: cfg.MaxSandboxesPerOwner}
+}
+
+// quotaAdmission is the built-in rule: MaxSandboxesPerOwner, admins exempt.
+type quotaAdmission struct {
+	store podpkg.SandboxRepository
+	max   int
+}
+
+func (q quotaAdmission) Admit(_ context.Context, id Identity, _ *podpkg.CreateSandboxRequest) error {
+	if id.IsAdmin() || q.max <= 0 {
+		return nil
+	}
+	if quotaExceeded(q.store, id.Name, q.max) {
+		return ErrQuotaExceeded
+	}
+	return nil
+}
 
 // runSandboxCreate executes the full create flow: schedule (reuse or provision
 // a poder), record the sandbox, create the container through the tunnel, and
@@ -37,9 +81,23 @@ func runSandboxCreate(
 	req *podpkg.CreateSandboxRequest,
 	preJobID string,
 	owner string,
+	admission Admission,
+	requester Identity,
 ) (*podpkg.SandboxInfo, string, error) {
+	// The choke point: every path that provisions a sandbox passes through
+	// here, so a new entry point cannot silently skip the deployment's gate.
+	// Handlers already refused early for a better error surface; Admission is
+	// required to be idempotent for exactly this reason.
+	if admission != nil {
+		if err := admission.Admit(context.Background(), requester, req); err != nil {
+			return nil, preJobID, fmt.Errorf("failed to create sandbox: %w", err)
+		}
+	}
 	failBoth := func(jobID, msg string) {
-		notifyEvent("sandbox.error", map[string]any{"name": req.Name, "provider": req.ProviderType, "error": msg})
+		notifyEvent("sandbox.error", map[string]any{
+			"name": req.Name, "provider": req.ProviderType, "error": msg,
+			"owner": owner, "cpu_cores": req.CPUCores, "memory_mb": req.MemoryMB,
+		})
 		if jobID != "" {
 			_ = jobStore.UpdateJob(jobID, func(j *podpkg.Job) {
 				j.Status = podpkg.JobStatusFailed
@@ -91,6 +149,8 @@ func runSandboxCreate(
 			s.OS = sbOS
 			s.OSVersion = sbOSVersion
 			s.TTLSeconds = req.TTLSeconds
+			s.CPUCores = req.CPUCores
+			s.MemoryMB = req.MemoryMB
 			// A create request may carry a new policy (same sandbox name,
 			// recreated); keep the record in step with the request.
 			if req.Network != nil {
@@ -107,6 +167,8 @@ func runSandboxCreate(
 			InstanceType: req.InstanceType,
 			Owner:        owner,
 			TTLSeconds:   req.TTLSeconds,
+			CPUCores:     req.CPUCores,
+			MemoryMB:     req.MemoryMB,
 			Network:      req.Network,
 			PoderID:      schedJob.PoderID,
 			ProxyURL:     "tunnel://" + schedJob.PoderID,
@@ -169,7 +231,11 @@ func runSandboxCreate(
 		}
 	})
 	sb, _ := sandboxStore.Get(req.Name)
-	notifyEvent("sandbox.running", map[string]any{"name": req.Name, "provider": req.ProviderType, "poder_id": schedJob.PoderID})
+	if sb != nil {
+		notifyEvent("sandbox.running", sandboxEvent(sb, map[string]any{"poder_id": schedJob.PoderID}))
+	} else {
+		notifyEvent("sandbox.running", map[string]any{"name": req.Name, "provider": req.ProviderType, "poder_id": schedJob.PoderID})
+	}
 	return sb, jobID, nil
 }
 

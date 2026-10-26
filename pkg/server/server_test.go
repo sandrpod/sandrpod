@@ -1,12 +1,15 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/store"
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
@@ -250,4 +253,30 @@ func TestDeletePoderNotFound(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "poder not found") {
 		t.Errorf("expected body to contain 'poder not found', got: %s", w.Body.String())
 	}
+}
+
+// A deployment's Admission replaces the quota rule and gates every create path
+// at the choke point, including ones that do not go through the native handler.
+func TestCreate_AdmissionRefuses(t *testing.T) {
+	stores := store.NewMemoryStores()
+	h := New(Config{Admission: denyingAdmission{}}, stores, tunnel.NewTunnelStore(), tunnel.NewDirectTunnelStore())
+
+	body := `{"name":"blocked","region":"local","provider_type":"local"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sandboxes", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status %d, want 403 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "tenant is out of credit") {
+		t.Fatalf("the refusal reason should reach the caller, got %q", rec.Body.String())
+	}
+}
+
+type denyingAdmission struct{}
+
+func (denyingAdmission) Admit(context.Context, Identity, *podpkg.CreateSandboxRequest) error {
+	return errors.New("tenant is out of credit")
 }

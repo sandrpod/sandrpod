@@ -52,12 +52,12 @@ func handleTokens(cfg Config, tokens podpkg.APITokenRepository) http.HandlerFunc
 				http.Error(w, "name is required", http.StatusBadRequest)
 				return
 			}
-			role := roleUser
+			role := RoleUser
 			switch req.Role {
-			case "", roleUser:
-				role = roleUser
-			case roleAdmin:
-				role = roleAdmin
+			case "", RoleUser:
+				role = RoleUser
+			case RoleAdmin:
+				role = RoleAdmin
 			default:
 				http.Error(w, "role must be admin or user", http.StatusBadRequest)
 				return
@@ -79,7 +79,7 @@ func handleTokens(cfg Config, tokens podpkg.APITokenRepository) http.HandlerFunc
 				return
 			}
 			if cfg.Keys != nil {
-				cfg.Keys.put(tok.Hash, identity{Name: tok.Name, Role: tok.Role})
+				cfg.Keys.put(tok.Hash, Identity{Name: tok.Name, Role: tok.Role})
 			}
 			if cfg.NotifyTokenChange != nil {
 				cfg.NotifyTokenChange() // wake peer instances to reload (multi-instance)

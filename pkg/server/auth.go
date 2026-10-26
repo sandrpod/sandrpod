@@ -15,6 +15,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -28,8 +29,8 @@ import (
 
 // Token roles.
 const (
-	roleAdmin = "admin"
-	roleUser  = "user"
+	RoleAdmin = "admin"
+	RoleUser  = "user"
 )
 
 // NamedToken is one entry of the -tokens-file.
@@ -64,9 +65,9 @@ func loadTokensFile(path string) ([]NamedToken, error) {
 			return nil, fmt.Errorf("tokens file entry %d: name and token are required", i)
 		}
 		if t.Role == "" {
-			t.Role = roleUser
+			t.Role = RoleUser
 		}
-		if t.Role != roleAdmin && t.Role != roleUser {
+		if t.Role != RoleAdmin && t.Role != RoleUser {
 			return nil, fmt.Errorf("tokens file entry %q: role must be admin or user", t.Name)
 		}
 		if seenName[t.Name] || seenTok[t.Token] {
@@ -136,24 +137,24 @@ func hashKey(raw string) string {
 }
 
 // apiKeyIndex is the in-memory hot-path lookup for DB-issued API tokens:
-// sha256(key) -> identity. It is loaded from the token store at startup and
+// sha256(key) -> Identity. It is loaded from the token store at startup and
 // updated in lockstep as tokens are issued/revoked, so authentication never
 // touches the database. The DB remains the durable source of truth.
 type apiKeyIndex struct {
 	mu sync.RWMutex
-	m  map[string]identity
+	m  map[string]Identity
 }
 
-func newAPIKeyIndex() *apiKeyIndex { return &apiKeyIndex{m: map[string]identity{}} }
+func newAPIKeyIndex() *apiKeyIndex { return &apiKeyIndex{m: map[string]Identity{}} }
 
-func (x *apiKeyIndex) get(hash string) (identity, bool) {
+func (x *apiKeyIndex) get(hash string) (Identity, bool) {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
 	id, ok := x.m[hash]
 	return id, ok
 }
 
-func (x *apiKeyIndex) put(hash string, id identity) {
+func (x *apiKeyIndex) put(hash string, id Identity) {
 	x.mu.Lock()
 	x.m[hash] = id
 	x.mu.Unlock()
@@ -176,40 +177,83 @@ func (x *apiKeyIndex) load(toks []*podpkg.APIToken) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	for _, t := range toks {
-		x.m[t.Hash] = identity{Name: t.Name, Role: t.Role}
+		x.m[t.Hash] = Identity{Name: t.Name, Role: t.Role}
 	}
 }
 
 // replace swaps the whole index atomically. Used by the periodic multi-instance
 // reload so tokens issued OR revoked on peer instances converge here.
 func (x *apiKeyIndex) replace(toks []*podpkg.APIToken) {
-	m := make(map[string]identity, len(toks))
+	m := make(map[string]Identity, len(toks))
 	for _, t := range toks {
-		m[t.Hash] = identity{Name: t.Name, Role: t.Role}
+		m[t.Hash] = Identity{Name: t.Name, Role: t.Role}
 	}
 	x.mu.Lock()
 	x.m = m
 	x.mu.Unlock()
 }
 
-// identity is who a request authenticated as.
-type identity struct {
+// Identity is who a request authenticated as.
+type Identity struct {
 	Name string
 	Role string
 }
 
-func (id identity) isAdmin() bool { return id.Role == roleAdmin }
+func (id Identity) IsAdmin() bool { return id.Role == RoleAdmin }
+
+// Authenticator decides who made a request. The default implementation is the
+// built-in token scheme (Config.Token, the tokens file, DB-issued keys); a
+// different program can supply registration, sessions or OIDC instead.
+//
+// Returning an error refuses the request. The sentinels below map to status
+// codes, so an implementation can distinguish "no credential" from "credential
+// for someone else" from "too many requests" instead of collapsing them into
+// one 401.
+type Authenticator interface {
+	Authenticate(r *http.Request) (Identity, error)
+}
+
+// Refusal reasons an Authenticator can return. Anything else is treated as
+// ErrUnauthenticated plus a log line, because an unrecognised error must not
+// become a 200.
+var (
+	ErrUnauthenticated = errors.New("unauthenticated")
+	ErrForbidden       = errors.New("forbidden")
+	ErrRateLimited     = errors.New("rate limited")
+)
+
+// Authenticate implements Authenticator with the built-in token scheme.
+func (cfg Config) Authenticate(r *http.Request) (Identity, error) {
+	if cfg.authDisabled() {
+		// Legacy: no credential configured means the server is open, and every
+		// request is an anonymous admin. Kept for upgrade smoothness; a build
+		// that must never be open supplies its own Authenticator.
+		return Identity{Name: "", Role: RoleAdmin}, nil
+	}
+	if id, ok := resolveRequest(cfg, r); ok {
+		// Per-identity rate limit for user tokens (admins/poders exempt).
+		if apiRateLimit != nil && !id.IsAdmin() && !apiRateLimit.allow(id.Name) {
+			return Identity{}, ErrRateLimited
+		}
+		return id, nil
+	}
+	return Identity{}, ErrUnauthenticated
+}
 
 type identityCtxKey struct{}
 
-// identityFrom returns the request's authenticated identity. When auth is
-// disabled the middleware stores an anonymous admin, so the zero-value
-// fallback here is defensive only.
-func identityFrom(r *http.Request) identity {
-	if id, ok := r.Context().Value(identityCtxKey{}).(identity); ok {
+// IdentityFrom returns the request's authenticated Identity.
+//
+// The zero value here is deliberately NOT an admin: a request that reaches a
+// handler without the middleware having set an identity is a bug (or a new
+// route that forgot its middleware), and answering it as an administrator is
+// how such a bug becomes a vulnerability. IsAdmin() is false for the zero
+// value, so the failure is "no access" rather than "all access".
+func IdentityFrom(r *http.Request) Identity {
+	if id, ok := r.Context().Value(identityCtxKey{}).(Identity); ok {
 		return id
 	}
-	return identity{Name: "", Role: roleAdmin}
+	return Identity{}
 }
 
 // resolveToken matches a presented credential against the configured tokens
@@ -227,10 +271,10 @@ func (cfg Config) authDisabled() bool {
 		(cfg.Keys == nil || cfg.Keys.len() == 0)
 }
 
-func resolveToken(cfg Config, presented string) (identity, bool) {
+func resolveToken(cfg Config, presented string) (Identity, bool) {
 	if cfg.Token != "" &&
 		subtle.ConstantTimeCompare([]byte(presented), []byte(cfg.Token)) == 1 {
-		return identity{Name: "admin", Role: roleAdmin}, true
+		return Identity{Name: "admin", Role: RoleAdmin}, true
 	}
 	candidates := cfg.Tokens
 	if cfg.Registry != nil {
@@ -238,7 +282,7 @@ func resolveToken(cfg Config, presented string) (identity, bool) {
 	}
 	for _, t := range candidates {
 		if subtle.ConstantTimeCompare([]byte(presented), []byte(t.Token)) == 1 {
-			return identity{Name: t.Name, Role: t.Role}, true
+			return Identity{Name: t.Name, Role: t.Role}, true
 		}
 	}
 	// DB-issued tokens: matched by hash via the in-memory index. Preimage
@@ -253,19 +297,19 @@ func resolveToken(cfg Config, presented string) (identity, bool) {
 		// this instance's index yet. Look it up in the shared store and cache it.
 		if cfg.NodeURL != "" && cfg.TokenStore != nil {
 			if t, ok := cfg.TokenStore.FindByHash(h); ok {
-				id := identity{Name: t.Name, Role: t.Role}
+				id := Identity{Name: t.Name, Role: t.Role}
 				cfg.Keys.put(h, id)
 				return id, true
 			}
 		}
 	}
-	return identity{}, false
+	return Identity{}, false
 }
 
 // resolveRequest tries each supported credential header in turn: a wrong
 // X-Sandrpod-Token still falls back to the Authorization Bearer (callers may
 // carry an unrelated Bearer, e.g. an MCP token, alongside the platform token).
-func resolveRequest(cfg Config, r *http.Request) (identity, bool) {
+func resolveRequest(cfg Config, r *http.Request) (Identity, bool) {
 	if got := r.Header.Get("X-Sandrpod-Token"); got != "" {
 		if id, ok := resolveToken(cfg, got); ok {
 			return id, true
@@ -276,22 +320,22 @@ func resolveRequest(cfg Config, r *http.Request) (identity, bool) {
 			return id, true
 		}
 	}
-	return identity{}, false
+	return Identity{}, false
 }
 
-// withIdentity stores the identity on the request context.
-func withIdentity(r *http.Request, id identity) *http.Request {
+// WithIdentity stores the Identity on the request context.
+func WithIdentity(r *http.Request, id Identity) *http.Request {
 	return r.WithContext(context.WithValue(r.Context(), identityCtxKey{}, id))
 }
 
-// canAccessSandbox reports whether an identity may see/manage a sandbox.
+// canAccessSandbox reports whether an Identity may see/manage a sandbox.
 // Admins see everything; ownerless records (created before multi-token auth,
 // or with auth disabled) stay visible to everyone for upgrade smoothness.
-func canAccessSandbox(id identity, sb *podpkg.SandboxInfo) bool {
-	return id.isAdmin() || sb.Owner == "" || sb.Owner == id.Name
+func canAccessSandbox(id Identity, sb *podpkg.SandboxInfo) bool {
+	return id.IsAdmin() || sb.Owner == "" || sb.Owner == id.Name
 }
 
 // canAccessJob is the job-record equivalent of canAccessSandbox.
-func canAccessJob(id identity, j *podpkg.Job) bool {
-	return id.isAdmin() || j.Owner == "" || j.Owner == id.Name
+func canAccessJob(id Identity, j *podpkg.Job) bool {
+	return id.IsAdmin() || j.Owner == "" || j.Owner == id.Name
 }

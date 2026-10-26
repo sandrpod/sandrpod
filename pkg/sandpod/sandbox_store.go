@@ -26,12 +26,18 @@ type SandboxInfo struct {
 	// records are visible to every authenticated caller for upgrade smoothness.
 	Owner string `json:"owner,omitempty"`
 	// TTLSeconds > 0 = reap after this many idle seconds (per-sandbox override).
-	TTLSeconds  int64  `json:"ttl_seconds,omitempty"`
-	PoderID     string `json:"poder_id,omitempty"`     // owning Poder ID
-	PoderURL    string `json:"poder_url,omitempty"`    // Poder API URL
-	ContainerID string `json:"container_id,omitempty"` // actual container ID
-	ProxyURL    string `json:"proxy_url,omitempty"`    // Toolbox proxy URL
-	APIURL      string `json:"api_url,omitempty"`
+	TTLSeconds int64 `json:"ttl_seconds,omitempty"`
+	// CPUCores and MemoryMB are what the create request reserved (0 = the
+	// substrate's default). Kept on the record because metering and the
+	// lifecycle events have to report what was reserved, and the request is
+	// long gone by the time a sandbox is listed or reaped.
+	CPUCores    float64 `json:"cpu_cores,omitempty"`
+	MemoryMB    int64   `json:"memory_mb,omitempty"`
+	PoderID     string  `json:"poder_id,omitempty"`     // owning Poder ID
+	PoderURL    string  `json:"poder_url,omitempty"`    // Poder API URL
+	ContainerID string  `json:"container_id,omitempty"` // actual container ID
+	ProxyURL    string  `json:"proxy_url,omitempty"`    // Toolbox proxy URL
+	APIURL      string  `json:"api_url,omitempty"`
 	// Runtime environment info (for AI-generated executable scripts)
 	Arch         string            `json:"arch,omitempty"`       // e.g. amd64, arm64 (inherited from Poder host)
 	OS           string            `json:"os,omitempty"`         // e.g. linux

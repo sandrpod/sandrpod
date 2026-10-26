@@ -44,7 +44,7 @@ func reapIdleSandboxes(ctx context.Context, ttl time.Duration, ss podpkg.Sandbox
 			// e.g. an E2B sandbox created with a short `timeout` expires on that,
 			// not the 12h default.
 			log.Printf("idle reaper: deleting sandbox %s (idle, ttl %v)", sb.Name, effectiveSandboxTTL(sb, ttl))
-			notifyEvent("sandbox.reaped", map[string]any{"name": sb.Name, "provider": sb.ProviderType})
+			notifyEvent("sandbox.reaped", sandboxEvent(sb, map[string]any{"reason": "ttl_idle"}))
 			teardownSandbox(ctx, sb, ss, ps, ts)
 		}
 	}

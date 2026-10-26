@@ -137,6 +137,23 @@ type Config struct {
 	// their auth index converges immediately (Postgres LISTEN/NOTIFY). nil or a
 	// no-op on single-instance / SQLite deployments.
 	NotifyTokenChange func()
+
+	// Authenticator decides who a request is. Nil uses the built-in token
+	// scheme (Token / Tokens / Registry / Keys above), which is what the
+	// standard build runs. Supplying one replaces authentication wholesale —
+	// including the "no credential configured means open" legacy behaviour,
+	// which an implementation that must never be open simply does not
+	// reproduce.
+	Authenticator Authenticator
+
+	// Admission gates sandbox creation. Nil keeps the built-in rule
+	// (MaxSandboxesPerOwner). A build with quotas, metering or risk checks
+	// returns a refusal here instead of growing conditionals in the handler.
+	Admission Admission
+
+	// Events receives lifecycle notifications. Nil keeps the built-in webhook
+	// (SANDRPOD_WEBHOOK_URL). Billing and audit export plug in here.
+	Events EventSink
 }
 
 // New constructs and returns the HTTP mux for the API server.
@@ -151,6 +168,13 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	sandboxStore := stores.Sandboxes
 	poderStore := stores.Poders
 	scheduler := podpkg.NewScheduler(poderStore, cfg.APIURL, cfg.Token)
+
+	// Admission: the deployment's gate, or the built-in per-owner quota.
+	admission := admissionFor(cfg, sandboxStore)
+	// Events: the deployment's sink, or the built-in webhook.
+	if cfg.Events != nil {
+		events = cfg.Events
+	}
 
 	mux := http.NewServeMux()
 
@@ -179,34 +203,36 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	//     Authorization correct              → next (legacy path)
 	//   - Otherwise                          → 401 with both schemes in
 	//                                          WWW-Authenticate
+	// The credential scheme is a Config field so a different program can supply
+	// its own (registration, sessions, OIDC). Nil means the built-in tokens.
+	authenticator := cfg.Authenticator
+	if authenticator == nil {
+		authenticator = cfg
+	}
+
 	authMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			// Auth disabled: everything runs as an anonymous admin (legacy).
-			if cfg.authDisabled() {
-				next(w, withIdentity(r, identity{Name: "", Role: roleAdmin}))
+			id, err := authenticator.Authenticate(r)
+			if err == nil {
+				next(w, WithIdentity(r, id))
 				return
 			}
-
-			// Resolve the presented credential against the legacy single
-			// token (implicit admin) and the named-tokens file. Constant-time
-			// compares prevent the obvious timing oracle on the secrets.
-			// Header forms: X-Sandrpod-Token (preferred) or Bearer (legacy —
-			// when the Bearer path fires, Authorization reaches the agent as
-			// the platform token, not an MCP Bearer; legacy callers don't use
-			// /mcp so the practical impact is zero).
-			if id, ok := resolveRequest(cfg, r); ok {
-				// Per-identity rate limit for user tokens (admins/poders exempt).
-				if apiRateLimit != nil && !id.isAdmin() && !apiRateLimit.allow(id.Name) {
-					http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-					return
-				}
-				next(w, withIdentity(r, id))
-				return
+			switch {
+			case errors.Is(err, ErrForbidden):
+				http.Error(w, "Forbidden", http.StatusForbidden)
+			case errors.Is(err, ErrRateLimited):
+				http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
+			case errors.Is(err, ErrUnauthenticated):
+				w.Header().Set("WWW-Authenticate",
+					`Bearer realm="sandrpod-api", X-Sandrpod-Token realm="sandrpod-api"`)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			default:
+				// An unrecognised error is a refusal with a server-side reason:
+				// log it, answer 500 so the client does not retry as if its
+				// credential were fine, and never fall through to next.
+				log.Printf("auth: %v", err)
+				http.Error(w, "authentication failed", http.StatusInternalServerError)
 			}
-
-			w.Header().Set("WWW-Authenticate",
-				`Bearer realm="sandrpod-api", X-Sandrpod-Token realm="sandrpod-api"`)
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 		}
 	}
 
@@ -215,7 +241,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	// the sandbox API, scoped to their own sandboxes.
 	adminOnly := func(next http.HandlerFunc) http.HandlerFunc {
 		return authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-			if !identityFrom(r).isAdmin() {
+			if !IdentityFrom(r).IsAdmin() {
 				http.Error(w, "Forbidden: admin token required", http.StatusForbidden)
 				return
 			}
@@ -377,13 +403,13 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		// not), so a non-UTF-8 value — e.g. a Chinese Windows `cmd /c ver`
 		// emitting GBK bytes in X-Sandbox-OS-Version — makes the INSERT fail.
 		// Sanitize at this boundary so the row always persists.
-		// Owner is the identity that registered the agent (this route is
+		// Owner is the Identity that registered the agent (this route is
 		// adminOnly, so an operator/admin token). Without it the record is
 		// Owner=="" — which canAccessSandbox treats as world-visible, letting
 		// ANY authenticated token reach the employee's machine. Stamping the
-		// connecting identity scopes access to that identity (all admins still
+		// connecting Identity scopes access to that Identity (all admins still
 		// pass via isAdmin()). Empty only when auth is disabled (single-tenant).
-		owner := identityFrom(r).Name
+		owner := IdentityFrom(r).Name
 		sb := &podpkg.SandboxInfo{
 			ID:           sandboxName,
 			Name:         sandboxName,
@@ -639,10 +665,10 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					IP:           poderResp.IP,
 					PoderID:      pID,
 					ProxyURL:     "tunnel://" + pID,
-					// Owner scopes access to the creating identity; without it the
+					// Owner scopes access to the creating Identity; without it the
 					// record is world-visible to every authenticated token (see
 					// the agent-connect path). This route is adminOnly.
-					Owner:        identityFrom(r).Name,
+					Owner:        IdentityFrom(r).Name,
 					Network:      req.Network,
 					Arch:         poderArch,
 					OS:           poderOS,
@@ -755,7 +781,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			http.Error(w, "sandbox, host and port are required", http.StatusBadRequest)
 			return
 		}
-		ident := identityFrom(r)
+		ident := IdentityFrom(r)
 		sb, ok := sandboxStore.Get(req.Sandbox)
 		if ok && !canAccessSandbox(ident, sb) {
 			http.Error(w, "sandbox not found", http.StatusNotFound)
@@ -808,11 +834,11 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	}
 
 	mux.HandleFunc("/api/v1/sandboxes", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		ident := identityFrom(r)
+		ident := IdentityFrom(r)
 		switch r.Method {
 		case http.MethodGet:
 			sandboxes := sandboxStore.List()
-			if !ident.isAdmin() {
+			if !ident.IsAdmin() {
 				visible := make([]*podpkg.SandboxInfo, 0, len(sandboxes))
 				for _, sb := range sandboxes {
 					if canAccessSandbox(ident, sb) {
@@ -853,10 +879,14 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				return
 			}
 
-			// Per-owner quota (admins exempt; 0 = unlimited). Shared with the
-			// E2B gateway's create path — see quotaExceeded.
-			if !ident.isAdmin() && quotaExceeded(sandboxStore, ident.Name, cfg.MaxSandboxesPerOwner) {
-				http.Error(w, fmt.Sprintf("sandbox quota reached (%d)", cfg.MaxSandboxesPerOwner), http.StatusTooManyRequests)
+			// Admission, early: quota by default, anything the deployment adds
+			// on top of it. runSandboxCreate calls it again at the choke point.
+			if err := admission.Admit(r.Context(), ident, &req); err != nil {
+				if errors.Is(err, ErrQuotaExceeded) {
+					http.Error(w, fmt.Sprintf("sandbox quota reached (%d)", cfg.MaxSandboxesPerOwner), http.StatusTooManyRequests)
+				} else {
+					http.Error(w, err.Error(), http.StatusForbidden)
+				}
 				return
 			}
 
@@ -891,6 +921,8 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					State:        podpkg.StatePending,
 					Owner:        ident.Name,
 					TTLSeconds:   req.TTLSeconds,
+					CPUCores:     req.CPUCores,
+					MemoryMB:     req.MemoryMB,
 					Network:      req.Network,
 					CreatedAt:    time.Now(),
 					LastActivity: time.Now(),
@@ -900,7 +932,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					return
 				}
 				go func(req podpkg.CreateSandboxRequest, jobID, owner string) {
-					if _, _, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, jobID, owner); err != nil {
+					if _, _, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, jobID, owner, admission, Identity{Name: owner, Role: RoleUser}); err != nil {
 						log.Printf("async create %s: %v", req.Name, err)
 					}
 				}(req, job.ID, ident.Name)
@@ -915,7 +947,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			}
 
 			// Synchronous path (legacy default): same flow, inline.
-			sandbox, jobID, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, "", ident.Name)
+			sandbox, jobID, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, "", ident.Name, admission, ident)
 			if err != nil {
 				status := http.StatusInternalServerError
 				if errors.Is(err, podpkg.ErrPoderCapability) {
@@ -941,7 +973,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 
 	// /api/v1/sandboxes/* - per-sandbox operations and proxy
 	mux.HandleFunc("/api/v1/sandboxes/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		ident := identityFrom(r)
+		ident := IdentityFrom(r)
 		path := r.URL.Path[len("/api/v1/sandboxes/"):]
 		if path == "" {
 			http.NotFound(w, r)
@@ -1032,7 +1064,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		}
 
 		// Egress policy of this sandbox: what its enforcing agent is allowed
-		// to reach. GET is served to the owning identity *and* to the sandbox
+		// to reach. GET is served to the owning Identity *and* to the sandbox
 		// itself (the agent polls it); PUT lets an operator tighten or widen a
 		// running sandbox without recreating it.
 		if action == "egress" {
@@ -1425,7 +1457,11 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				log.Printf("sandbox delete: poder tunnel %s unavailable, skipping container cleanup for %s", pID, name)
 			}
 
-			notifyEvent("sandbox.deleted", map[string]any{"name": name})
+			ev := map[string]any{"name": name}
+			if sb, ok := sandboxStore.Get(name); ok {
+				ev = sandboxEvent(sb, nil)
+			}
+			notifyEvent("sandbox.deleted", ev)
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"status": "deleted"})
 		}
@@ -1455,7 +1491,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		// GET /api/v1/jobs/{id} — user-facing job status (async create polling).
 		if r.Method == http.MethodGet {
 			job, ok := jobStore.GetJob(jobID)
-			if !ok || !canAccessJob(identityFrom(r), job) {
+			if !ok || !canAccessJob(IdentityFrom(r), job) {
 				http.Error(w, "job not found", http.StatusNotFound)
 				return
 			}
@@ -1468,7 +1504,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			return
 		}
 		// PATCH is the poder agent's job-status report — admin tokens only.
-		if !identityFrom(r).isAdmin() {
+		if !IdentityFrom(r).IsAdmin() {
 			http.Error(w, "Forbidden: admin token required", http.StatusForbidden)
 			return
 		}
@@ -1728,6 +1764,7 @@ func Main() {
 		tunnelStore: tunnelStore,
 		directStore: directStore,
 		owners:      stores.TunnelOwners,
+		admission:   admissionFor(cfg, stores.Sandboxes),
 	}
 	if dom := os.Getenv("SANDRPOD_E2B_DOMAIN"); dom != "" {
 		handler = e2bHostRouter(dom, newE2BGateway(dom, e2bDepsVal), handler)
