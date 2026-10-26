@@ -441,6 +441,13 @@ func (h *PtyHandler) HandleWebSocket(conn *websocket.Conn, sessionID string) err
 
 			session.LastActivity = time.Now()
 
+			// A JSON control frame first: it is what a browser terminal
+			// sends, and writing it to the shell puts it on the prompt.
+			if cols, rows, ok := parseResize(msg); ok {
+				h.manager.ResizeSession(sessionID, cols, rows) //nolint:errcheck
+				continue
+			}
+
 			// IAC SB NAWS <Cols-Hi> <Cols-Lo> <Rows-Hi> <Rows-Lo> IAC SE.
 			// Same encoding as the Unix handler so xterm.js clients work
 			// unchanged across platforms.

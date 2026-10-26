@@ -7,6 +7,7 @@
 package toolbox
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -88,4 +89,33 @@ func TestPtyHandler_CreateSession_ReturnsID(t *testing.T) {
 	}
 	// Clean up the spawned shell.
 	_ = h.manager.CloseSession(id)
+}
+
+// A browser terminal resizes with a JSON control frame. It must be recognised
+// as a control message and never written to the shell — the first version of
+// the portal's terminal printed “{"type":"resize","cols":104,"rows":32}“ on
+// the user's prompt for exactly this reason.
+func TestParseResize_ControlFrames(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		cols int
+		rows int
+		ok   bool
+	}{
+		{"browser frame", `{"type":"resize","cols":104,"rows":32}`, 104, 32, true},
+		{"whitespace", "{\"type\": \"resize\", \"cols\": 80, \"rows\": 24}", 80, 24, true},
+		{"not json", "ls -la\r", 0, 0, false},
+		{"other type", `{"type":"ping"}`, 0, 0, false},
+		{"zero cols", `{"type":"resize","cols":0,"rows":24}`, 0, 0, false},
+		{"absurd", `{"type":"resize","cols":99999,"rows":24}`, 0, 0, false},
+		{"json but not an object", `[1,2,3]`, 0, 0, false},
+		{"big document", `{"type":"resize","cols":80,"rows":24,"pad":"` + strings.Repeat("x", 400) + `"}`, 0, 0, false},
+	}
+	for _, tc := range cases {
+		cols, rows, ok := parseResize([]byte(tc.in))
+		if ok != tc.ok || cols != tc.cols || rows != tc.rows {
+			t.Errorf("%s: got (%d,%d,%v), want (%d,%d,%v)", tc.name, cols, rows, ok, tc.cols, tc.rows, tc.ok)
+		}
+	}
 }

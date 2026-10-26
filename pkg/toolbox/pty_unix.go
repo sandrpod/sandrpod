@@ -230,6 +230,14 @@ func (h *PtyHandler) HandleWebSocket(conn *websocket.Conn, sessionID string) err
 
 			session.LastActivity = time.Now()
 
+			// A browser terminal sends the obvious thing: a JSON control
+			// frame. Without this it is written to the shell and appears on
+			// the user's prompt.
+			if cols, rows, ok := parseResize(msg); ok {
+				h.manager.ResizeSession(sessionID, cols, rows)
+				continue
+			}
+
 			// Handle terminal resize commands encoded as Telnet NAWS sequences.
 			if len(msg) >= 6 && msg[0] == 0xFF && msg[1] == 0xFD && msg[2] == 0x1C {
 				// IAC SB NAWS <Cols> <Rows> IAC SE
