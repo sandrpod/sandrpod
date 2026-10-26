@@ -115,7 +115,7 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 		//
 		// Poll rather than fail. This costs nothing when a poder is already
 		// present — the first check happens before the first sleep.
-		if p := s.waitForPoderRegistration(providerType, req.Region, LocalPoderGracePeriod, localPoderPollInterval); p != nil {
+		if p := s.waitForPoderRegistration(providerType, req.Region, LocalPoderGracePeriod, localPoderPollInterval, require, req.Workspace); p != nil {
 			log.Printf("[Scheduler] Poder %s registered during the grace period, scheduling on it", p.ID)
 			return s.createJobForPoder(req, p)
 		}
@@ -154,7 +154,7 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 
 	// 6. Wait for Poder to register and come online
 	log.Printf("[Scheduler] Waiting for poder registration for VM %s", vm.ID)
-	poder = s.waitForPoderRegistration(providerType, req.Region, 5*time.Minute, 5*time.Second)
+	poder = s.waitForPoderRegistration(providerType, req.Region, 5*time.Minute, 5*time.Second, require, req.Workspace)
 	if poder == nil {
 		return nil, fmt.Errorf("poder registration timeout (%s)", s.terminateOrphanVM(providerType, vm.ID))
 	}
@@ -369,13 +369,17 @@ func (s *Scheduler) atCapacity(providerType, region string) int {
 
 // waitForPoderRegistration polls poderStore until a Poder of the matching type comes online
 // or the timeout expires.
-func (s *Scheduler) waitForPoderRegistration(providerType, region string, timeout, interval time.Duration) *PoderInfo {
+func (s *Scheduler) waitForPoderRegistration(providerType, region string, timeout, interval time.Duration,
+	require []string, tenant string) *PoderInfo {
 	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		// Simple approach: return the first ONLINE Poder matching providerType and region.
-		// A more precise approach would correlate by vmID, but RegisterPoderRequest does not carry a vmID field.
-		poder, err := s.poderStore.SelectBest(region, providerType)
+		// Same filters as the first attempt: waiting for capacity must not be a
+		// way around placement rules. (It was: the fallback used SelectBest,
+		// which knows nothing about tenants or capabilities, so a workspace's
+		// sandbox could land on another workspace's worker after the grace
+		// period.)
+		poder, err := s.poderStore.SelectBestFor(region, providerType, require, tenant)
 		if err == nil && poder != nil {
 			return poder
 		}

@@ -993,11 +993,14 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					http.Error(w, err.Error(), http.StatusConflict)
 					return
 				}
-				go func(req podpkg.CreateSandboxRequest, jobID, owner string) {
-					if _, _, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, jobID, owner, admission, Identity{Name: owner, Role: RoleUser}); err != nil {
+				// Pass the caller's full identity, not a reconstruction: the
+				// tenant rides on it, and it is what confines placement. Dropping
+				// it here let one workspace's sandbox land on another's worker.
+				go func(req podpkg.CreateSandboxRequest, jobID, owner string, requester Identity) {
+					if _, _, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, jobID, owner, admission, requester); err != nil {
 						log.Printf("async create %s: %v", req.Name, err)
 					}
-				}(req, job.ID, ident.Name)
+				}(req, job.ID, ident.Name, ident)
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusAccepted)
 				json.NewEncoder(w).Encode(map[string]any{

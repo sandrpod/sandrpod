@@ -520,8 +520,12 @@ func TestSchedule_EgressNeedsACapablePoder(t *testing.T) {
 		Resources: PoderResources{MaxContainers: 10}}
 	repo := &mockPoderRepo{
 		selectBestFn: func(region, providerType string) (*PoderInfo, error) { return old, nil },
-		// SelectBestFor filters by capability: an incapable fleet finds none.
+		// SelectBestFor filters by capability: an incapable fleet finds none
+		// when a capability is required, and finds it when none is.
 		selectBestForFn: func(region, providerType string, require []string, tenant string) (*PoderInfo, error) {
+			if len(require) == 0 {
+				return old, nil
+			}
 			return nil, errors.New("no available poder found")
 		},
 		listFn: func() []*PoderInfo { return []*PoderInfo{old} },
