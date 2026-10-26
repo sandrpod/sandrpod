@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"strings"
@@ -22,7 +22,7 @@ func TestE2BAuthenticator_EnvdToken(t *testing.T) {
 		State:  podpkg.StateRunning,
 		Labels: map[string]string{e2bEnvdTokenLabel: envdTok},
 	})
-	auth := e2bDeps{cfg: serverConfig{Token: "server-tok"}, sandboxes: stores.Sandboxes}.authenticator()
+	auth := e2bDeps{cfg: Config{Token: "server-tok"}, sandboxes: stores.Sandboxes}.authenticator()
 
 	tests := []struct {
 		name   string

@@ -3,7 +3,7 @@
 // exempt (poders poll and heartbeat constantly). Disabled unless
 // SANDRPOD_RATE_LIMIT (requests/second per identity) is set.
 
-package main
+package server
 
 import (
 	"sync"

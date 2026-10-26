@@ -7,7 +7,7 @@
 // revocable named tokens; user-role tokens only see and manage the sandboxes
 // they created.
 
-package main
+package server
 
 import (
 	"context"
@@ -220,14 +220,14 @@ func identityFrom(r *http.Request) identity {
 // which case every request runs as an anonymous admin (legacy dev behaviour).
 // Issued DB tokens count — minting a key turns auth on — so an operator can't
 // accidentally leave the server open while believing their keys secure it.
-func (cfg serverConfig) authDisabled() bool {
+func (cfg Config) authDisabled() bool {
 	return cfg.Token == "" &&
 		len(cfg.Tokens) == 0 &&
 		(cfg.Registry == nil || len(cfg.Registry.get()) == 0) &&
 		(cfg.Keys == nil || cfg.Keys.len() == 0)
 }
 
-func resolveToken(cfg serverConfig, presented string) (identity, bool) {
+func resolveToken(cfg Config, presented string) (identity, bool) {
 	if cfg.Token != "" &&
 		subtle.ConstantTimeCompare([]byte(presented), []byte(cfg.Token)) == 1 {
 		return identity{Name: "admin", Role: roleAdmin}, true
@@ -265,7 +265,7 @@ func resolveToken(cfg serverConfig, presented string) (identity, bool) {
 // resolveRequest tries each supported credential header in turn: a wrong
 // X-Sandrpod-Token still falls back to the Authorization Bearer (callers may
 // carry an unrelated Bearer, e.g. an MCP token, alongside the platform token).
-func resolveRequest(cfg serverConfig, r *http.Request) (identity, bool) {
+func resolveRequest(cfg Config, r *http.Request) (identity, bool) {
 	if got := r.Header.Get("X-Sandrpod-Token"); got != "" {
 		if id, ok := resolveToken(cfg, got); ok {
 			return id, true

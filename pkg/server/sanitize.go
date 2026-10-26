@@ -1,6 +1,6 @@
 // Copyright 2026 SandrPod Contributors
 
-package main
+package server
 
 import "strings"
 

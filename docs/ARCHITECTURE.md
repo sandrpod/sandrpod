@@ -269,7 +269,7 @@ the right node. See [`MULTI_INSTANCE_DEPLOYMENT.md`](MULTI_INSTANCE_DEPLOYMENT.m
 Lets an **unmodified E2B SDK** run against SandrPod: point `E2B_DOMAIN` at your
 deployment and `Sandbox.create()` works. Off unless `SANDRPOD_E2B_DOMAIN` is set.
 
-Routing is by Host, decided in `cmd/server/e2bgateway.go`:
+Routing is by Host, decided in `pkg/server/e2bgateway.go`:
 
 | Host | Handled by |
 |---|---|

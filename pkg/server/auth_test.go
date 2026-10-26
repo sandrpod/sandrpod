@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"os"
@@ -16,7 +16,7 @@ func TestResolveToken_DBIssuedKey(t *testing.T) {
 	raw := "e2b_" + strings.Repeat("a", 40)
 	idx := newAPIKeyIndex()
 	idx.put(hashKey(raw), identity{Name: "client-x", Role: roleUser})
-	cfg := serverConfig{Token: "admin-tok", Keys: idx}
+	cfg := Config{Token: "admin-tok", Keys: idx}
 
 	if id, ok := resolveToken(cfg, raw); !ok || id.Name != "client-x" || id.Role != roleUser {
 		t.Errorf("db key: got (%+v, %v), want client-x/user/true", id, ok)
@@ -77,7 +77,7 @@ func TestLoadTokensFile(t *testing.T) {
 }
 
 func TestResolveToken(t *testing.T) {
-	cfg := serverConfig{
+	cfg := Config{
 		Token: "legacy-secret",
 		Tokens: []NamedToken{
 			{Name: "alice", Token: "tok-alice", Role: roleUser},
@@ -124,22 +124,22 @@ func TestCanAccessSandbox(t *testing.T) {
 // DB-issued key — turns auth on, so an operator can't leave the server open
 // while believing issued keys secure it.
 func TestAuthDisabled(t *testing.T) {
-	if !(serverConfig{}).authDisabled() {
+	if !(Config{}).authDisabled() {
 		t.Error("no credentials: want auth disabled")
 	}
-	if (serverConfig{Token: "t"}).authDisabled() {
+	if (Config{Token: "t"}).authDisabled() {
 		t.Error("-token set: want auth enabled")
 	}
-	if (serverConfig{Tokens: []NamedToken{{Name: "a", Token: "x"}}}).authDisabled() {
+	if (Config{Tokens: []NamedToken{{Name: "a", Token: "x"}}}).authDisabled() {
 		t.Error("tokens-file set: want auth enabled")
 	}
-	empty := serverConfig{Keys: newAPIKeyIndex()}
+	empty := Config{Keys: newAPIKeyIndex()}
 	if !empty.authDisabled() {
 		t.Error("empty key index: want auth disabled")
 	}
 	withKey := newAPIKeyIndex()
 	withKey.put("h", identity{Name: "c", Role: roleUser})
-	if (serverConfig{Keys: withKey}).authDisabled() {
+	if (Config{Keys: withKey}).authDisabled() {
 		t.Error("DB key issued: want auth enabled")
 	}
 }

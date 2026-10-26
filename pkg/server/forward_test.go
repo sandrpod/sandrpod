@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"net/http"
@@ -159,7 +159,7 @@ func TestForwardE2B_ForwardsToOwnerNode(t *testing.T) {
 	defer peer.Close()
 
 	d := e2bDeps{
-		cfg:         serverConfig{NodeURL: "http://self:8080"},
+		cfg:         Config{NodeURL: "http://self:8080"},
 		sandboxes:   newSandbox("sb"),
 		tunnelStore: tunnel.NewTunnelStore(),
 		directStore: tunnel.NewDirectTunnelStore(),
@@ -191,7 +191,7 @@ func TestForwardE2B_ForwardsToOwnerNode(t *testing.T) {
 func TestForwardE2B_ServesLocally(t *testing.T) {
 	base := func() e2bDeps {
 		return e2bDeps{
-			cfg:         serverConfig{NodeURL: "http://self:8080"},
+			cfg:         Config{NodeURL: "http://self:8080"},
 			sandboxes:   newSandbox("sb"),
 			tunnelStore: tunnel.NewTunnelStore(),
 			directStore: tunnel.NewDirectTunnelStore(),

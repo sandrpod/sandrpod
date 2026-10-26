@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"encoding/json"
@@ -12,18 +12,18 @@ import (
 )
 
 // newTestHandler builds a handler with an empty in-memory store and no auth token.
-func newTestHandler(t *testing.T, cfg serverConfig) http.Handler {
+func newTestHandler(t *testing.T, cfg Config) http.Handler {
 	t.Helper()
 	stores := store.NewMemoryStores()
 	ts := tunnel.NewTunnelStore()
 	ds := tunnel.NewDirectTunnelStore()
-	return buildMux(cfg, stores, ts, ds)
+	return New(cfg, stores, ts, ds)
 }
 
 // --- 1. /health ---
 
 func TestHealth(t *testing.T) {
-	handler := newTestHandler(t, serverConfig{})
+	handler := newTestHandler(t, Config{})
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -44,7 +44,7 @@ func TestHealth(t *testing.T) {
 
 func TestAuthMiddleware(t *testing.T) {
 	const tok = "secret-token"
-	handler := newTestHandler(t, serverConfig{Token: tok})
+	handler := newTestHandler(t, Config{Token: tok})
 
 	tests := []struct {
 		name        string
@@ -101,11 +101,11 @@ func TestAuthMiddleware_AuthorizationPreservedForHandler(t *testing.T) {
 	stores := store.NewMemoryStores()
 	ts := tunnel.NewTunnelStore()
 	ds := tunnel.NewDirectTunnelStore()
-	mux := buildMux(serverConfig{Token: apiTok}, stores, ts, ds)
+	mux := New(Config{Token: apiTok}, stores, ts, ds)
 
 	// Wrap with a probe that captures whatever Authorization the
 	// downstream handler sees. We attach the probe by installing a
-	// route OUTSIDE buildMux is awkward — instead we just rely on the
+	// route OUTSIDE New is awkward — instead we just rely on the
 	// 404 path: the auth middleware runs on /api/v1/sandboxes/, and
 	// if it lets us through with a non-existent sandbox name we'll
 	// hit a 404. The body of that 404 is irrelevant; we only need to
@@ -135,7 +135,7 @@ func TestAuthMiddleware_AuthorizationPreservedForHandler(t *testing.T) {
 // --- 3. GET /api/v1/sandboxes (empty store) ---
 
 func TestListSandboxesEmpty(t *testing.T) {
-	handler := newTestHandler(t, serverConfig{})
+	handler := newTestHandler(t, Config{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sandboxes", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -163,7 +163,7 @@ func TestListSandboxesEmpty(t *testing.T) {
 // --- 4. GET /api/v1/poders (empty store) ---
 
 func TestListPodersEmpty(t *testing.T) {
-	handler := newTestHandler(t, serverConfig{})
+	handler := newTestHandler(t, Config{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/poders", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -192,7 +192,7 @@ func TestListPodersEmpty(t *testing.T) {
 // Scheduler returns error "no available local poder found" → HTTP 500.
 
 func TestCreateSandboxNoPoderAvailable(t *testing.T) {
-	handler := newTestHandler(t, serverConfig{APIURL: "http://localhost:8080"})
+	handler := newTestHandler(t, Config{APIURL: "http://localhost:8080"})
 	body := `{"name":"test-sb","provider_type":"local"}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/sandboxes", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -210,7 +210,7 @@ func TestCreateSandboxNoPoderAvailable(t *testing.T) {
 // --- 6. GET /api/v1/sandboxes/{nonexistent} ---
 
 func TestGetSandboxNotFound(t *testing.T) {
-	handler := newTestHandler(t, serverConfig{})
+	handler := newTestHandler(t, Config{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/sandboxes/nonexistent", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -223,7 +223,7 @@ func TestGetSandboxNotFound(t *testing.T) {
 // --- 7. DELETE /api/v1/sandboxes/{nonexistent} ---
 
 func TestDeleteSandboxNotFound(t *testing.T) {
-	handler := newTestHandler(t, serverConfig{})
+	handler := newTestHandler(t, Config{})
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/sandboxes/nonexistent", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -239,7 +239,7 @@ func TestDeleteSandboxNotFound(t *testing.T) {
 // --- 8. DELETE /api/v1/poders/{nonexistent} ---
 
 func TestDeletePoderNotFound(t *testing.T) {
-	handler := newTestHandler(t, serverConfig{})
+	handler := newTestHandler(t, Config{})
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/poders/nonexistent", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)

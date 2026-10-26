@@ -2,7 +2,7 @@
 // Egress policy over the API: created with the sandbox, readable by the
 // sandbox that enforces it, and editable while it runs.
 
-package main
+package server
 
 import (
 	"encoding/json"
@@ -26,7 +26,7 @@ func newEgressTestHandler(t *testing.T, seed *podpkg.SandboxInfo) http.Handler {
 			t.Fatalf("seed sandbox: %v", err)
 		}
 	}
-	return buildMux(serverConfig{}, stores, tunnel.NewTunnelStore(), tunnel.NewDirectTunnelStore())
+	return New(Config{}, stores, tunnel.NewTunnelStore(), tunnel.NewDirectTunnelStore())
 }
 
 func nowUTC() time.Time { return time.Now().UTC() }

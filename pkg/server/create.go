@@ -2,7 +2,7 @@
 // Shared sandbox-create flow, used by both the synchronous POST /sandboxes
 // path and the async (job-based) path.
 
-package main
+package server
 
 import (
 	"bytes"

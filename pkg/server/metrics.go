@@ -3,7 +3,7 @@
 // text exposition format directly from the current store snapshot, so there is
 // no client library or background collector to maintain.
 
-package main
+package server
 
 import (
 	"fmt"

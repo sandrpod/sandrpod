@@ -4,7 +4,7 @@
 // in the browser tab's memory). Intentionally minimal — one embedded HTML file,
 // no build step, no framework.
 
-package main
+package server
 
 import (
 	_ "embed"

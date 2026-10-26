@@ -2,7 +2,7 @@
 // Lifecycle webhooks: fire-and-forget POSTs to an operator-configured URL so
 // external systems can react to sandbox/poder transitions without polling.
 
-package main
+package server
 
 import (
 	"bytes"

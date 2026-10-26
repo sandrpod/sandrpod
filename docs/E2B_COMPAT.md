@@ -92,7 +92,7 @@ a plain-HTTP listener serving the gateway in path mode. SDK env:
 
 | E2B plane | SandrPod implementation |
 |---|---|
-| Control plane `api.<domain>` | E2B-shaped REST surface (`pkg/e2bcompat` + `cmd/server/e2bgateway.go`): create/list/get/kill, set-timeout, pause/resume, metrics, metadata; `X-API-KEY` auth with `e2b_<hex>` keys mapped to the named-token/owner model (ownership + quotas still apply) |
+| Control plane `api.<domain>` | E2B-shaped REST surface (`pkg/e2bcompat` + `pkg/server/e2bgateway.go`): create/list/get/kill, set-timeout, pause/resume, metrics, metadata; `X-API-KEY` auth with `e2b_<hex>` keys mapped to the named-token/owner model (ownership + quotas still apply) |
 | Domain routing | Host-header router: `<port>-<sandboxID>.<domain>` → tunnel → toolbox; non-envd ports go through the generic port proxy (e.g. the in-sandbox MCP gateway on `:50005`, see [E2B_MCP_COMPAT.md](E2B_MCP_COMPAT.md)) |
 | envd filesystem / process / PTY | connect-rpc **Filesystem** + **Process** services (PTY rides Process) backed by the toolbox `/files/*`, `/process`, `/pty/*` |
 | code interpreter `run_code` | Stateful kernel in the toolbox (one resident interpreter per context; variables persist) + the code-interpreter HTTP contract; matplotlib charts are captured as PNG into `Execution.results` |
@@ -109,7 +109,7 @@ landing on any instance is forwarded to the node holding the sandbox's tunnel
 
 ## 4. Verified compatibility
 
-Built in `pkg/e2bcompat` (gateway + wire types) and `cmd/server/e2bgateway.go`
+Built in `pkg/e2bcompat` (gateway + wire types) and `pkg/server/e2bgateway.go`
 (backends over scheduler/store/toolbox), enabled by `SANDRPOD_E2B_DOMAIN`.
 
 Legend: ☑ verified against the real unmodified SDK · ◐ built + unit-tested,

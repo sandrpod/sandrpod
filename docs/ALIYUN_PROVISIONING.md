@@ -21,7 +21,7 @@ provider-agnostic, so Aliyun gets it without changes:
 |-------|----------------------|
 | Scheduler (`pkg/sandpod/scheduler.go`) | forwards the API token, `PROVIDER_TYPE`, the request **region** (not AZ), `VM_INSTANCE_ID`, and the configurable poder/toolbox image to the Poder; builds VM networking (public IP / subnet / SG) via `NetworkConfig` |
 | Poder (`pkg/poder/docker.go`) | `CreatePod` pulls the toolbox image before creating the container |
-| Server (`cmd/server/main.go`) | delete-poder terminates the cloud VM (`isCloudProvider` includes `aliyun`); the reaper reclaims OFFLINE poders; both call `provider.DeleteVM(providerType, vmID)` |
+| Server (`pkg/server/main.go`) | delete-poder terminates the cloud VM (`isCloudProvider` includes `aliyun`); the reaper reclaims OFFLINE poders; both call `provider.DeleteVM(providerType, vmID)` |
 
 So the remaining work is **(a)** the Aliyun-specific provider fixes and **(b)**
 Aliyun deployment config. The control-plane / scheduler / poder plumbing is done.

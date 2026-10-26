@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"errors"
@@ -38,7 +38,7 @@ func TestE2BCreateSandbox_EnforcesPerOwnerQuota(t *testing.T) {
 	}
 
 	b := &e2bSandboxBackend{e2bDeps{
-		cfg:       serverConfig{MaxSandboxesPerOwner: 2},
+		cfg:       Config{MaxSandboxesPerOwner: 2},
 		scheduler: podpkg.NewScheduler(stores.Poders, "", ""),
 		sandboxes: stores.Sandboxes,
 		poders:    stores.Poders,
@@ -72,7 +72,7 @@ func TestE2BCreateSandbox_AdminExemptFromQuota(t *testing.T) {
 		}
 	}
 	b := &e2bSandboxBackend{e2bDeps{
-		cfg:       serverConfig{MaxSandboxesPerOwner: 1},
+		cfg:       Config{MaxSandboxesPerOwner: 1},
 		scheduler: podpkg.NewScheduler(stores.Poders, "", ""),
 		sandboxes: stores.Sandboxes,
 		poders:    stores.Poders,

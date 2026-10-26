@@ -7,7 +7,7 @@
 // E2B hostnames (api.<domain> and <port>-<sandboxID>.<domain>) are served by
 // the gateway; everything else falls through to the normal SandrPod mux.
 
-package main
+package server
 
 import (
 	"bytes"
@@ -33,7 +33,7 @@ import (
 
 // e2bDeps bundles what the gateway backends need from the server.
 type e2bDeps struct {
-	cfg         serverConfig
+	cfg         Config
 	scheduler   *podpkg.Scheduler
 	sandboxes   podpkg.SandboxRepository
 	poders      podpkg.PoderRepository

@@ -1,4 +1,4 @@
-package main
+package server
 
 import (
 	"context"
@@ -89,7 +89,7 @@ func TestMCPRouteForwardsBearerToAgent(t *testing.T) {
 	ds := tunnel.NewDirectTunnelStore()
 	ds.Set(sandbox, tt)
 
-	mux := buildMux(serverConfig{Token: apiToken}, stores, ts, ds)
+	mux := New(Config{Token: apiToken}, stores, ts, ds)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -166,7 +166,7 @@ func TestMCPRoute_WrongMCPBearer(t *testing.T) {
 	ts := tunnel.NewTunnelStore()
 	ds := tunnel.NewDirectTunnelStore()
 	ds.Set(sandbox, tt)
-	mux := buildMux(serverConfig{Token: apiToken}, stores, ts, ds)
+	mux := New(Config{Token: apiToken}, stores, ts, ds)
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 

@@ -175,6 +175,6 @@ E2B MCP gateway 只对 **poder(Docker 容器)沙箱**开箱可用，因为 `mcp-
 
 - `cmd/mcp-gateway/` —— shim（`main.go` / `config.go` / `catalog.go` + 测试）
 - `pkg/e2bcompat/gateway.go` —— `Config.PortProxy` 钩子 + 通用端口分发
-- `cmd/server/e2bgateway.go` —— `e2bDeps.portProxy`（隧道流式代理到 `/proxy/<port>/`）
+- `pkg/server/e2bgateway.go` —— `e2bDeps.portProxy`（隧道流式代理到 `/proxy/<port>/`）
 - `docker/Dockerfile.toolbox` —— 把 `mcp-gateway` 装到 `/usr/local/bin`
 - `pkg/mcpbridge/` —— 底层 MCP 聚合器（envd/code 端口 49983/49999，E2B 网关端口 50005）

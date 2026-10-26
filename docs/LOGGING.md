@@ -162,5 +162,5 @@ filterable — e.g. `status:>=500`, `path:"/api/v1/sandboxes/execute"`, `dur`.
 ## Reference
 
 - Setup: [`pkg/logging`](../pkg/logging/logging.go) — handler + level + std-log bridge
-- Access log: [`cmd/server/accesslog.go`](../cmd/server/accesslog.go) — middleware + recorder
+- Access log: [`pkg/server/accesslog.go`](../pkg/server/accesslog.go) — middleware + recorder
 - Operations context: [SCALING.md](SCALING.md#observability--logs) · [MULTI_INSTANCE_DEPLOYMENT.md](MULTI_INSTANCE_DEPLOYMENT.md)

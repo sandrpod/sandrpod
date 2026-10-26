@@ -64,7 +64,7 @@ Client / SDK / CLI                    E2B SDK（未经修改）
 
 ## 二、组件详解
 
-### 2.1 API Server（`cmd/server`）
+### 2.1 API Server（`pkg/server`，入口 `cmd/server`）
 
 **职责**
 
@@ -259,7 +259,7 @@ go run ./cmd/server -db "postgres://…?sslmode=require" # PostgreSQL，多实�
 让**未经修改的 E2B SDK** 直接跑在 SandrPod 上：把 `E2B_DOMAIN` 指向你的部署，
 `Sandbox.create()` 就能用。不设 `SANDRPOD_E2B_DOMAIN` 则整个网关不启用。
 
-路由按 Host 判定，决策点在 `cmd/server/e2bgateway.go`：
+路由按 Host 判定，决策点在 `pkg/server/e2bgateway.go`：
 
 | Host | 交给谁 |
 |---|---|

@@ -4,7 +4,7 @@
 // and authenticate identically on the native API. Only the SHA-256 hash is
 // persisted — the raw key is shown once at creation and never retrievable.
 
-package main
+package server
 
 import (
 	"encoding/json"
@@ -23,7 +23,7 @@ func writeTokenJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // handleTokens serves GET (list) and POST (issue) on /api/v1/tokens.
-func handleTokens(cfg serverConfig, tokens podpkg.APITokenRepository) http.HandlerFunc {
+func handleTokens(cfg Config, tokens podpkg.APITokenRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if tokens == nil {
 			http.Error(w, "token store not configured (start the server with a persistent -db backend: sqlite:... or postgres://...)", http.StatusNotImplemented)
@@ -101,7 +101,7 @@ func handleTokens(cfg serverConfig, tokens podpkg.APITokenRepository) http.Handl
 
 // handleTokenDelete revokes a token by its display prefix:
 // DELETE /api/v1/tokens/{prefix}.
-func handleTokenDelete(cfg serverConfig, tokens podpkg.APITokenRepository) http.HandlerFunc {
+func handleTokenDelete(cfg Config, tokens podpkg.APITokenRepository) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if tokens == nil {
 			http.Error(w, "token store not configured (start the server with a persistent -db backend: sqlite:... or postgres://...)", http.StatusNotImplemented)

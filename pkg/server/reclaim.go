@@ -5,7 +5,7 @@
 // behalf of users must be able to give them back. Both default to OFF so
 // existing deployments upgrade with no behavior change.
 
-package main
+package server
 
 import (
 	"context"

@@ -145,7 +145,7 @@ Client → API Server (Control Plane)
               ↑ 直接 WebSocket 注册到 API Server
 ```
 
-**API Server** (`cmd/server`): REST API control plane. Handles CRUD operations, job management, and acts as central proxy for code execution requests. Routes requests via `tunnelStore` (Poder nodes) or `directStore` (Agent nodes) depending on `proxy_url` prefix.
+**API Server** (`pkg/server`, entry point `cmd/server`): REST API control plane. Handles CRUD operations, job management, and acts as central proxy for code execution requests. Routes requests via `tunnelStore` (Poder nodes) or `directStore` (Agent nodes) depending on `proxy_url` prefix. The package is importable — `server.New(server.Config, stores, tunnelStore, directStore)` returns the mux `server.Main()` uses — so another program can embed the control plane instead of running the binary.
 
 **Proxy+Agent** (`cmd/poder`): Combined worker node service. Dials API Server via WebSocket reverse tunnel (`/ws/poder/connect`). Polls for CREATE/DELETE sandbox jobs. Manages Docker container lifecycle.
 
