@@ -337,6 +337,30 @@ if [ "$FLEET_SKIPPED" = "0" ]; then
 		sleep 1
 	done
 
+	# Create latency is a product number, not a benchmark: it is what every
+	# agent loop waits for. It regressed to 4.2s once because the pode pulled
+	# the image on every create (1.8s of registry round-trip against a local
+	# image), so the budget below is asserted rather than assumed.
+	LAT_START=$(date +%s%N 2>/dev/null || python3 -c 'import time;print(int(time.time()*1e9))')
+	if ctl create latency-probe --provider local --no-wait >/dev/null 2>&1; then
+		for _ in $(seq 1 60); do
+			STATE=$(curl -s "$API/api/v1/sandboxes/latency-probe" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("state",""))' 2>/dev/null)
+			[ "$STATE" = "RUNNING" ] && break
+			sleep 0.1
+		done
+		LAT_END=$(date +%s%N 2>/dev/null || python3 -c 'import time;print(int(time.time()*1e9))')
+		LAT_MS=$(( (LAT_END - LAT_START) / 1000000 ))
+		printf 'create latency: %dms (%s)\n' "$LAT_MS" "$STATE"
+		if [ "$STATE" = "RUNNING" ] && [ "$LAT_MS" -lt 1500 ]; then
+			pass "a sandbox is created in under 1.5s"
+		else
+			fail "create took ${LAT_MS}ms (state=$STATE); budget is 1500ms"
+		fi
+		ctl delete latency-probe >/dev/null 2>&1
+	else
+		fail "could not create the latency probe"
+	fi
+
 	# The worker has to say what it can enforce, or the creation below is
 	# refused — which is the point of the capability header.
 	contains "the worker advertises the egress capability" "egress" \

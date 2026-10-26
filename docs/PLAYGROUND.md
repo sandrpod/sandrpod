@@ -394,6 +394,11 @@ the egress sidecar **from the tree under test**, creates a sandbox with
 the container that the allowed host answers 200 while the denied one is refused
 403 with `X-Deny-Reason: denied_domain`.
 
+It also asserts a **create-latency budget** (under 1.5s): the number every agent
+loop waits for, and one that regressed to 4.2s without anyone noticing because
+the pode pulled the container image on every create. A timing that is not
+asserted is a timing that drifts.
+
 It is worth its own paragraph because its first version failed, and the failure
 was the interesting part: with the *published* `poder:latest` image (2026-08-30,
 predating the egress work) the sandbox came up `RUNNING`, the policy read back

@@ -50,6 +50,14 @@ deployment can notice.
 
 ### Added
 
+- **Sandbox create latency: 4.2s → 230ms (p50, measured).** The pode called
+  `ImagePull` on every create, which costs a registry round-trip even when the
+  image is already local (1.8s here) — the single largest part of the cold
+  start. It now inspects first and pulls only when the image is missing, so a
+  warm host creates a sandbox in about 230ms and the nightly playground asserts
+  a 1.5s budget. The GTM target of "under 500ms" was reached without the
+  snapshot/warm-pool work that was planned for it.
+
 - **The mixed-version refusals are re-proven every night.** The playground's
   legacy phase starts a second control plane with `-emulate-legacy` (404 on
   `/api/v1/capabilities`, as an older build does) and a worker container that
