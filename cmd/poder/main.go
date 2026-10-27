@@ -913,21 +913,10 @@ var dockerSockClient = &http.Client{
 }
 
 func getHostUsage() (cpuUsage, memUsage float64) {
-	// A negative value means "unknown", and the UI renders it as "—". The old
-	// fallback was 0.5, which any dashboard shows as a healthy 50% — a guess
-	// dressed up as a measurement.
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/v1.24/info", nil)
-	if err != nil {
-		return -1, -1
-	}
-	resp, err := dockerSockClient.Do(req)
-	if err != nil {
-		return -1, -1
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return -1, -1
-	}
+	// /proc is the source. This used to gate on a docker API call first, so a
+	// worker running in a container without a reachable docker socket reported
+	// nothing — even though /proc was right there and readable. Ask the thing
+	// that knows.
 	return getCPUUsage(), getMemoryUsage()
 }
 
