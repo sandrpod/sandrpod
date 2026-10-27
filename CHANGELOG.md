@@ -6,6 +6,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.7.0] - 2026-10-27
+
+The control plane becomes a library, and tenant isolation reaches the paths it
+had missed. Release notes (what changed, the upgrade order, the breaking Go API
+changes, the limits) are in [docs/RELEASE_NOTES.md](docs/RELEASE_NOTES.md).
+
+### Added
+
+- `pkg/server`: `New`, `Main`, `NewE2BGateway` — the API server as an importable
+  package, with its flags bound to a private FlagSet.
+- `Config.Authenticator`, `Config.Admission`, `Config.Events`: three seams an
+  embedding build supplies.
+- `RoleWorker` and `workerRoute`: a join token can handshake and poll, nothing else.
+- `Config.E2BAPIKeys`: the E2B surface resolves its own keys and carries the tenant.
+
+### Fixed
+
+- Async create dropped the tenant, so a sandbox could land on another tenant's
+  worker; the grace-period fallback used the unscoped selector.
+- A refusal at the create choke point left the sandbox `PENDING` forever.
+- `sandbox.deleted` events carried no owner or resources, so metering lost them.
+- An embedding build's `-port`/`-db` panicked with `flag redefined`.
+- `poder` heartbeats from join-token workers were rejected (403), leaving the
+  worker online but stale.
+- Sandbox creation pulled the toolbox image unconditionally (4.2s → 230ms).
+- `poder` reported `0.5` as host CPU/memory when `/proc` was unreadable; it now
+  reports `-1`, and reads `/proc` directly instead of gating on a docker call.
+- A browser terminal's resize frame was written into the shell.
+- The playground's fleet phase skipped itself on CI instead of failing.
+
 ## [0.6.0] - 2026-10-25
 
 The release notes for this version — what it adds, the upgrade order, the breaking
