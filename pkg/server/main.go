@@ -547,8 +547,27 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	mux.HandleFunc("/api/v1/tokens/", adminOnly(handleTokenDelete(cfg, stores.Tokens)))
 
 	// /api/v1/poders/* - Poder details, heartbeat, and direct sandbox operations
-	mux.HandleFunc("/api/v1/poders/", adminOnly(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/api/v1/poders/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		path := r.URL.Path[len("/api/v1/poders/"):]
+
+		// A worker may heartbeat exactly one record — its own. Everything else
+		// on this prefix is the operator's view of the fleet, and a join token
+		// (RoleWorker) must not reach it. Without this exception a worker
+		// authenticated by a join token loses its lease and goes stale while
+		// still connected, which looks like a networking problem.
+		if ident := IdentityFrom(r); !ident.IsAdmin() {
+			allowed := false
+			if r.Method == http.MethodPost && strings.HasSuffix(path, "/heartbeat") && ident.IsWorker() {
+				if p, ok := poderStore.Get(strings.TrimSuffix(path, "/heartbeat")); ok &&
+					(p.Workspace == "" || p.Workspace == ident.Tenant) {
+					allowed = true
+				}
+			}
+			if !allowed {
+				http.Error(w, "Forbidden: admin token required", http.StatusForbidden)
+				return
+			}
+		}
 
 		// DELETE /api/v1/poders/{id} — delete a Poder record
 		if !strings.Contains(path, "/") && r.Method == http.MethodDelete {
