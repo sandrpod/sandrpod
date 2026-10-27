@@ -913,17 +913,20 @@ var dockerSockClient = &http.Client{
 }
 
 func getHostUsage() (cpuUsage, memUsage float64) {
+	// A negative value means "unknown", and the UI renders it as "—". The old
+	// fallback was 0.5, which any dashboard shows as a healthy 50% — a guess
+	// dressed up as a measurement.
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://localhost/v1.24/info", nil)
 	if err != nil {
-		return 0.5, 0.5
+		return -1, -1
 	}
 	resp, err := dockerSockClient.Do(req)
 	if err != nil {
-		return 0.5, 0.5
+		return -1, -1
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return 0.5, 0.5
+		return -1, -1
 	}
 	return getCPUUsage(), getMemoryUsage()
 }
@@ -931,13 +934,13 @@ func getHostUsage() (cpuUsage, memUsage float64) {
 func getCPUUsage() float64 {
 	data, err := os.ReadFile("/proc/stat")
 	if err != nil {
-		return 0.5
+		return -1
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		if strings.HasPrefix(line, "cpu ") {
 			fields := strings.Fields(line)
 			if len(fields) < 5 {
-				return 0.5
+				return -1
 			}
 			var total, idle int64
 			for i := 1; i < len(fields); i++ {
@@ -948,18 +951,18 @@ func getCPUUsage() float64 {
 				}
 			}
 			if total == 0 {
-				return 0.5
+				return -1
 			}
 			return float64(total-idle) / float64(total)
 		}
 	}
-	return 0.5
+	return -1
 }
 
 func getMemoryUsage() float64 {
 	data, err := os.ReadFile("/proc/meminfo")
 	if err != nil {
-		return 0.5
+		return -1
 	}
 	var memTotal, memAvailable int64
 	for _, line := range strings.Split(string(data), "\n") {
@@ -977,7 +980,7 @@ func getMemoryUsage() float64 {
 		}
 	}
 	if memTotal == 0 {
-		return 0.5
+		return -1
 	}
 	return float64(memTotal-memAvailable) / float64(memTotal)
 }
