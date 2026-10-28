@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed } from 'vue'
-import { useData, withBase } from 'vitepress'
+import { computed } from "vue";
+import { useData, withBase } from "vitepress";
 
 // VitePress's built-in language menu maps /zh/quickstart ↔ /quickstart and drops
 // the #anchor on the way. Reading a long page, switching language and landing at
@@ -8,23 +8,30 @@ import { useData, withBase } from 'vitepress'
 // reload button.
 //
 // So the menu is ours: same computation, plus `location.hash` at click time.
-const { page } = useData()
+const { page } = useData();
 
-const isZh = computed(() => page.value.relativePath.startsWith('zh/'))
+const isZh = computed(() => page.value.relativePath.startsWith("zh/"));
 
 const target = computed(() => {
-  const rel = page.value.relativePath.replace(/\.md$/, '')
-  const without = isZh.value ? rel.replace(/^zh\//, '') : `zh/${rel}`
-  const path = without.replace(/(^|\/)index$/, '$1').replace(/\/$/, '') || '/'
-  return withBase(path === '/' ? (isZh.value ? '/' : '/zh/') : path)
-})
+  // relativePath is repo-relative ("zh/quickstart.md"), not URL-relative. Build
+  // an absolute path first: withBase() leaves a string without a leading slash
+  // untouched, which rendered href="quickstart" — a link that resolved to
+  // /zh/quickstart and looked like "the switch does nothing".
+  const rel = page.value.relativePath.replace(/\.md$/, "");
+  const stripped = rel.replace(/(^|\/)index$/, "$1").replace(/\/$/, "");
+  const here = "/" + stripped; // "" → "/", "zh/quickstart" → "/zh/quickstart"
+  const other = isZh.value
+    ? here.replace(/^\/zh(?=\/|$)/, "") || "/"
+    : "/zh" + (here === "/" ? "/" : here);
+  return withBase(other);
+});
 
 function go(e: MouseEvent) {
   // Keep the reader where they were: same page, same heading.
-  const hash = window.location.hash
-  if (!hash) return
-  e.preventDefault()
-  window.location.href = target.value + hash
+  const hash = window.location.hash;
+  if (!hash) return;
+  e.preventDefault();
+  window.location.href = target.value + hash;
 }
 </script>
 
