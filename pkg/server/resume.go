@@ -84,12 +84,33 @@ func resumeOnce(d resumeDeps) int {
 			})
 			continue
 		}
-		// The sandbox may already be up: a delivery whose completion write was
-		// lost still created the container. Do not create a second one.
-		if sb, ok := d.sandboxes.Get(job.SandboxName); ok && sb.State == podpkg.StateRunning {
+		// The record decides. Three cases, and only one of them is a delivery:
+		//
+		//   gone        the customer deleted it (or it was reaped). Delivering now
+		//               would resurrect a sandbox somebody removed — the resumer
+		//               would recreate it on the next pass, forever.
+		//   terminal    ERROR/STOPPED/TERMINATED: the delivery already happened, or
+		//               failed for a reason retrying cannot fix.
+		//   RUNNING     up already: the completion write was what got lost.
+		sb, exists := d.sandboxes.Get(job.SandboxName)
+		if !exists {
+			_ = d.jobs.UpdateJob(job.ID, func(j *podpkg.Job) {
+				j.Status = podpkg.JobStatusFailed
+				j.ErrorMessage = "sandbox was deleted before its delivery completed"
+			})
+			continue
+		}
+		switch sb.State {
+		case podpkg.StateRunning:
 			_ = d.jobs.UpdateJob(job.ID, func(j *podpkg.Job) {
 				j.Status = podpkg.JobStatusCompleted
 				j.ErrorMessage = ""
+			})
+			continue
+		case podpkg.StateError, podpkg.StateStopped, podpkg.StateTerminated:
+			_ = d.jobs.UpdateJob(job.ID, func(j *podpkg.Job) {
+				j.Status = podpkg.JobStatusFailed
+				j.ErrorMessage = "sandbox is " + string(sb.State) + "; nothing to deliver"
 			})
 			continue
 		}

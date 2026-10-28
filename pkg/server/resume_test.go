@@ -134,6 +134,7 @@ func TestResume_OnlyOneInstanceClaims(t *testing.T) {
 		CreatedAt: time.Now().Add(-5 * time.Minute), UpdatedAt: time.Now().Add(-5 * time.Minute),
 	}
 	_ = memory.Jobs.AddJob(job)
+	memory.Sandboxes.Add(&podpkg.SandboxInfo{Name: "race", State: podpkg.StatePending})
 
 	claims := 0
 	d := resumeDeps{
@@ -145,5 +146,53 @@ func TestResume_OnlyOneInstanceClaims(t *testing.T) {
 	resumeOnce(d)
 	if claims != 1 {
 		t.Fatalf("delivered %d times, want exactly 1", claims)
+	}
+}
+
+// A deleted sandbox must not be resurrected. Without this check the resumer
+// delivered a create for a record that no longer existed, and the customer's
+// deleted sandbox came back — repeatedly, on every pass.
+func TestResume_DoesNotResurrectDeletedSandboxes(t *testing.T) {
+	memory := store.NewMemoryStores()
+	job := &podpkg.Job{
+		ID: "j-del", Type: podpkg.JobTypeCreateSandbox, Status: podpkg.JobStatusPending,
+		SandboxName: "deleted-box", PoderID: "p1", Request: []byte(`{"name":"deleted-box"}`),
+		CreatedAt: time.Now().Add(-5 * time.Minute), UpdatedAt: time.Now().Add(-5 * time.Minute),
+	}
+	_ = memory.Jobs.AddJob(job)
+	// No sandbox record: the customer deleted it.
+	delivered := false
+	d := resumeDeps{
+		jobs: memory.Jobs, sandboxes: memory.Sandboxes, tunnels: tunnel.NewTunnelStore(),
+		deliver: func(*podpkg.Job, *podpkg.CreateSandboxRequest) error { delivered = true; return nil },
+	}
+	resumeOnce(d)
+	if delivered {
+		t.Fatal("re-delivered a create for a sandbox that no longer exists")
+	}
+	if j, _ := memory.Jobs.GetJob("j-del"); j.Status != podpkg.JobStatusFailed {
+		t.Fatalf("job status = %s, want FAILED", j.Status)
+	}
+}
+
+// A sandbox that already failed stays failed: retrying cannot fix it, and a
+// resumer that keeps trying is a loop with a log line per pass.
+func TestResume_SkipsErroredSandboxes(t *testing.T) {
+	memory := store.NewMemoryStores()
+	job := &podpkg.Job{
+		ID: "j-err", Type: podpkg.JobTypeCreateSandbox, Status: podpkg.JobStatusPending,
+		SandboxName: "errored", PoderID: "p1", Request: []byte(`{"name":"errored"}`),
+		CreatedAt: time.Now().Add(-5 * time.Minute), UpdatedAt: time.Now().Add(-5 * time.Minute),
+	}
+	_ = memory.Jobs.AddJob(job)
+	memory.Sandboxes.Add(&podpkg.SandboxInfo{Name: "errored", State: podpkg.StateError})
+	delivered := false
+	d := resumeDeps{
+		jobs: memory.Jobs, sandboxes: memory.Sandboxes, tunnels: tunnel.NewTunnelStore(),
+		deliver: func(*podpkg.Job, *podpkg.CreateSandboxRequest) error { delivered = true; return nil },
+	}
+	resumeOnce(d)
+	if delivered {
+		t.Fatal("re-delivered a create for an ERROR sandbox")
 	}
 }
