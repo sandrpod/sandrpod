@@ -38,6 +38,17 @@ const zhSidebar = [
     ],
   },
   {
+    text: "控制台（SaaS）",
+    items: [
+      { text: "控制台快速开始", link: "/zh/console" },
+      { text: "工作区与角色", link: "/zh/console-workspaces" },
+      { text: "API 密钥", link: "/zh/console-keys" },
+      { text: "计费与用量", link: "/zh/console-billing" },
+      { text: "限额", link: "/zh/console-limits" },
+      { text: "控制台故障排查", link: "/zh/console-troubleshooting" },
+    ],
+  },
+  {
     text: "帮助",
     items: [
       { text: "故障排查", link: "/zh/troubleshooting" },
@@ -73,6 +84,7 @@ export default defineConfig({
       themeConfig: {
         nav: [
           { text: "开始", link: "/zh/quickstart" },
+          { text: "控制台", link: "/zh/console" },
           { text: "平台", link: "/zh/architecture" },
           { text: "参考", link: "/zh/api" },
           { text: "部署", link: "/zh/deploy" },
@@ -134,6 +146,7 @@ export default defineConfig({
       { text: "Platform", link: "/architecture" },
       { text: "Reference", link: "/api" },
       { text: "Guides", link: "/deploy" },
+      { text: "Console", link: "/console" },
       {
         text: "Links",
         items: [
@@ -179,6 +192,17 @@ export default defineConfig({
           { text: "Self-host in production", link: "/deploy" },
           { text: "More than one instance", link: "/multi-instance" },
           { text: "Upgrading", link: "/upgrading" },
+        ],
+      },
+      {
+        text: "Console (hosted)",
+        items: [
+          { text: "Console quickstart", link: "/console" },
+          { text: "Workspaces and roles", link: "/console-workspaces" },
+          { text: "API keys", link: "/console-keys" },
+          { text: "Billing and usage", link: "/console-billing" },
+          { text: "Limits", link: "/console-limits" },
+          { text: "Console troubleshooting", link: "/console-troubleshooting" },
         ],
       },
       {
