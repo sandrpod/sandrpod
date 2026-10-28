@@ -50,3 +50,13 @@ jobs:
           go-version: '1.25'
       - name: store and scheduler against PostgreSQL
         run: go test ./pkg/store/sqldb/ ./pkg/sandpod/ ./pkg/server/ -count=1
+
+      # Two instances, one database, a real worker: the four mechanisms that only
+      # exist in this deployment shape, asserted end to end. Unit tests cannot
+      # cover them — the defects this found (a SQLite-only SQL function, an
+      # ownership claim that expired, a create that could not cross instances, a
+      # resume that delivered twice) were all invisible below this level.
+      - name: two instances, one database (end to end)
+        run: ./hack/multi-instance-check.sh
+        env:
+          TEST_POSTGRES_DSN: ${{ env.TEST_POSTGRES_DSN }}

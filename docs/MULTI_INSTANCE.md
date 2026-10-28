@@ -121,3 +121,28 @@ Both were invisible on SQLite and on a single instance:
 2. **Forwarding expired after 90 seconds.** The claim refresher lived in the CLI
    entry point, which an embedding build never calls, so the claim aged out while
    the fleet was healthy. Heartbeats now renew it. Fixed in `16f73c6`.
+
+## One command to prove it still works
+
+```bash
+./hack/multi-instance-check.sh                          # starts its own PostgreSQL
+TEST_POSTGRES_DSN=postgres://… ./hack/multi-instance-check.sh
+MI_KEEP=1 ./hack/multi-instance-check.sh                # leave the stack up
+```
+
+It starts two instances on one database, attaches a worker to A, then asserts
+four things that exist only in this deployment shape:
+
+| Assertion | What it protects |
+|---|---|
+| create sent to **B** reaches `RUNNING` | placement works and the record gets its placement fields |
+| A logged `POST /internal/provision 200` | the create crossed instances instead of falling back |
+| execute through B returns the command's output | the forwarding path |
+| a planted stale job completes, with exactly **one** `resume: delivered` | the outbox claim: at-least-once, not once per node |
+
+The last one is the subtle one. A create that reaches `RUNNING` is not proof that
+peer delivery worked — the outbox can also rescue it a minute later. That is why
+the check asserts the provisioning call *and* counts the resume lines: a green run
+means the fast path ran, not that a fallback covered for it.
+
+It runs in CI on every change to `pkg/store`, `pkg/sandpod` or `pkg/server`.
