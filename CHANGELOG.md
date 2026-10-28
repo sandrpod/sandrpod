@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- The project positions itself as a **production service**, not a prototype:
+  version support policy, upgrade guarantees, and support channels are stated in
+  the README; the personal contact addresses are replaced with support mailboxes.
+
 ## [0.7.0] - 2026-10-27
 
 The control plane becomes a library, and tenant isolation reaches the paths it

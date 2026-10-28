@@ -17,6 +17,33 @@
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License"/>
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/stable-v0.7.0-16a34a" alt="stable v0.7.0"/>
+  <img src="https://img.shields.io/badge/deployed%20as-a%20service-0ea5e9" alt="run as a service"/>
+</p>
+
+---
+
+## Maturity and support
+
+**v0.7.0 is the stable line.** It is the version the commercial service runs, and
+the version the upgrade notes below are written against. `main` is development.
+
+| | |
+|---|---|
+| Supported releases | the latest tagged version; older tags receive security fixes for 90 days |
+| Go API stability | `pkg/server`, `pkg/sandpod`, `pkg/toolbox` follow semver; breaking changes are listed in [CHANGELOG.md](CHANGELOG.md) |
+| Upgrade path | [docs/UPGRADING.md](docs/UPGRADING.md); workers before the control plane |
+| Security reports | [SECURITY.md](SECURITY.md) — private advisory, acknowledged in 48 h |
+| Commercial support | <support@gatemux.ai> |
+
+Running this in production: [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)
+is the reference deployment (one host, PostgreSQL, wildcard TLS, verified with the
+unmodified E2B SDKs), [docs/MULTI_INSTANCE_DEPLOYMENT.md](docs/MULTI_INSTANCE_DEPLOYMENT.md)
+for horizontal scale, and [docs/SCALING.md](docs/SCALING.md) for the capacity
+model. The commercial build adds accounts, billing and a portal on top of the same
+engine.
+
 ---
 
 <p align="center">
@@ -403,8 +430,16 @@ Longer pieces, with the commands and the failures they were measured from:
 More at [blog.sandrpod.com](https://blog.sandrpod.com).
 
 Deploying this inside a company, or hitting something the docs don't cover?
-[Open an issue](https://github.com/sandrpod/sandrpod/issues), email me at
-<zhaochj@126.com>, or find me on X as [@itscjzhao](https://x.com/itscjzhao).
+
+| | |
+|---|---|
+| Bugs and features | [the issue tracker](https://github.com/sandrpod/sandrpod/issues) |
+| Security | [private advisory](https://github.com/sandrpod/sandrpod/security/advisories/new) — never a public issue |
+| Commercial support, procurement, deployment help | <support@gatemux.ai> |
+| Privacy and data requests | <privacy@gatemux.ai> |
+
+First response is same business day, best effort. There is no 24×7 rotation, and
+the project does not claim a contractual SLA.
 
 ---
 

@@ -23,6 +23,25 @@
   <img src="assets/demo.gif" alt="从空目录到沙箱里跑代码，冷机器实录" width="900"/>
 </p>
 
+## 成熟度与支持
+
+**v0.7.0 是稳定线** —— 商业服务运行的就是这个版本，升级说明也按它写。`main` 是开发线。
+
+| | |
+|---|---|
+| 支持的版本 | 最新 tag；更早的 tag 在 90 天内仍接收安全修复 |
+| Go API 稳定性 | `pkg/server`、`pkg/sandpod`、`pkg/toolbox` 遵循 semver，破坏性变更写进 [CHANGELOG.md](CHANGELOG.md) |
+| 升级路径 | [docs/UPGRADING.md](docs/UPGRADING.md)，**先升 worker 再升控制面** |
+| 安全问题 | [SECURITY.md](SECURITY.md)，私有通道，48 小时内响应 |
+| 商业支持 | <support@gatemux.ai> |
+
+生产部署参考 [docs/PRODUCTION_DEPLOYMENT.md](docs/PRODUCTION_DEPLOYMENT.md)（单机、PostgreSQL、
+通配符 TLS，已用未修改的 E2B SDK 验证）；横向扩展见
+[docs/MULTI_INSTANCE_DEPLOYMENT.md](docs/MULTI_INSTANCE_DEPLOYMENT.md)，容量模型见
+[docs/SCALING.md](docs/SCALING.md)。
+
+---
+
 ## 快速开始 —— 60 秒跑出第一个沙箱
 
 一条命令用发布镜像同时拉起**控制平面**和一个 **Docker worker** —— 不需要 Go
@@ -364,9 +383,14 @@ docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t ghcr.
 
 ## 联系
 
-想在公司内部署，或者遇到文档没覆盖的情况？
-[提 issue](https://github.com/sandrpod/sandrpod/issues)、邮件 <zhaochj@126.com>，
-或者在 X 上找我 [@itscjzhao](https://x.com/itscjzhao)。
+| | |
+|---|---|
+| Bug 与需求 | [issue tracker](https://github.com/sandrpod/sandrpod/issues) |
+| 安全问题 | [私有通道](https://github.com/sandrpod/sandrpod/security/advisories/new)，不要开公开 issue |
+| 商业支持、采购、部署协助 | <support@gatemux.ai> |
+| 隐私与数据请求 | <privacy@gatemux.ai> |
+
+首次响应为同一工作日内，尽力而为；没有 7×24 轮值，也不承诺合同级 SLA。
 
 ---
 
