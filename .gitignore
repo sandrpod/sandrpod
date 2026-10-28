@@ -85,3 +85,8 @@ credentials.json
 # Kept on the machine, never published: the repo is public and these documents
 # quote other companies' pages and price lists.
 devdoc/
+
+# docs site build output
+docs-site/node_modules/
+docs-site/.vitepress/dist/
+docs-site/.vitepress/cache/
