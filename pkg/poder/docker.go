@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -255,6 +256,16 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 // DeletePod stops and removes the container for the given pod, then releases
 // the pod's egress proxy and internal network (if it had them).
 func (p *DockerPoder) DeletePod(ctx context.Context, podID string) error {
+	// Egress objects are named after the container's *name* (sp-<ts>-<rand>,
+	// assigned before the daemon handed back an ID), while the control plane
+	// deletes by container ID. Resolve the name before removal — afterwards there
+	// is nothing left to inspect — or the sidecar and its bridge network survive
+	// every delete, silently, because "not found" was the expected outcome.
+	egressKey := podID
+	if info, err := p.dockerClient.ContainerInspect(ctx, podID); err == nil && info.Name != "" {
+		egressKey = strings.TrimPrefix(info.Name, "/")
+	}
+
 	// Stop the container gracefully
 	_ = p.dockerClient.ContainerStop(ctx, podID, container.StopOptions{Timeout: ptr(10)})
 
@@ -263,11 +274,11 @@ func (p *DockerPoder) DeletePod(ctx context.Context, podID string) error {
 		// The network cannot be removed while a container is attached, and
 		// the proxy is useless without its container: still try to release
 		// both, then report the container failure.
-		p.teardownEgress(ctx, podID)
+		p.teardownEgress(ctx, egressKey)
 		return fmt.Errorf("failed to remove container: %w", err)
 	}
 
-	p.teardownEgress(ctx, podID)
+	p.teardownEgress(ctx, egressKey)
 	p.UnregisterPod(podID)
 	return nil
 }
