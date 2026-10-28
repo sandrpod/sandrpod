@@ -47,3 +47,19 @@ upgrading.md          order, compatibility, rollback
 troubleshooting.md    real failures and what they mean
 release-notes.md      per release, with the breaks
 ```
+
+## Deploying
+
+The site is served by Caddy from a directory on the application host — no
+third-party build service, so a docs change is two commands:
+
+```bash
+# on the host
+cd /opt/sandrpod-oss && git pull
+cd docs-site && npm install --silent && npx vitepress build
+sudo rsync -a --delete .vitepress/dist/ /var/www/docs/
+```
+
+`/etc/caddy/docs.caddy` serves that directory, with `.md` forced to
+`text/plain` so a tool fetches it instead of a browser downloading it, and
+`try_files` giving clean URLs.

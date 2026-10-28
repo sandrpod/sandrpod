@@ -5,6 +5,8 @@ export default defineConfig({
   title: 'SandrPod',
   description: 'Self-hosted execution infrastructure for AI agents. Run agent code on any cloud, any machine — or none at all.',
   cleanUrls: true,
+  // The site's own README is for the repository, not a page.
+  srcExclude: ['README.md'],
   lastUpdated: true,
   head: [
     ['link', { rel: 'icon', href: '/favicon.svg' }],
