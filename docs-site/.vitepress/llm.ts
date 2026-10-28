@@ -62,6 +62,31 @@ export function copyMarkdownAndWriteLLMFiles(siteConfig: any) {
 
   entries.sort((a, b) => (a.path === '/index' ? -1 : b.path === '/index' ? 1 : a.path.localeCompare(b.path)))
 
+  const zh = entries.filter((e) => e.path.startsWith('/zh'))
+  const en = entries.filter((e) => !e.path.startsWith('/zh'))
+
+  const mkIndex = (title: string, list: typeof entries, intro: string) =>
+    [
+      `# ${title}`,
+      '',
+      intro,
+      '',
+      ...list.map((e) => `- [${e.title}](https://docs.sandrpod.com${e.path}.md)${e.description ? `: ${e.description}` : ''}`),
+      '',
+    ].join('\n')
+
+  if (zh.length) {
+    mkdirSync(join(outDir, 'zh'), { recursive: true })
+    writeFileSync(
+      join(outDir, 'zh/llms.txt'),
+      mkIndex(
+        'SandrPod 文档',
+        zh,
+        '> 跑在你自己机器上的 AI 智能体执行基础设施：任何云、任何机器，或者干脆不用云 ——\n> 并且能说任何 SDK，包括未经修改的 E2B SDK。\n\n> 每个页面在同一个 URL 上还有 Markdown 版本（`/zh/e2b.md`），\n> 全站拼接在 `/llms-full.txt`。',
+      ),
+    )
+  }
+
   const index = [
     '# SandrPod documentation',
     '',

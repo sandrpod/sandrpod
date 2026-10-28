@@ -1,6 +1,51 @@
 import { defineConfig } from 'vitepress'
 import { copyMarkdownAndWriteLLMFiles } from './llm'
 
+const zhSidebar = [
+  {
+    text: '开始',
+    items: [
+      { text: 'SandrPod 是什么', link: '/zh/' },
+      { text: '快速开始', link: '/zh/quickstart' },
+      { text: '第一个沙箱', link: '/zh/first-sandbox' },
+    ],
+  },
+  {
+    text: '接入任何 SDK',
+    items: [
+      { text: 'E2B 直接替换', link: '/zh/e2b' },
+      { text: 'Python SDK', link: '/zh/python' },
+      { text: 'LangChain 与 deepagents', link: '/zh/langchain' },
+      { text: '命令行 CLI', link: '/zh/cli' },
+      { text: 'REST API', link: '/zh/api' },
+    ],
+  },
+  {
+    text: '平台',
+    items: [
+      { text: '架构', link: '/zh/architecture' },
+      { text: 'Worker 与隧道', link: '/zh/workers' },
+      { text: '隔离与放置', link: '/zh/isolation' },
+      { text: '出网策略', link: '/zh/egress' },
+    ],
+  },
+  {
+    text: '部署运行',
+    items: [
+      { text: '生产部署', link: '/zh/deploy' },
+      { text: '多实例', link: '/zh/multi-instance' },
+      { text: '升级', link: '/zh/upgrading' },
+    ],
+  },
+  {
+    text: '帮助',
+    items: [
+      { text: '故障排查', link: '/zh/troubleshooting' },
+      { text: '发布说明', link: '/zh/release-notes' },
+    ],
+  },
+]
+
 export default defineConfig({
   title: 'SandrPod',
   description: 'Self-hosted execution infrastructure for AI agents. Run agent code on any cloud, any machine — or none at all.',
@@ -13,6 +58,11 @@ export default defineConfig({
     ['meta', { name: 'theme-color', content: '#0b1020' }],
   ],
   sitemap: { hostname: 'https://docs.sandrpod.com' },
+
+  locales: {
+    root: { label: 'English', lang: 'en' },
+    zh: { label: '中文', lang: 'zh-CN', link: '/zh/' },
+  },
 
   themeConfig: {
     logo: '/logo.svg',
@@ -95,6 +145,39 @@ export default defineConfig({
     outline: { level: [2, 3] },
 
     docFooter: { prev: 'Previous', next: 'Next' },
+
+    locales: {
+      zh: {
+        label: '中文',
+        nav: [
+          { text: '开始', link: '/zh/quickstart' },
+          { text: '平台', link: '/zh/architecture' },
+          { text: '参考', link: '/zh/api' },
+          { text: '部署', link: '/zh/deploy' },
+          {
+            text: '链接',
+            items: [
+              { text: '官网', link: 'https://sandrpod.com' },
+              { text: '控制台', link: 'https://cloud.sandrpod.com' },
+              { text: 'GitHub', link: 'https://github.com/sandrpod/sandrpod' },
+              { text: '发布说明', link: '/zh/release-notes' },
+            ],
+          },
+        ],
+        sidebar: zhSidebar,
+        outline: { level: [2, 3], label: '本页目录' },
+        docFooter: { prev: '上一篇', next: '下一篇' },
+        editLink: {
+          pattern: 'https://github.com/sandrpod/sandrpod/edit/main/docs-site/zh/:path',
+          text: '编辑此页',
+        },
+        footer: {
+          message: 'Apache 2.0 —— 你的云、你的机器、你说了算。',
+          copyright: 'Copyright © 2026 SandrPod',
+        },
+        lastUpdated: { text: '最后更新' },
+      },
+    },
   },
 
   // Two audiences read these pages: people and agents. Every page also exists as
