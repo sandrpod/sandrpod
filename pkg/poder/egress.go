@@ -45,7 +45,9 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/client"
 	"github.com/sandrpod/sandrpod/pkg/egress"
 )
 
@@ -228,25 +230,79 @@ func (p *DockerPoder) waitForEgressReady(ctx context.Context, containerID, sidec
 
 // teardownEgress removes the sidecar and the internal network. Safe for a pod
 // that never had one.
-func (p *DockerPoder) teardownEgress(ctx context.Context, podID string) {
-	e := p.takeEgress(podID)
+// egressCleanupTargets reports which objects belong to podID. The in-memory map
+// is a convenience, not the authority: it is empty after a pode restart, and
+// trusting it alone leaked one container and one bridge network for every egress
+// sandbox created before that restart (measured: restart the worker, delete the
+// sandbox, `docker ps` still lists sandrpod-egress-proxy-<id>).
+func egressCleanupTargets(e *podEgress, podID string) (sidecar, network string) {
+	sidecar, network = egressSidecarName(podID), egressNetworkName(podID)
 	if e == nil {
-		return
+		return sidecar, network
 	}
 	if e.sidecar != "" {
-		if err := p.dockerClient.ContainerRemove(ctx, e.sidecar, container.RemoveOptions{Force: true}); err != nil {
-			log.Printf("poder: remove egress proxy for %s: %v", podID, err)
-		}
+		sidecar = e.sidecar
 	}
-	p.detachSelfFromNetwork(ctx, e.network)
 	if e.network != "" {
-		// Removing a network with a container still attached fails; by now the
-		// sandbox container is gone (DeletePod removes it first) or the whole
-		// thing is being abandoned, so a failure here is noise, not a leak of
-		// reachability.
-		if err := p.dockerClient.NetworkRemove(ctx, e.network); err != nil {
-			log.Printf("poder: remove egress network for %s: %v", podID, err)
+		network = e.network
+	}
+	return sidecar, network
+}
+
+func (p *DockerPoder) teardownEgress(ctx context.Context, podID string) {
+	sidecar, network := egressCleanupTargets(p.takeEgress(podID), podID)
+
+	if err := p.dockerClient.ContainerRemove(ctx, sidecar, container.RemoveOptions{Force: true}); err != nil &&
+		!client.IsErrNotFound(err) {
+		log.Printf("poder: remove egress proxy for %s: %v", podID, err)
+	}
+	p.detachSelfFromNetwork(ctx, network)
+	// Removing a network with a container still attached fails; by now the sandbox
+	// container is gone (DeletePod removes it first) or the whole thing is being
+	// abandoned, so a failure here is noise, not a leak of reachability.
+	if err := p.dockerClient.NetworkRemove(ctx, network); err != nil && !client.IsErrNotFound(err) {
+		log.Printf("poder: remove egress network for %s: %v", podID, err)
+	}
+}
+
+// sweepOrphanedEgress removes egress sidecars and networks whose sandbox
+// container no longer exists. Deletion covers the normal path, but a pod that
+// died with its host never gets a delete call — and each leftover holds a
+// bridge network and a container that nothing will ever reference again.
+//
+// Runs once at startup, in the background: a pode that cannot list its own
+// containers should still serve.
+func (p *DockerPoder) sweepOrphanedEgress(ctx context.Context) {
+	containers, err := p.dockerClient.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", "sandrpod/egress=true")),
+	})
+	if err != nil {
+		log.Printf("poder: egress sweep: list containers: %v", err)
+		return
+	}
+	removed := 0
+	for _, c := range containers {
+		podID := c.Labels["sandrpod/sandbox-pod"]
+		if podID == "" {
+			continue
 		}
+		if _, err := p.dockerClient.ContainerInspect(ctx, podID); err == nil {
+			continue // the sandbox is still there; this sidecar is in use
+		} else if !client.IsErrNotFound(err) {
+			continue // cannot tell; leave it alone rather than break a live sandbox
+		}
+		sidecar, network := egressCleanupTargets(nil, podID)
+		if err := p.dockerClient.ContainerRemove(ctx, sidecar, container.RemoveOptions{Force: true}); err != nil &&
+			!client.IsErrNotFound(err) {
+			log.Printf("poder: egress sweep: remove %s: %v", sidecar, err)
+			continue
+		}
+		_ = p.dockerClient.NetworkRemove(ctx, network)
+		removed++
+	}
+	if removed > 0 {
+		log.Printf("poder: egress sweep: removed %d orphaned sidecar(s)", removed)
 	}
 }
 

@@ -59,11 +59,17 @@ func NewDockerPoder(region, networkName string) (*DockerPoder, error) {
 	}
 	// networkName is still empty → use Docker's default network, no explicit override
 
-	return &DockerPoder{
+	pode := &DockerPoder{
 		BasePoder:    base,
 		dockerClient: dockerClient,
 		networkName:  networkName,
-	}, nil
+	}
+
+	// Clean up egress sidecars whose sandbox died with the host. Off the startup
+	// path: a pode that cannot list containers should still serve.
+	go pode.sweepOrphanedEgress(context.Background())
+
+	return pode, nil
 }
 
 // EnsureNetwork ensures the configured Docker network exists, creating it if needed.
