@@ -8,6 +8,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- [docs/UPSTREAM_CHANGES.md](docs/UPSTREAM_CHANGES.md): for each release, what
+  breaks, who it breaks, and how to roll back — the checklist a release review
+  needs, kept separate from the release narrative.
+
 ### Changed
 
 - The project positions itself as a **production service**, not a prototype:

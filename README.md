@@ -34,6 +34,7 @@ the version the upgrade notes below are written against. `main` is development.
 | Supported releases | the latest tagged version; older tags receive security fixes for 90 days |
 | Go API stability | `pkg/server`, `pkg/sandpod`, `pkg/toolbox` follow semver; breaking changes are listed in [CHANGELOG.md](CHANGELOG.md) |
 | Upgrade path | [docs/UPGRADING.md](docs/UPGRADING.md); workers before the control plane |
+| What a release breaks | [docs/UPSTREAM_CHANGES.md](docs/UPSTREAM_CHANGES.md) — per release: the break, who it hits, how to roll back |
 | Security reports | [SECURITY.md](SECURITY.md) — private advisory, acknowledged in 48 h |
 | Commercial support | <support@gatemux.ai> |
 
