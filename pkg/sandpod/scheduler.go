@@ -373,6 +373,7 @@ func (s *Scheduler) waitForPoderRegistration(providerType, region string, timeou
 	require []string, tenant string) *PoderInfo {
 	deadline := time.Now().Add(timeout)
 
+	var reported bool
 	for time.Now().Before(deadline) {
 		// Same filters as the first attempt: waiting for capacity must not be a
 		// way around placement rules. (It was: the fallback used SelectBest,
@@ -382,6 +383,15 @@ func (s *Scheduler) waitForPoderRegistration(providerType, region string, timeou
 		poder, err := s.poderStore.SelectBestFor(region, providerType, require, tenant)
 		if err == nil && poder != nil {
 			return poder
+		}
+		// A query that fails is not the same fact as a fleet with no room, and it
+		// used to look identical: the error was dropped and the loop waited out
+		// the full timeout before blaming worker registration. That is how a
+		// Postgres-only SQL bug ("function instr does not exist") presented as
+		// "no worker registered within 30s".
+		if err != nil && !reported {
+			log.Printf("[Scheduler] poder selection failed (will keep waiting): %v", err)
+			reported = true
 		}
 
 		log.Printf("[Scheduler] Waiting for poder registration (provider=%s, region=%s)...", providerType, region)

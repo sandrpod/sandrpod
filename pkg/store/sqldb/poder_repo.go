@@ -103,6 +103,11 @@ func (r *poderRepo) SelectBest(region, providerType string) (*sandpod.PoderInfo,
 // SelectBestFor is SelectBest plus a capability requirement. The capability
 // column is a comma-separated list, so the filter is a LIKE on delimiters
 // rather than a join: '%,egress,%' against ','||capabilities||','.
+//
+// LIKE rather than instr(): instr() is SQLite-only, and using it made worker
+// selection fail outright on PostgreSQL ("function instr(text, text) does not
+// exist"), which reads in the log as "no worker registered" — the sandbox
+// simply never got placed. The PG test suite catches it now (TestPostgres_Repos).
 func (r *poderRepo) SelectBestFor(region, providerType string, require []string, tenant string) (*sandpod.PoderInfo, error) {
 	var id string
 	err := r.db.QueryRow(`
@@ -111,7 +116,7 @@ func (r *poderRepo) SelectBestFor(region, providerType string, require []string,
 		  AND usage_containers < max_containers
 		  AND (? = '' OR region = ?)
 		  AND (? = '' OR provider_type = ?)
-		  AND (? = '' OR instr(',' || capabilities || ',', ',' || ? || ',') > 0)
+		  AND (? = '' OR (',' || capabilities || ',') LIKE '%,' || ? || ',%')
 		  AND (? = '' OR workspace = '' OR workspace = ?)
 		ORDER BY
 		  (CAST(usage_containers AS REAL) / NULLIF(max_containers, 0)) * 0.6

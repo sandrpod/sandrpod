@@ -1,0 +1,52 @@
+# The PostgreSQL path, tested on every push.
+#
+# It exists because that path was broken in a way SQLite could not show: worker
+# selection used `instr()`, a SQLite-only function, so on PostgreSQL every
+# placement query errored — and the scheduler swallowed the error and reported
+# "no worker registered within 30s". A sandbox could never be placed on the
+# deployment shape that the multi-instance build requires.
+#
+# The suite already skips itself without TEST_POSTGRES_DSN, so this job is the
+# only thing that ever runs it.
+name: postgres
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pkg/store/**"
+      - "pkg/sandpod/**"
+      - "pkg/server/**"
+      - ".github/workflows/postgres.yml"
+  pull_request:
+    paths:
+      - "pkg/store/**"
+      - "pkg/sandpod/**"
+      - "pkg/server/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sandrpod
+          POSTGRES_PASSWORD: sandrpod
+          POSTGRES_DB: sandrpod_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sandrpod"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      TEST_POSTGRES_DSN: postgres://sandrpod:sandrpod@127.0.0.1:5432/sandrpod_test?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: store and scheduler against PostgreSQL
+        run: go test ./pkg/store/sqldb/ ./pkg/sandpod/ ./pkg/server/ -count=1
