@@ -3,7 +3,11 @@
 
 # 构建阶段跑在 BUILDPLATFORM（原生架构）上做交叉编译，
 # 避免 buildx 多架构时整个 Go 编译落在 QEMU 仿真里（慢一个数量级）。
-FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS builder
+# BUILDPLATFORM is only injected by buildx; without it `FROM --platform=` gets an
+# empty string and the build fails with "failed to parse platform". Default it, and
+# pass --build-arg BUILDPLATFORM=linux/arm64 on an arm64 host without buildx.
+ARG BUILDPLATFORM
+FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.27-alpine AS builder
 
 WORKDIR /app
 
