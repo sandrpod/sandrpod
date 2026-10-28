@@ -17,7 +17,7 @@ ARG TARGETOS TARGETARCH
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto \
     go build -ldflags="-s -w" -o /egress-proxy ./cmd/egress-proxy
 
-FROM alpine:3.20
+FROM alpine:3.24
 COPY --from=build /egress-proxy /usr/local/bin/egress-proxy
 # Runs unprivileged: the proxy only binds loopback/ports > 1024 and dials out.
 USER 65534:65534
