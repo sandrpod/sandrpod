@@ -275,11 +275,19 @@ func (d e2bDeps) authz() func(key string) (e2bcompat.Identity, bool) {
 	return func(key string) (e2bcompat.Identity, bool) {
 		r, _ := http.NewRequest(http.MethodGet, "/", nil)
 		r.Header.Set("X-Sandrpod-Token", key)
-		id, err := d.cfg.E2BAPIKeys.Authenticate(r)
-		if err != nil {
-			return e2bcompat.Identity{}, false
+		if id, err := d.cfg.E2BAPIKeys.Authenticate(r); err == nil {
+			return e2bcompat.Identity{Name: id.Name, Tenant: id.Tenant, Admin: id.IsAdmin()}, true
 		}
-		return e2bcompat.Identity{Name: id.Name, Tenant: id.Tenant, Admin: id.IsAdmin()}, true
+		// The per-sandbox envd token. The official SDK does not send the API key
+		// to envd at all: it takes envdAccessToken from the create response and
+		// presents it as X-Access-Token on every envd call. A host-supplied
+		// resolver only knows its own keys, so without this fallback every
+		// commands.run / files.* answers 401 while create and kill work — the
+		// most confusing half-working state there is.
+		if owner, ok := d.envdTokenIdentity(key); ok {
+			return e2bcompat.Identity{Name: owner, Admin: false}, true
+		}
+		return e2bcompat.Identity{}, false
 	}
 }
 
