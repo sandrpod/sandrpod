@@ -48,6 +48,17 @@ troubleshooting.md    real failures and what they mean
 release-notes.md      per release, with the breaks
 ```
 
+## Language switching
+
+`LangSwitch.vue` replaces VitePress's built-in menu, which maps
+`/zh/quickstart` ↔ `/quickstart` and drops the `#anchor` while doing it. Ours keeps
+`location.hash` at click time, so a reader on `/zh/e2b#密钥` lands on
+`/e2b#密钥` rather than at the top of the English page.
+
+Anchors are per-language: a heading whose slug differs (`## 鉴权` vs
+`## Authentication`) has no counterpart, and the browser falls back to the top of
+the page. Headings that share a slug (`#api`, `#cli`) work in both directions.
+
 ## Deploying
 
 The site is served by Caddy from a directory on the application host — no

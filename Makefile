@@ -133,6 +133,24 @@ clean: ## Remove built binaries
 	rm -f server poder agent toolbox
 	rm -rf dist/
 
+# ─── documentation site (docs.sandrpod.com) ──────────────────────────────────
+# The site is built here and served by Caddy from a directory on the host; there
+# is no CI job for it. `make docs` also fails on a dead internal link, which is
+# the only thing that keeps a 34-page site honest.
+DOCS_HOST ?= root@47.239.22.55
+DOCS_ROOT ?= /var/www/docs
+
+.PHONY: docs docs-serve docs-deploy
+docs: ## Build the documentation site (checks links)
+	cd docs-site && npm install --silent && npx vitepress build
+
+docs-serve: ## Preview the documentation site on :5173
+	cd docs-site && npm run dev
+
+docs-deploy: docs ## Publish it (rsync; needs SSH to the host)
+	rsync -az --delete docs-site/.vitepress/dist/ $(DOCS_HOST):$(DOCS_ROOT)/
+	@echo "published to https://docs.sandrpod.com"
+
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 		awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'

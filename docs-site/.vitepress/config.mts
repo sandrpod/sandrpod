@@ -61,7 +61,7 @@ export default defineConfig({
 
   locales: {
     root: { label: 'English', lang: 'en' },
-    zh: { label: '中文', lang: 'zh-CN', link: '/zh/' },
+    zh: { label: '中文', lang: 'zh-CN' },
   },
 
   themeConfig: {

@@ -8,7 +8,7 @@ function walk(dir: string, base = dir): string[] {
     const full = join(dir, name)
     const st = statSync(full)
     if (st.isDirectory()) out.push(...walk(full, base))
-    else if (name.endsWith('.md')) out.push(relative(base, full))
+    else if (name.endsWith('.md') && name !== 'README.md') out.push(relative(base, full))
   }
   return out
 }
@@ -60,10 +60,11 @@ export function copyMarkdownAndWriteLLMFiles(siteConfig: any) {
     })
   }
 
-  entries.sort((a, b) => (a.path === '/index' ? -1 : b.path === '/index' ? 1 : a.path.localeCompare(b.path)))
-
   const zh = entries.filter((e) => e.path.startsWith('/zh'))
   const en = entries.filter((e) => !e.path.startsWith('/zh'))
+
+  entries.sort((a, b) => (a.path === '/index' ? -1 : b.path === '/index' ? 1 : a.path.localeCompare(b.path)))
+
 
   const mkIndex = (title: string, list: typeof entries, intro: string) =>
     [
@@ -87,6 +88,9 @@ export function copyMarkdownAndWriteLLMFiles(siteConfig: any) {
     )
   }
 
+  const line = (e: (typeof entries)[number]) =>
+    `- [${e.title}](https://docs.sandrpod.com${e.path}.md)${e.description ? `: ${e.description}` : ''}`
+
   const index = [
     '# SandrPod documentation',
     '',
@@ -95,10 +99,14 @@ export function copyMarkdownAndWriteLLMFiles(siteConfig: any) {
     '> unmodified E2B SDK.',
     '',
     'Every page below also exists as Markdown at the same URL plus `.md`',
-    '(`/e2b.md`), and the whole site is concatenated in `/llms-full.txt`.',
+    '(`/e2b.md`). The whole site is concatenated in `/llms-full.txt`, and the',
+    'Chinese index is at `/zh/llms.txt`.',
     '',
-    ...entries.map((e) => `- [${e.title}](https://docs.sandrpod.com${e.path}.md)${e.description ? `: ${e.description}` : ''}`),
+    '## English',
     '',
+    ...en.map(line),
+    '',
+    ...(zh.length ? ['## 中文', '', ...zh.map(line), ''] : []),
   ].join('\n')
   writeFileSync(join(outDir, 'llms.txt'), index)
 
