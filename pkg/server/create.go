@@ -149,6 +149,26 @@ func runSandboxCreate(
 		})
 	}
 
+	// 2b. The tunnel must be usable from *this* instance. A worker's tunnel is
+	// held by the instance it dialled, so in a load-balanced deployment a create
+	// that lands on a peer cannot POST to that worker at all — and it used to
+	// discover this only after writing the sandbox record, which left a PENDING
+	// row nobody could fix and a 500 the caller could not act on.
+	//
+	// Resolving here, before the record exists, turns the case into
+	// errPoderTunnelElsewhere: the handler forwards the request to the node that
+	// owns the tunnel, and nothing is left behind when it does.
+	poderTunnel, hasTunnel := tunnelStore.Get(schedJob.PoderID)
+	if !hasTunnel {
+		if jobID != "" {
+			_ = jobStore.UpdateJob(jobID, func(j *podpkg.Job) {
+				j.Status = podpkg.JobStatusFailed
+				j.ErrorMessage = "worker tunnel is held by another instance"
+			})
+		}
+		return nil, jobID, &PoderTunnelElsewhereError{PoderID: schedJob.PoderID}
+	}
+
 	// 3. Upsert the sandbox record in PENDING with poder placement filled in.
 	sbArch, sbOS, sbOSVersion := "", "", ""
 	if pi, ok := poderStore.Get(schedJob.PoderID); ok {
@@ -198,11 +218,7 @@ func runSandboxCreate(
 
 	// 4. Create the container on the poder through the tunnel. Detached and
 	// bounded: by now the client has often disconnected.
-	t, ok := tunnelStore.Get(schedJob.PoderID)
-	if !ok {
-		failBoth(jobID, "poder tunnel not available")
-		return nil, jobID, fmt.Errorf("poder tunnel not available")
-	}
+	t := poderTunnel
 	bodyBytes, _ := json.Marshal(req)
 	poderCtx, poderCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer poderCancel()
@@ -332,4 +348,15 @@ func validateEgressPolicy(p *egress.Policy) error {
 		return err
 	}
 	return nil
+}
+
+// PoderTunnelElsewhereError means placement chose a worker whose tunnel lives on
+// another control-plane instance. It is not a failure: the caller (the HTTP
+// handler) forwards the request to that instance.
+type PoderTunnelElsewhereError struct {
+	PoderID string
+}
+
+func (e *PoderTunnelElsewhereError) Error() string {
+	return "worker tunnel is held by another instance (poder " + e.PoderID + ")"
 }

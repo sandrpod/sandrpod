@@ -656,6 +656,18 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			if req.ContainerNames != nil {
 				reconcileByHeartbeat(pID, req.ContainerNames, sandboxStore)
 			}
+			// Multi-instance ownership refresh. The claim written when the tunnel
+			// connected expires after ownerTTL (90 s), and the refresher that
+			// renews it lives in Main() — which an embedding build never calls, so
+			// in the commercial binary a peer could only forward to this instance
+			// for the first 90 seconds after a worker connected. Heartbeats arrive
+			// every 10 s, which is exactly the signal needed to keep the claim
+			// alive, and it costs one write per worker per heartbeat.
+			if cfg.NodeURL != "" && stores.TunnelOwners != nil {
+				if _, local := tunnelStore.Get(pID); local {
+					_ = stores.TunnelOwners.Claim(pID, cfg.NodeURL)
+				}
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 			return
@@ -1018,6 +1030,17 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				go func(req podpkg.CreateSandboxRequest, jobID, owner string, requester Identity) {
 					if _, _, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, jobID, owner, admission, requester); err != nil {
 						log.Printf("async create %s: %v", req.Name, err)
+						// A create whose chosen worker is tunneled to a peer cannot
+						// be completed here. Say so on the record: PENDING forever
+						// is a worse answer than ERROR with a reason a human can
+						// read. (Execute and the proxy paths forward; create needs
+						// the request to land on the owning node.)
+						var elsewhere *PoderTunnelElsewhereError
+						if errors.As(err, &elsewhere) {
+							_ = sandboxStore.Update(req.Name, func(sb *podpkg.SandboxInfo) {
+								sb.State = podpkg.StateError
+							})
+						}
 					}
 				}(req, job.ID, ident.Name, ident)
 				w.Header().Set("Content-Type", "application/json")
