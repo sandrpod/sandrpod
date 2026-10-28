@@ -325,6 +325,9 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	// operator pastes in, so the page itself is served unauthenticated).
 	mux.HandleFunc("/console", consoleHandler)
 
+	// === Inter-node: deliver a create through a tunnel this instance holds ===
+	mountProvision(mux, cfg, tunnelStore, sandboxStore, jobStore)
+
 	// === Poder tunnel entry point ===
 	// Poder dials this endpoint on startup to register and establish a yamux reverse tunnel
 	mux.HandleFunc("/ws/poder/connect", workerRoute(func(w http.ResponseWriter, r *http.Request) {
@@ -1028,7 +1031,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				// tenant rides on it, and it is what confines placement. Dropping
 				// it here let one workspace's sandbox land on another's worker.
 				go func(req podpkg.CreateSandboxRequest, jobID, owner string, requester Identity) {
-					if _, _, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, jobID, owner, admission, requester); err != nil {
+					if _, _, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, cfg, stores.TunnelOwners, &req, jobID, owner, admission, requester); err != nil {
 						log.Printf("async create %s: %v", req.Name, err)
 						// A create whose chosen worker is tunneled to a peer cannot
 						// be completed here. Say so on the record: PENDING forever
@@ -1054,7 +1057,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			}
 
 			// Synchronous path (legacy default): same flow, inline.
-			sandbox, jobID, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, &req, "", ident.Name, admission, ident)
+			sandbox, jobID, err := runSandboxCreate(scheduler, sandboxStore, poderStore, jobStore, tunnelStore, cfg, stores.TunnelOwners, &req, "", ident.Name, admission, ident)
 			if err != nil {
 				status := http.StatusInternalServerError
 				if errors.Is(err, podpkg.ErrPoderCapability) {

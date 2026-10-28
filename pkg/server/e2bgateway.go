@@ -537,7 +537,7 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 	if admission == nil {
 		admission = admissionFor(b.d.cfg, b.d.sandboxes)
 	}
-	sb, _, err := runSandboxCreate(b.d.scheduler, b.d.sandboxes, b.d.poders, b.d.jobs, b.d.tunnelStore, create, "", ident, admission, requester)
+	sb, _, err := runSandboxCreate(b.d.scheduler, b.d.sandboxes, b.d.poders, b.d.jobs, b.d.tunnelStore, b.d.cfg, b.d.owners, create, "", ident, admission, requester)
 	if err != nil {
 		// The gate runs once, at the choke point, with the real request in
 		// hand; this boundary only translates its refusal into E2B's error

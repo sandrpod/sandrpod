@@ -21,26 +21,44 @@ follows from that.
 | `POST /sandboxes/execute` | **forwarded** to the node holding the tunnel |
 | `GET /sandboxes/{name}/toolbox/*` (files, PTY, streams) | **forwarded** |
 | E2B surface (`/sandboxes`, `/v2/sandboxes`) | **forwarded** |
-| `POST /api/v1/sandboxes` (create) | **not forwarded** → the sandbox is marked `ERROR` |
+| `POST /api/v1/sandboxes` (create) | **delivered** by the node holding the tunnel |
 
-Create is the exception because the request itself must reach the worker that was
-placed: the tunnel is a Go object in the owning process, so a peer cannot present
-it. Forwarding the *request* would re-run placement and admission on the peer and
-create the record twice.
+Execute and the proxy paths forward the *request*: they are stateless replays
+against the node that owns the connection.
 
-**Consequence for routing.** Route creates to an instance that holds a worker —
-either
+Create cannot be replayed — it admits against the wallet, writes the sandbox
+record and enqueues a job — so only its **last step** crosses the wire. The
+instance that received the request does everything up to the container, then
+calls the owning node:
 
-- make the load balancer **sticky for `POST /api/v1/sandboxes` and
-  `POST /portal/*`** by cookie (the portal session already carries a workspace,
-  and a workspace's workers are usually all on one node), or
-- pin the worker: `POST /api/v1/sandboxes` with `poder` set, on the node that
-  holds that poder, or
-- run creates on a single instance and everything else on the fleet.
+```
+POST /internal/provision        X-Sandrpod-Internal: <platform token>
+{ "sandbox": {...}, "job_id": "...", "poder_id": "...", "owner": "..." }
+```
 
-The condition is visible: the record goes to `ERROR` with
-`worker tunnel is held by another instance`, and `GET /healthz` keeps reporting
-the fleet accurately.
+The owning node pushes that create down its tunnel and finalizes the record from
+the worker's answer. The caller reports the peer's result. Nothing is admitted or
+recorded twice, and the client never learns which node held the tunnel.
+
+Three details worth knowing:
+
+- **The credential is the platform token.** Both instances already share the token
+  store, so no new secret exists; a request without it is refused, never trusted
+  by network position.
+- **A stale claim is a `409`, not a hang.** If the peer no longer holds that
+  tunnel (the worker reconnected elsewhere), it says so and the caller fails the
+  record with a reason instead of waiting out a timeout.
+- **No forwarding loops.** The endpoint never forwards again, and
+  `wantsPeerDelivery` refuses to point an instance at itself.
+
+## Placement with a large fleet
+
+With dozens of workers spread across instances, most creates will choose a worker
+connected to *some other* node — which is exactly the case the provisioning call
+exists for. No sticky routing is required.
+
+The cost is one internal HTTP round-trip per create that crosses instances; the
+worker's own create is unchanged (230 ms warm).
 
 ## What must be true
 

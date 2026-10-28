@@ -78,6 +78,8 @@ func runSandboxCreate(
 	poderStore podpkg.PoderRepository,
 	jobStore podpkg.JobRepository,
 	tunnelStore *tunnel.TunnelStore,
+	cfg Config,
+	owners podpkg.TunnelOwnerRepository,
 	req *podpkg.CreateSandboxRequest,
 	preJobID string,
 	owner string,
@@ -149,26 +151,6 @@ func runSandboxCreate(
 		})
 	}
 
-	// 2b. The tunnel must be usable from *this* instance. A worker's tunnel is
-	// held by the instance it dialled, so in a load-balanced deployment a create
-	// that lands on a peer cannot POST to that worker at all — and it used to
-	// discover this only after writing the sandbox record, which left a PENDING
-	// row nobody could fix and a 500 the caller could not act on.
-	//
-	// Resolving here, before the record exists, turns the case into
-	// errPoderTunnelElsewhere: the handler forwards the request to the node that
-	// owns the tunnel, and nothing is left behind when it does.
-	poderTunnel, hasTunnel := tunnelStore.Get(schedJob.PoderID)
-	if !hasTunnel {
-		if jobID != "" {
-			_ = jobStore.UpdateJob(jobID, func(j *podpkg.Job) {
-				j.Status = podpkg.JobStatusFailed
-				j.ErrorMessage = "worker tunnel is held by another instance"
-			})
-		}
-		return nil, jobID, &PoderTunnelElsewhereError{PoderID: schedJob.PoderID}
-	}
-
 	// 3. Upsert the sandbox record in PENDING with poder placement filled in.
 	sbArch, sbOS, sbOSVersion := "", "", ""
 	if pi, ok := poderStore.Get(schedJob.PoderID); ok {
@@ -216,9 +198,57 @@ func runSandboxCreate(
 		})
 	}
 
-	// 4. Create the container on the poder through the tunnel. Detached and
-	// bounded: by now the client has often disconnected.
-	t := poderTunnel
+	// 3b. Resolve the tunnel before delivery. A worker's tunnel is
+	// held by the instance it dialled, so in a load-balanced deployment a create
+	// that lands on a peer cannot POST to that worker at all — and it used to
+	// discover this only after writing the sandbox record, which left a PENDING
+	// row nobody could fix and a 500 the caller could not act on.
+	//
+	// Resolving here, before the record exists, turns the case into
+	// errPoderTunnelElsewhere: the handler forwards the request to the node that
+	// owns the tunnel, and nothing is left behind when it does.
+	poderTunnel, hasTunnel := tunnelStore.Get(schedJob.PoderID)
+	if !hasTunnel {
+		// The worker is connected to a peer. Hand it the last step: that node owns
+		// the tunnel and can deliver the create. Only the delivery crosses the
+		// wire — admission, the record and the job already happened here, once.
+		if peer, ok := wantsPeerDelivery(cfg, owners, schedJob.PoderID); ok {
+			sb, err := deliverCreateToPeer(peer, cfg.Token, req, jobID, owner, schedJob.PoderID)
+			if err == nil {
+				return sb, jobID, nil
+			}
+			log.Printf("create sandbox %s: peer delivery to %s failed: %v", req.Name, peer, err)
+			failBoth(jobID, "worker is connected to another instance and it did not accept the create: "+err.Error())
+			return nil, jobID, fmt.Errorf("peer delivery: %w", err)
+		}
+		if jobID != "" {
+			_ = jobStore.UpdateJob(jobID, func(j *podpkg.Job) {
+				j.Status = podpkg.JobStatusFailed
+				j.ErrorMessage = "worker tunnel is held by another instance"
+			})
+		}
+		return nil, jobID, &PoderTunnelElsewhereError{PoderID: schedJob.PoderID}
+	}
+
+	// 4. Create the container on the poder through the tunnel. Sharing this with
+	// the internal provisioning endpoint is what makes a create work when the
+	// chosen worker is tunneled to a peer: that peer runs the same code against
+	// its own connection.
+	return pushCreateToPoder(poderTunnel, req, jobID, schedJob.PoderID, sandboxStore, jobStore,
+		func(msg string) { failBoth(jobID, msg) })
+}
+
+// pushCreateToPoder sends the create request down a tunnel and finalizes the
+// record and job from the worker's answer. Detached and bounded: by now the
+// client has often disconnected.
+func pushCreateToPoder(
+	t *tunnel.PoderTunnel,
+	req *podpkg.CreateSandboxRequest,
+	jobID, poderID string,
+	sandboxStore podpkg.SandboxRepository,
+	jobStore podpkg.JobRepository,
+	fail func(msg string),
+) (*podpkg.SandboxInfo, string, error) {
 	bodyBytes, _ := json.Marshal(req)
 	poderCtx, poderCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer poderCancel()
@@ -228,14 +258,14 @@ func runSandboxCreate(
 	resp, err := t.Client.Do(createReq)
 	if err != nil {
 		log.Printf("create sandbox %s: poder container create failed: %v", req.Name, err)
-		failBoth(jobID, err.Error())
+		fail(err.Error())
 		return nil, jobID, fmt.Errorf("failed to create sandbox: %w", err)
 	}
 	defer resp.Body.Close()
 	respBody, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusCreated {
 		log.Printf("create sandbox %s: poder error: %s", req.Name, string(respBody))
-		failBoth(jobID, string(respBody))
+		fail(string(respBody))
 		return nil, jobID, fmt.Errorf("poder error: %s", string(respBody))
 	}
 
@@ -246,7 +276,7 @@ func runSandboxCreate(
 		j.Status = podpkg.JobStatusCompleted
 		if v, _ := poderResp["id"].(string); v != "" {
 			j.SandboxID = v
-			j.Result = &podpkg.JobResult{ProxyURL: "tunnel://" + schedJob.PoderID, SandboxID: v}
+			j.Result = &podpkg.JobResult{ProxyURL: "tunnel://" + poderID, SandboxID: v}
 		}
 		if v, _ := poderResp["ip"].(string); v != "" && j.Result != nil {
 			j.Result.IP = v
@@ -263,9 +293,9 @@ func runSandboxCreate(
 	})
 	sb, _ := sandboxStore.Get(req.Name)
 	if sb != nil {
-		notifyEvent("sandbox.running", sandboxEvent(sb, map[string]any{"poder_id": schedJob.PoderID}))
+		notifyEvent("sandbox.running", sandboxEvent(sb, map[string]any{"poder_id": poderID}))
 	} else {
-		notifyEvent("sandbox.running", map[string]any{"name": req.Name, "provider": req.ProviderType, "poder_id": schedJob.PoderID})
+		notifyEvent("sandbox.running", map[string]any{"name": req.Name, "provider": req.ProviderType, "poder_id": poderID})
 	}
 	return sb, jobID, nil
 }
