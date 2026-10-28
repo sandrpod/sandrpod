@@ -89,6 +89,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     language       TEXT    NOT NULL DEFAULT '',
     result         TEXT,
     error_message  TEXT    NOT NULL DEFAULT '',
+    request        TEXT    NOT NULL DEFAULT '',   -- create payload, for resuming delivery
     trace_context  TEXT    NOT NULL DEFAULT '{}',
     owner          TEXT    NOT NULL DEFAULT '',
     created_at     DATETIME NOT NULL,
@@ -130,6 +131,7 @@ var columnMigrations = []string{
 	`ALTER TABLE sandboxes ADD COLUMN memory_mb INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE poders ADD COLUMN capabilities TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE poders ADD COLUMN workspace TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE jobs ADD COLUMN request TEXT NOT NULL DEFAULT ''`,
 }
 
 // migrate applies the dialect's schema then its idempotent column migrations.

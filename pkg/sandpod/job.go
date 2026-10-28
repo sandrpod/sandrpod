@@ -4,6 +4,7 @@
 package sandpod
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -46,6 +47,12 @@ type Job struct {
 	Language     string     `json:"language,omitempty"` // language: python, node, bash
 	Result       *JobResult `json:"result,omitempty"`
 	ErrorMessage string     `json:"error_message,omitempty"`
+	// Request is the create payload this job carries, kept so the delivery can be
+	// resumed. A create is a two-step thing — record the intent, then push it
+	// through the worker's tunnel — and the process can die between them. Without
+	// the payload the intent is unrecoverable: the record exists, the job exists,
+	// and nobody can reconstruct what to send.
+	Request json.RawMessage `json:"request,omitempty"`
 	// Owner is the auth-token name that initiated the job (see SandboxInfo.Owner).
 	Owner        string            `json:"owner,omitempty"`
 	TraceContext map[string]string `json:"trace_context,omitempty"`

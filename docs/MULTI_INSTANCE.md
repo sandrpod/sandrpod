@@ -51,6 +51,30 @@ Three details worth knowing:
 - **No forwarding loops.** The endpoint never forwards again, and
   `wantsPeerDelivery` refuses to point an instance at itself.
 
+## Delivery is durable
+
+Accepting a create and delivering it are two steps, and a process can die between
+them. The intent is written to the database before delivery is attempted
+(`jobs.request`), so any instance can finish the job:
+
+| Step | What is durable |
+|---|---|
+| accept | the sandbox record, the job row, **and the exact payload to send** |
+| deliver | on success the job becomes `COMPLETED`, with the container id |
+| resume | an instance that finds a `PENDING` create older than 45 s claims it and delivers |
+
+The claim is a compare-and-swap on `jobs.updated_at` (`JobRepository.ClaimJob`),
+so with N instances exactly one wins: verified with two instances and one stale
+job — one `resume: delivered` line, one `COMPLETED` row.
+
+Semantics are **at-least-once**, and the worker tolerates a repeat: a pode names
+the container after the sandbox, so a second delivery for the same name lands on
+the same container. A job whose worker is connected to no instance fails with
+that reason instead of retrying forever.
+
+This is the transactional-outbox pattern using the database that is already
+there — no broker, no new component to keep alive.
+
 ## Placement with a large fleet
 
 With dozens of workers spread across instances, most creates will choose a worker

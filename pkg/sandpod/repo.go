@@ -40,6 +40,11 @@ type JobRepository interface {
 	// claims up to limit PENDING jobs (marks them IN_PROGRESS) and returns them.
 	PollJobs(jobTimeout time.Duration, limit int) ([]*Job, error)
 	ListJobs() []*Job
+	// ClaimJob is a compare-and-swap on updated_at: it returns true only for the
+	// caller that moved the timestamp first. Several control-plane instances run
+	// the same resume pass over one database, and without a claim they all deliver
+	// the same create — at-least-once is the promise, not "twice from every node".
+	ClaimJob(id string, expected time.Time, now time.Time) (bool, error)
 }
 
 // Stores groups the repositories for dependency injection into handlers and the

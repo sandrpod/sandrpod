@@ -198,6 +198,19 @@ func runSandboxCreate(
 		})
 	}
 
+	// 3a. Write the intent where another process can find it. The payload goes on
+	// the job before any delivery attempt: if this process dies in the next line,
+	// the resumer (resume.go) re-delivers it instead of leaving a record that
+	// nobody knows how to finish.
+	if jobID != "" {
+		payload, _ := json.Marshal(req)
+		_ = jobStore.UpdateJob(jobID, func(j *podpkg.Job) {
+			j.Request = payload
+			j.PoderID = schedJob.PoderID
+			j.Status = podpkg.JobStatusPending
+		})
+	}
+
 	// 3b. Resolve the tunnel before delivery. A worker's tunnel is
 	// held by the instance it dialled, so in a load-balanced deployment a create
 	// that lands on a peer cannot POST to that worker at all — and it used to

@@ -325,6 +325,18 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	// operator pastes in, so the page itself is served unauthenticated).
 	mux.HandleFunc("/console", consoleHandler)
 
+	// Resume creates whose delivery never completed. Every instance runs this and
+	// they coordinate through the database: the one that holds a worker's tunnel
+	// delivers, the rest move on.
+	deps := resumeDeps{
+		jobs: jobStore, sandboxes: sandboxStore, tunnels: tunnelStore,
+		cfg: cfg, owners: stores.TunnelOwners,
+	}
+	deps.deliver = func(job *podpkg.Job, req *podpkg.CreateSandboxRequest) error {
+		return deliverCreate(deps, job, req)
+	}
+	startResumer(deps)
+
 	// === Inter-node: deliver a create through a tunnel this instance holds ===
 	mountProvision(mux, cfg, tunnelStore, sandboxStore, jobStore)
 

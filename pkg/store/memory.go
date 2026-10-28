@@ -125,3 +125,19 @@ func NewMemoryStores() Stores {
 		TunnelOwners: NewMemTunnelOwnerRepo(),
 	}
 }
+
+// ClaimJob mirrors the SQL compare-and-swap: in one process the check is
+// trivially atomic, but the interface is shared, so the semantics have to match.
+func (r *MemJobRepo) ClaimJob(id string, expected, now time.Time) (bool, error) {
+	job, ok := r.GetJob(id)
+	if !ok {
+		return false, nil
+	}
+	if !job.UpdatedAt.Equal(expected) {
+		return false, nil
+	}
+	if err := r.UpdateJob(id, func(j *sandpod.Job) { j.UpdatedAt = now }); err != nil {
+		return false, err
+	}
+	return true, nil
+}
