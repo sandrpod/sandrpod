@@ -21,3 +21,10 @@
   display: table;
   width: 100%;
 }
+
+/* VitePress's own language menu cannot keep the reader's anchor (ours does, see
+   LangSwitch.vue), so it is hidden rather than removed: `link` has to stay in the
+   locale config for /zh/** to resolve to the zh theme at all. */
+.VPNavBarTranslations {
+  display: none !important;
+}
