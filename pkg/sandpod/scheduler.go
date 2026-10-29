@@ -156,6 +156,18 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 	log.Printf("[Scheduler] Waiting for poder registration for VM %s", vm.ID)
 	poder = s.waitForPoderRegistration(providerType, req.Region, 5*time.Minute, 5*time.Second, require, req.Workspace)
 	if poder == nil {
+		// Ask the machine before it is taken away. A pode that started and never
+		// dialled is either a wrong token, an unreachable control plane, or a
+		// crash-looping container — and the VM is about to stop existing, so this
+		// is the last chance to find out.
+		if p, perr := provider.GetFactory().Get(providerType); perr == nil {
+			probe := `docker ps -a --format '{{.Names}} {{.Status}}'; echo '--- logs ---'; docker logs --tail 30 sandrpod-poder 2>&1`
+			if out, cerr := p.ExecuteCommand(ctx, vm.ID, probe); cerr == nil {
+				log.Printf("[Scheduler] pode on VM %s never registered; what it said:\n%s", vm.ID, execOutput(out))
+			} else {
+				log.Printf("[Scheduler] pode on VM %s never registered, and the probe failed: %v", vm.ID, cerr)
+			}
+		}
 		return nil, fmt.Errorf("poder registration timeout (%s)", s.terminateOrphanVM(providerType, vm.ID))
 	}
 
