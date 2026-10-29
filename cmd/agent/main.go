@@ -323,7 +323,18 @@ func main() {
 
 	agentHandler := newAgentMux(tbHandler, *name, bridgeHandler)
 
-	go connectLoop(ctx, agentHandler)
+	// connectLoop returns only when the loop should end: ctx cancelled, or the
+	// platform said this sandbox was deleted (410). In the second case the process
+	// must actually exit — the MCP bridge and toolbox server keep it alive
+	// otherwise, and a "stopped" agent that is still running is worse than one that
+	// keeps retrying, because the service manager will not restart it.
+	go func() {
+		connectLoop(ctx, agentHandler)
+		if ctx.Err() == nil {
+			log.Printf("Tunnel closed for good; exiting so the service manager decides whether to restart")
+			os.Exit(0)
+		}
+	}()
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
