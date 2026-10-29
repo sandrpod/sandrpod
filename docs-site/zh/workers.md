@@ -42,6 +42,26 @@ curl -s -X POST "$API/portal/v1/join-tokens" \
 **最容易踩的是地域。** CLI 和 E2B 面默认都是 `local`；用 `-region=hk` 注册的 worker 对它们
 不可见，创建会报 `no available local poder found`，而机队看起来一切正常。
 
+
+### 设备 agent 能碰到什么
+
+agent 不是容器：它和这台机器之间**没有文件系统边界**。这正是它的价值——用它自己的工具、
+GPU 和文件——也正是它的风险。所以 `agent.sh` 默认把它关起来，而且每一层都是一个你能看见的
+参数：
+
+| 默认 | 作用 | 怎么改 |
+|---|---|---|
+| 以**执行 sudo 的那个用户**运行，不是 root | 笔记本不是构建服务器 | `--user` |
+| `--work-dir ~/sandrpod-work` | 唯一允许写入的目录，创建为 `0700` | `--work-dir` |
+| `--permission-mode prompt` | 工作目录之外的操作会询问，没人回答就拒绝 | `--permission-mode strict\|off` |
+| `--os-sandbox auto` | 内核级：根文件系统只读，只能写到工作目录（macOS 用 seatbelt，Linux 用 bwrap） | `--os-sandbox off` |
+
+`--full-machine` 把这一切打开——`/`、无门禁、无内核沙箱——并且会先问你一次。对专用于一个
+智能体的机器是对的，对正在打字的这台笔记本是错的。
+
+**以 root 运行是最容易被忽略的那一项。** 在 root 下，`/` 和 `./` 是同一个地方，一条坏命令
+没有任何边界可撞。现在的默认避开了它：服务以你自己的用户身份运行，用的还是这台机器的工具。
+
 ## Worker 宣告了什么
 
 握手时 worker 会带上身份、资源、**能力**和**租户**：

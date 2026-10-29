@@ -44,6 +44,29 @@ what you do not want for a shared fleet.
 `local`; a worker registered with `-region=hk` is invisible to them, and creation
 fails with `no available local poder found` while the fleet looks healthy.
 
+
+### What a device agent can touch
+
+An agent is not a container: there is no filesystem boundary between it and the
+machine. That is the point — it uses the host's tools, GPU and files — and it is also
+the risk. `agent.sh` therefore starts it confined, and every part of that is a flag
+you can see:
+
+| Default | What it does | How to change it |
+|---|---|---|
+| runs as the **user who ran sudo**, not root | a laptop is not a build server | `--user` |
+| `--work-dir ~/sandrpod-work` | the only directory writes are allowed in; created `0700` | `--work-dir` |
+| `--permission-mode prompt` | anything outside the work dir is asked about, and denied when nobody answers | `--permission-mode strict\|off` |
+| `--os-sandbox auto` | kernel-enforced: root filesystem read-only, writes only under the work dir (seatbelt on macOS, bwrap on Linux) | `--os-sandbox off` |
+
+`--full-machine` opens all of it — `/`, no gate, no kernel sandbox — and asks first.
+It is the right choice for a box dedicated to one agent and the wrong one for the
+laptop you are typing on.
+
+Running as root is the part people skip. As root, `/` and `./` are the same place and
+a single bad command has no boundary to hit; the default now avoids it, and the
+service runs under your user with the machine's own tools.
+
 ## What a worker advertises
 
 At handshake the worker sends its identity, resources, **capabilities**, and

@@ -15,6 +15,14 @@ set -euo pipefail
 API_URL="${SANDRPOD_API_URL:-}"
 TOKEN="${SANDRPOD_JOIN_TOKEN:-}"
 NAME="${SANDRPOD_AGENT_NAME:-}"
+# Confinement. An agent is the machine, not a container, so the defaults have to be
+# the safe ones: a work directory it is confined to, a permission gate, and the
+# kernel sandbox where the platform has one. Opening the whole machine is a flag
+# somebody has to type, and it says what it does.
+WORK_DIR="${SANDRPOD_WORK_DIR:-}"
+PERMISSION_MODE="${SANDRPOD_PERMISSION_MODE:-prompt}"
+OS_SANDBOX="${SANDRPOD_OS_SANDBOX:-auto}"
+RUN_USER="${SANDRPOD_AGENT_USER:-}"
 VERSION="${SANDRPOD_VERSION:-latest}"
 PREFIX="${SANDRPOD_PREFIX:-/usr/local/bin}"
 DRY_RUN=0
@@ -37,6 +45,13 @@ Turn this machine into a SandrPod sandbox (an agent, not a worker).
   --name NAME       sandbox name for this machine    (default: hostname)
   --version TAG     release to install               (default: latest)
   --prefix DIR      where to install the binary      (default: /usr/local/bin)
+  --work-dir DIR    the only directory the agent may write (default: ~/sandrpod-work)
+  --permission-mode MODE  prompt | strict | off      (default: prompt)
+  --os-sandbox MODE off | auto | bwrap | seatbelt    (default: auto: read-only root,
+                    writes only under the work dir, enforced by the kernel)
+  --user NAME       run the service as this user     (default: the sudo invoking user)
+  --full-machine    the whole filesystem, no gate, no kernel sandbox — for a
+                    machine you have dedicated to one agent and nothing else
   --yes             do not ask for confirmation
   --dry-run         print the plan, change nothing
   -h, --help        this text
@@ -59,6 +74,11 @@ while [ $# -gt 0 ]; do
     --name) NAME="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
     --prefix) PREFIX="$2"; shift 2 ;;
+    --work-dir) WORK_DIR="$2"; shift 2 ;;
+    --permission-mode) PERMISSION_MODE="$2"; shift 2 ;;
+    --os-sandbox) OS_SANDBOX="$2"; shift 2 ;;
+    --user) RUN_USER="$2"; shift 2 ;;
+    --full-machine) WORK_DIR="/"; PERMISSION_MODE="off"; OS_SANDBOX="off"; shift ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     --*=*) key="${1%%=*}"; val="${1#*=}"; shift; set -- "$key" "$val" "$@" ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -84,6 +104,35 @@ info "system: ${PLATFORM}/${GOARCH}"
 [ -z "$NAME" ] && NAME="$(hostname -s 2>/dev/null || hostname)"
 info "sandbox name: ${NAME}"
 
+# Who the service runs as. Not root by default: an agent that can be driven by a
+# remote model as root is one prompt injection away from the whole machine, and
+# ./ and / are then the same thing.
+if [ -z "$RUN_USER" ]; then
+  RUN_USER="${SUDO_USER:-}"
+  [ -z "$RUN_USER" ] && RUN_USER="$(id -un)"
+  # sudo from a normal login: run as that person, whose home and tools are the
+  # point of attaching their machine.
+  [ "$RUN_USER" = "root" ] && [ -n "${SUDO_USER:-}" ] && RUN_USER="$SUDO_USER"
+fi
+RUN_HOME="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6)"
+[ -z "$RUN_HOME" ] && RUN_HOME="/root"
+[ -z "$WORK_DIR" ] && WORK_DIR="${RUN_HOME}/sandrpod-work"
+info "runs as: ${RUN_USER} (${RUN_HOME})"
+info "writes only under: ${WORK_DIR}"
+info "permission gate: ${PERMISSION_MODE}, kernel sandbox: ${OS_SANDBOX}"
+
+case "$PERMISSION_MODE" in off|prompt|strict) ;; *) die "--permission-mode must be off, prompt or strict" ;; esac
+case "$OS_SANDBOX" in off|auto|bwrap|seatbelt) ;; *) die "--os-sandbox must be off, auto, bwrap or seatbelt" ;; esac
+if [ "$WORK_DIR" = "/" ] || [ "$PERMISSION_MODE" = "off" ]; then
+  warn "this agent can write anywhere on the machine and is not gated."
+  warn "that is right for a dedicated box and wrong for a laptop; Ctrl-C to stop."
+  if [ "$ASSUME_YES" = 0 ] && [ -t 0 ]; then
+    printf '    continue? [y/N]: ' >&2
+    read -r reply </dev/tty || reply=""
+    case "$reply" in [yY]*) ;; *) die "aborted" ;; esac
+  fi
+fi
+
 [ -n "$API_URL" ] || die "no control plane URL: pass --api-url or set SANDRPOD_API_URL"
 [ -n "$TOKEN" ] || die "no join token: pass --token (Workers → Add worker, then copy the agent command)"
 case "$TOKEN" in jn_*) ;; *) warn "a join token normally starts with jn_ — continuing anyway" ;; esac
@@ -108,6 +157,14 @@ else
   info "[dry-run] would download and install to $PREFIX/$BIN"
 fi
 
+step "Creating the work directory"
+if [ "$DRY_RUN" = 0 ] && [ "$WORK_DIR" != "/" ]; then
+  mkdir -p "$WORK_DIR"
+  chown "$RUN_USER" "$WORK_DIR" 2>/dev/null || true
+  chmod 700 "$WORK_DIR"
+  info "created ${WORK_DIR} (0700, owned by ${RUN_USER})"
+fi
+
 step "Writing the service"
 # Environment in the unit rather than a token file: the unit is 0600 and root-owned,
 # and a separate file is one more thing to leave world-readable by accident.
@@ -123,13 +180,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=${PREFIX}/${BIN} -api-url='${API_URL}' -token='${TOKEN}' -name='${NAME}'
+ExecStart=${PREFIX}/${BIN} -api-url='${API_URL}' -token='${TOKEN}' -name='${NAME}' \
+  -work-dir='${WORK_DIR}' -permission-mode='${PERMISSION_MODE}' -os-sandbox='${OS_SANDBOX}'
 Restart=always
 RestartSec=5
-# The agent runs the work the sandbox is asked for, as a fixed user, with the
-# machine's own tools. It is not a container: be deliberate about what it can read.
-User=root
+# Not root, and confined: this is a machine somebody sits at, not a container.
+User=${RUN_USER}
 Environment=SANDRPOD_AGENT_NAME=${NAME}
+WorkingDirectory=${WORK_DIR}
 
 [Install]
 WantedBy=multi-user.target
@@ -155,7 +213,12 @@ else
     <string>-api-url=${API_URL}</string>
     <string>-token=${TOKEN}</string>
     <string>-name=${NAME}</string>
+    <string>-work-dir=${WORK_DIR}</string>
+    <string>-permission-mode=${PERMISSION_MODE}</string>
+    <string>-os-sandbox=${OS_SANDBOX}</string>
   </array>
+  <key>UserName</key><string>${RUN_USER}</string>
+  <key>WorkingDirectory</key><string>${WORK_DIR}</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
 </dict></plist>
