@@ -226,3 +226,24 @@ func TestResume_SkipsErroredSandboxes(t *testing.T) {
 		t.Fatal("re-delivered a create for an ERROR sandbox")
 	}
 }
+
+// ListJobs returns every row, completed ones included. A resumer that does not
+// filter re-delivers finished creates forever — every pass a new container.
+func TestResume_IgnoresCompletedJobs(t *testing.T) {
+	memory := store.NewMemoryStores()
+	j := &podpkg.Job{
+		ID: "j-done", Type: podpkg.JobTypeCreateSandbox, Status: podpkg.JobStatusCompleted,
+		SandboxName: "done-box", PoderID: "p1", Request: []byte(`{"name":"done-box"}`),
+		CreatedAt: time.Now().Add(-2 * time.Minute), UpdatedAt: time.Now().Add(-2 * time.Minute),
+	}
+	_ = memory.Jobs.AddJob(j)
+	delivered := false
+	d := resumeDeps{
+		jobs: memory.Jobs, sandboxes: memory.Sandboxes, tunnels: tunnel.NewTunnelStore(),
+		deliver: func(*podpkg.Job, *podpkg.CreateSandboxRequest) error { delivered = true; return nil },
+	}
+	resumeOnce(d)
+	if delivered {
+		t.Fatal("re-delivered a completed job")
+	}
+}

@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.7.4] - 2026-10-29
+
+The one-line cause of everything in 0.7.2 and 0.7.3: the resumer never looked at
+`job.Status`.
+
+`ListJobs` returns every row, and the only gate was age. So **every** create job ever
+recorded was re-delivered every minute or so, forever — completed ones included. On a
+worker that is one new container per minute per sandbox name, each with its own egress
+network, until docker runs out of addresses; on a laptop worker it is the same, with
+the added excitement of the machine filling up.
+
+The fixes in 0.7.2 and 0.7.3 were real and are kept — the delivery window, the
+completion write, the idempotent create, the liveness reapers — but they were treating
+symptoms of this. With the status filter, a finished job is finished.
+
+### Fixed
+
+- The resumer skips jobs that are not `PENDING`. A test asserts a completed job is
+  never re-delivered.
+
 ## [0.7.3] - 2026-10-29
 
 The same evening, from watching 0.7.2 run for ten minutes.

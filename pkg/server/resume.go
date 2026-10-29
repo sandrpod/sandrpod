@@ -69,6 +69,13 @@ func resumeOnce(d resumeDeps) int {
 		if job == nil || job.Type != podpkg.JobTypeCreateSandbox {
 			continue
 		}
+		// Only a job whose delivery never finished is ours. ListJobs returns every
+		// row, and without this the resumer re-delivered *completed* creates every
+		// minute: on a worker that was "Creating sandbox: smoke6" once a minute,
+		// each pass making another container, until docker ran out of addresses.
+		if job.Status != podpkg.JobStatusPending {
+			continue
+		}
 		if now.Sub(job.UpdatedAt) < ResumeStaleAfter {
 			continue // still within the in-flight budget
 		}
