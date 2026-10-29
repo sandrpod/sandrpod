@@ -5,6 +5,7 @@ package aliyun
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -439,7 +440,10 @@ func (p *AliyunProvider) ExecuteCommand(ctx context.Context, vmID, command strin
 
 		stderr := result.ErrorInfo
 		return &provider.CommandResult{
-			Output:     result.Output,
+			// Cloud Assistant returns the command's output base64-encoded. Passing
+			// it through untouched means every diagnostic from a VM is unreadable
+			// exactly when it matters — after the VM has already been terminated.
+			Output:     decodeCloudAssistOutput(result.Output),
 			ExitCode:   int(result.ExitCode),
 			Stderr:     stderr,
 			ExecutedAt: time.Now(),
@@ -598,4 +602,17 @@ func (p *AliyunProvider) Cleanup(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// decodeCloudAssistOutput decodes what Cloud Assistant returned. It is documented
+// as base64; older agents and some error paths return plain text, so a failed
+// decode is not an error — it is the plain-text case.
+func decodeCloudAssistOutput(out string) string {
+	if out == "" {
+		return ""
+	}
+	if decoded, err := base64.StdEncoding.DecodeString(out); err == nil {
+		return string(decoded)
+	}
+	return out
 }

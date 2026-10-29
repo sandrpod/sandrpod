@@ -280,7 +280,25 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType, region str
 	// `cloud-init status --wait` hangs the whole bootstrap. The GCE apt race
 	// clears well within 3 minutes; past that, proceed and let a real apt
 	// error surface with diagnostics instead of hanging silently.
-	installDocker := `timeout 180 cloud-init status --wait >/dev/null 2>&1 || true; curl -fsSL https://get.docker.com | sh`
+	// The install has to prove itself. `curl … | sh` reports the exit status of
+	// sh, not of curl: a failed download becomes an empty script, sh exits 0, and
+	// the next step fails with "docker: command not found" on a VM that has just
+	// been terminated. Download to a file, run it, then ask docker whether it is
+	// there — the last command's status is what the caller sees.
+	installDocker := `set -u
+timeout 180 cloud-init status --wait >/dev/null 2>&1 || true
+if ! command -v docker >/dev/null 2>&1; then
+  if curl -fsSL https://get.docker.com -o /tmp/get-docker.sh 2>/tmp/get-docker.err; then
+    sh /tmp/get-docker.sh >/tmp/docker-install.log 2>&1 || true
+  fi
+fi
+if ! command -v docker >/dev/null 2>&1; then
+  # Fallback for images where get.docker.com is unreachable: the distro package.
+  (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io) >/tmp/docker-install.log 2>&1 || true
+fi
+systemctl enable --now docker >/dev/null 2>&1 || true
+docker --version ||
+  { echo "docker still missing"; tail -5 /tmp/get-docker.err /tmp/docker-install.log 2>/dev/null; exit 1; }`
 	log.Printf("[Scheduler] Installing Docker on VM %s", vm.ID)
 
 	result, err := p.ExecuteCommand(ctx, vm.ID, installDocker)
