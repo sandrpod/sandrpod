@@ -107,6 +107,24 @@ func registerFlags(fs *flag.FlagSet) {
 // 10 minutes comfortably outlives every cloud's VM-termination window.
 var poderTombstones = podpkg.NewTombstones(10 * time.Minute)
 
+// deletedRejectionLog rate-limits the "agent of a deleted sandbox keeps dialling"
+// line. An older agent retries every few seconds forever, and one line per minute
+// is enough to see it without burying everything else.
+var (
+	deletedRejectionMu   sync.Mutex
+	deletedRejectionLast = map[string]time.Time{}
+)
+
+func logDeletedRejection(name string) {
+	deletedRejectionMu.Lock()
+	defer deletedRejectionMu.Unlock()
+	if last, ok := deletedRejectionLast[name]; ok && time.Since(last) < time.Minute {
+		return
+	}
+	deletedRejectionLast[name] = time.Now()
+	log.Printf("Agent %s rejected: sandbox was deleted (its agent is retrying; stop the service on that machine)", name)
+}
+
 // sandboxTombstones remembers recently-deleted direct (agent) sandboxes. Without
 // it, deleting one does not stick: the agent is still running, its tunnel drops, it
 // reconnects seconds later and re-registers the record — the delete looks like it
@@ -558,8 +576,15 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		}
 		// Deleted while this agent was attached: tell it to stop rather than let it
 		// recreate the record it was just removed with.
+		//
+		// The window is refreshed on every rejected attempt, because the agent on
+		// the other side may be a release that predates this and retries forever.
+		// Without the refresh it would come back after the window closed, and the
+		// delete would appear to have failed five minutes later — which is worse
+		// than appearing to fail immediately, because nobody is watching by then.
 		if sandboxTombstones.Contains(sandboxName) {
-			log.Printf("Agent %s rejected: recently deleted (tombstoned)", sandboxName)
+			sandboxTombstones.Add(sandboxName)
+			logDeletedRejection(sandboxName)
 			http.Error(w, "sandbox was deleted", http.StatusGone)
 			return
 		}

@@ -36,6 +36,24 @@ warn() { printf '    %s! %s%s\n' "$C_WARN" "$*" "$C_OFF"; }
 die()  { printf '\n%s✗ %s%s\n' "$C_ERR" "$*" "$C_OFF" >&2; exit 1; }
 run()  { if [ "$DRY_RUN" = 1 ]; then printf '    %s[dry-run] %s%s\n' "$C_DIM" "$*" "$C_OFF"; else "$@"; fi; }
 
+# home_of prints a user's home directory, portably. Linux has getent, macOS has
+# dscl, and both can expand ~user in a subshell. Never fails the caller: an empty
+# answer is the caller's problem to report.
+home_of() {
+  _u="$1"
+  if command -v getent >/dev/null 2>&1; then
+    _h="$(getent passwd "$_u" 2>/dev/null | cut -d: -f6 || true)"
+    [ -n "$_h" ] && { printf '%s' "$_h"; return 0; }
+  fi
+  if command -v dscl >/dev/null 2>&1; then
+    _h="$(dscl . -read "/Users/$_u" NFSHomeDirectory 2>/dev/null | awk '{print $2}' || true)"
+    [ -n "$_h" ] && { printf '%s' "$_h"; return 0; }
+  fi
+  _h="$(cd ~ 2>/dev/null; eval "printf '%s' ~$_u" 2>/dev/null || true)"
+  [ "$_h" = "~$_u" ] && _h=""
+  printf '%s' "$_h"
+}
+
 usage() {
   cat <<'EOF'
 Turn this machine into a SandrPod sandbox (an agent, not a worker).
@@ -89,7 +107,11 @@ while [ $# -gt 0 ]; do
 done
 
 step "Checking this machine"
-[ "$(id -u)" = "0" ] || die "run as root (sudo bash -s -- …). The agent needs to write a service file and run as a system user."
+# --dry-run changes nothing, so it does not need root — and requiring it made this
+# script impossible to try on the machine it is usually run on.
+if [ "$(id -u)" != "0" ] && [ "$DRY_RUN" = 0 ]; then
+  die "run as root (sudo bash -s -- …). The agent writes a service file and runs as a system user."
+fi
 OS="$(uname -s)"; ARCH="$(uname -m)"
 case "$OS" in
   Linux) PLATFORM="linux" ;;
@@ -115,8 +137,11 @@ if [ -z "$RUN_USER" ]; then
   # point of attaching their machine.
   [ "$RUN_USER" = "root" ] && [ -n "${SUDO_USER:-}" ] && RUN_USER="$SUDO_USER"
 fi
-RUN_HOME="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6)"
-[ -z "$RUN_HOME" ] && RUN_HOME="/root"
+RUN_HOME="$(home_of "$RUN_USER")"
+if [ -z "$RUN_HOME" ]; then
+  warn "could not determine the home directory of ${RUN_USER}; using /root"
+  RUN_HOME="/root"
+fi
 [ -z "$WORK_DIR" ] && WORK_DIR="${RUN_HOME}/sandrpod-work"
 info "runs as: ${RUN_USER} (${RUN_HOME})"
 info "writes confined to: ${WORK_DIR} (+ the system temp dir)"
