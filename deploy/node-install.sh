@@ -72,6 +72,15 @@ EOF
 }
 
 while [ $# -gt 0 ]; do
+  # Accept --flag=value as well as --flag value: the console prints the former, and
+  # a script that only understands the latter dies on its own copy-paste.
+  case "$1" in
+    --*=*) key="${1%%=*}"; val="${1#*=}"; shift; set -- "$key" "$val" "$@" ;;
+    *) break ;;
+  esac
+done
+
+while [ $# -gt 0 ]; do
   case "$1" in
     --api-url) API_URL="$2"; shift 2 ;;
     --token) JOIN_TOKEN="$2"; shift 2 ;;
@@ -84,6 +93,7 @@ while [ $# -gt 0 ]; do
     --poder-image) PODER_IMAGE="$2"; shift 2 ;;
     --egress-image) EGRESS_IMAGE="$2"; shift 2 ;;
     --yes|-y) ASSUME_YES=1; shift ;;
+    --*=*) key="${1%%=*}"; val="${1#*=}"; shift; set -- "$key" "$val" "$@" ;;
     --dry-run) DRY_RUN=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
