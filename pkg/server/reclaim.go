@@ -165,7 +165,12 @@ func reapEmptyPodersOnce(
 			delete(emptySince, p.ID)
 			continue
 		}
-		if p.Usage.Containers > 0 || len(ss.ListByPoderID(p.ID)) > 0 {
+		// The sandbox records decide emptiness, not the container counter. A
+		// container whose record is gone is an orphan: nothing can reach it, and
+		// it must not pin a metered VM alive forever. That happened — a create
+		// that timed out left a container behind, usage stayed at 1, and the VM
+		// outlived its purpose by however long nobody looked.
+		if len(ss.ListByPoderID(p.ID)) > 0 {
 			delete(emptySince, p.ID)
 			continue
 		}
