@@ -11,6 +11,7 @@ import (
 	"log"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/provider"
@@ -231,6 +232,9 @@ func (s *Scheduler) createVMWithProvider(ctx context.Context, providerType strin
 	if err != nil {
 		return nil, err
 	}
+	// The worker this VM will run dials in with the platform token, which has no
+	// tenant. Remember who asked, so registration can scope it.
+	RecordVMTenant(vm.ID, req.Workspace)
 
 	// Contract check: when a public IP was requested, an empty PublicIP must
 	// fail here rather than propagate — it would silently become PROXY_HOST=''
@@ -445,6 +449,44 @@ func (s *Scheduler) waitForPoderRegistration(providerType, region string, timeou
 	}
 
 	return nil
+}
+
+// pendingVMTenant remembers which workspace asked for a VM that is still
+// bootstrapping. The worker on it dials in with the platform token, which carries
+// no tenant — so without this the machine registers unscoped: invisible in the
+// workspace that paid for it, and eligible for every other tenant's sandboxes.
+var pendingVMTenant sync.Map // vmID -> entry{tenant, at}
+
+type vmTenantEntry struct {
+	tenant string
+	at     time.Time
+}
+
+// vmTenantTTL bounds how long a record is kept, so a VM that never registers does
+// not accumulate.
+const vmTenantTTL = 30 * time.Minute
+
+// RecordVMTenant notes the workspace that provisioned vmID. Called by the
+// scheduler, consumed once by the registration handler.
+func RecordVMTenant(vmID, tenant string) {
+	if vmID == "" || tenant == "" {
+		return
+	}
+	pendingVMTenant.Store(vmID, vmTenantEntry{tenant: tenant, at: time.Now()})
+}
+
+// TakeVMTenant returns and forgets the workspace recorded for vmID.
+func TakeVMTenant(vmID string) (string, bool) {
+	v, ok := pendingVMTenant.Load(vmID)
+	if !ok {
+		return "", false
+	}
+	pendingVMTenant.Delete(vmID) // one worker registers once
+	e, ok := v.(vmTenantEntry)
+	if !ok || time.Since(e.at) > vmTenantTTL {
+		return "", false
+	}
+	return e.tenant, true
 }
 
 // createJobForPoder builds a Job targeting the specified Poder

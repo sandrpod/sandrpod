@@ -463,7 +463,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			// Who owns this worker. A worker credential carries its tenant in
 			// the identity, so a hosted build does not need the header; a
 			// self-hosted fleet sends neither and stays unscoped.
-			Workspace: poderWorkspace(r),
+			Workspace: poderWorkspaceOrProvisioner(r),
 			Resources: podpkg.PoderResources{
 				CPUCores:      cpuCores,
 				MemoryBytes:   memBytes,
@@ -1801,6 +1801,27 @@ var version = "dev"
 // poderWorkspace decides which tenant a joining worker belongs to: an explicit
 // header wins, otherwise the worker identity's tenant (how a hosted build's
 // join token reports it). Empty means an unscoped, single-tenant fleet.
+// poderWorkspaceOrProvisioner is poderWorkspace plus the case a cloud VM creates:
+// the worker on it dials in with the platform token, which has no tenant, but the
+// scheduler recorded which workspace asked for that VM. Inheriting it is what makes
+// a provisioned machine visible in the workspace that paid for it — and keeps it
+// out of every other workspace's placement.
+func poderWorkspaceOrProvisioner(r *http.Request) string {
+	if ws := poderWorkspace(r); ws != "" {
+		return ws
+	}
+	vmID := strings.TrimSpace(r.Header.Get("X-Poder-VM-ID"))
+	if vmID == "" {
+		return ""
+	}
+	if tenant, ok := podpkg.TakeVMTenant(vmID); ok {
+		log.Printf("Poder %s on VM %s inherits workspace %s from the create that provisioned it",
+			r.Header.Get("X-Poder-ID"), vmID, tenant)
+		return tenant
+	}
+	return ""
+}
+
 func poderWorkspace(r *http.Request) string {
 	if h := strings.TrimSpace(r.Header.Get("X-Poder-Workspace")); h != "" {
 		return h
