@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.7.8] - 2026-10-29
+
+### Fixed
+
+- **`zsh: locking failed for ~/.zsh_history`** — 0.7.7 allowed writing the history
+  file and the shell still complained, because the file it actually writes is the
+  sibling temp file: zsh rewrites history by writing `.zsh_history.new` and renaming
+  it over the original, and `compinit` writes `.zcompdump-<host>-<version>`. One
+  regex now covers the shell state files at the top level of the user's own home
+  (`.zsh_history`, `.zcompdump`, `.bash_history`, `.zsh_sessions`, and their
+  suffixed forms) and nothing else.
+
+Found by bisecting with a three-line probe rather than guessing: open+`fcntl` lock,
+write `.new`, rename. Under the profile the first two passed and the third was
+refused, which named the path precisely.
+
+Verified through a real PTY session: three interactive starts, zero warnings of any
+kind, and `execute` on the same sandbox returns empty stderr.
+
 ## [0.7.7] - 2026-10-29
 
 ### Fixed

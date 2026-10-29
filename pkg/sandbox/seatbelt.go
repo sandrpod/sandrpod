@@ -33,6 +33,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -186,12 +187,19 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 	//   zsh: locking failed for /Users/…/.zsh_history: operation not permitted
 	// on every start and saves nothing. Two files, named, in the user's own home —
 	// not the directory that holds them.
+	shellStateRegex := ""
 	if home, err := os.UserHomeDir(); err == nil && home != "" {
-		writable = append(writable,
-			filepath.Join(home, ".zsh_history"),
-			filepath.Join(home, ".zsh_history.LOCK"),
-			filepath.Join(home, ".bash_history"),
-		)
+		// A shell keeps state in files beside its rc files, and rewrites them by
+		// writing a sibling temp file and renaming it over the original:
+		// `.zsh_history.new` -> `.zsh_history`, `.zcompdump-<host>-<version>`.
+		// Allowing only the finished file is not enough — zsh still reports
+		//   zsh: locking failed for /Users/…/.zsh_history: operation not permitted
+		// because the write it actually performs is to the temp file.
+		//
+		// One regex, top level of the user's own home, these names only. Not the
+		// directory, so everything else stays read-only.
+		shellStateRegex = "^" + regexp.QuoteMeta(home) +
+			`/(\.zsh_history|\.zcompdump|\.bash_history|\.zsh_sessions)[^/]*$`
 	}
 	writable = append(writable, "/tmp", "/private/tmp", os.TempDir(), "/dev")
 	var rules []string
@@ -203,6 +211,16 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 	}
 	if len(rules) > 0 {
 		b.WriteString("(allow file-write* " + strings.Join(rules, " ") + ")\n")
+	}
+	if shellStateRegex != "" {
+		// SBPL regex syntax is `#"pattern"`: a sharp, then the pattern in quotes.
+		// Quoting it with strconv would escape the backslashes and hand SBPL a
+		// regex that matches a literal backslash — so the pattern is inserted as
+		// it is; it is built from the home directory and fixed names, and contains
+		// no quotes.
+		if !strings.Contains(shellStateRegex, `"`) {
+			b.WriteString(fmt.Sprintf("(allow file-write* (regex #\"%s\"))\n", shellStateRegex))
+		}
 	}
 	// Mandatory-deny paths inside the writable tree: readable (the allow of
 	// file-read* stands), not writable. Later rules win, so these come last.
