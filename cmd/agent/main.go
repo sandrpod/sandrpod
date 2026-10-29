@@ -1447,6 +1447,14 @@ func connectLoop(ctx context.Context, handler http.Handler) {
 			if resp != nil {
 				statusCode = resp.StatusCode
 			}
+			// 410 means the sandbox was deleted from the platform while this agent
+			// was attached. Retrying re-registers it and makes the delete look
+			// like it failed; stop, and let whoever started the service know.
+			if statusCode == http.StatusGone {
+				log.Printf("Sandbox %q was deleted from the platform; stopping. "+
+					"Start the service again to re-attach as a new sandbox.", *name)
+				return
+			}
 			log.Printf("Connect failed (HTTP %d): %v — retry in %s", statusCode, err, *reconnect)
 			select {
 			case <-ctx.Done():

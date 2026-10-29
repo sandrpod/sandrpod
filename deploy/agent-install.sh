@@ -186,7 +186,9 @@ Wants=network-online.target
 Type=simple
 ExecStart=${PREFIX}/${BIN} -api-url='${API_URL}' -token='${TOKEN}' -name='${NAME}' \
   -work-dir='${WORK_DIR}' -permission-mode='${PERMISSION_MODE}' -os-sandbox='${OS_SANDBOX}'
-Restart=always
+# on-failure, not always: the agent exits 0 when its sandbox is deleted from the
+# platform, and restarting it would re-register what somebody just removed.
+Restart=on-failure
 RestartSec=5
 # Not root, and confined: this is a machine somebody sits at, not a container.
 User=${RUN_USER}
@@ -224,7 +226,10 @@ else
   <key>UserName</key><string>${RUN_USER}</string>
   <key>WorkingDirectory</key><string>${WORK_DIR}</string>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key><false/>
+  </dict>
 </dict></plist>
 PLIST
     chmod 600 "$PLIST"

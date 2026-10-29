@@ -107,6 +107,15 @@ func registerFlags(fs *flag.FlagSet) {
 // 10 minutes comfortably outlives every cloud's VM-termination window.
 var poderTombstones = podpkg.NewTombstones(10 * time.Minute)
 
+// sandboxTombstones remembers recently-deleted direct (agent) sandboxes. Without
+// it, deleting one does not stick: the agent is still running, its tunnel drops, it
+// reconnects seconds later and re-registers the record — the delete looks like it
+// failed, and the machine keeps answering as a sandbox nobody meant to keep.
+//
+// Five minutes is short on purpose: an agent restarted by hand after that is a
+// person asking for it back.
+var sandboxTombstones = podpkg.NewTombstones(5 * time.Minute)
+
 // apiRateLimit, when non-nil, throttles user-role tokens (see -rate-limit).
 var apiRateLimit *rateLimiter
 
@@ -545,6 +554,13 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		// admin token here, which is not a worker.
 		if ident := IdentityFrom(r); ident.IsWorker() && ident.Tenant == "" {
 			http.Error(w, "Forbidden: worker credential without a tenant", http.StatusForbidden)
+			return
+		}
+		// Deleted while this agent was attached: tell it to stop rather than let it
+		// recreate the record it was just removed with.
+		if sandboxTombstones.Contains(sandboxName) {
+			log.Printf("Agent %s rejected: recently deleted (tombstoned)", sandboxName)
+			http.Error(w, "sandbox was deleted", http.StatusGone)
 			return
 		}
 		// One name cannot belong to two workspaces: the store is keyed by name, so
@@ -1663,6 +1679,15 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			// Best-effort: delete the DB record unconditionally so the name is
 			// freed even when the poder tunnel is gone (e.g. after a restart).
 			pID := sb.PoderID
+			// Direct (agent) sandboxes: remember the deletion and drop the tunnel.
+			// The agent's reconnect then answers 410 and it exits; without both,
+			// the record comes back a second later.
+			if pID == "" {
+				sandboxTombstones.Add(name)
+				if t, ok := directStore.Get(name); ok {
+					t.Close()
+				}
+			}
 			sandboxStore.Delete(name)
 			poderStore.UpdateUsage(pID, func(u *podpkg.PoderUsage) {
 				if u.Containers > 0 {
