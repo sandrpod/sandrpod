@@ -1667,7 +1667,23 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			}
 
 			if strings.HasPrefix(sb.ProxyURL, "direct://") {
-				// Direct-agent sandbox: remove record and disconnect agent tunnel.
+				// Direct-agent sandbox: remove the record AND actually disconnect.
+				//
+				// Removing the tunnel from the store only drops a pointer — the
+				// connection stays open, the agent keeps believing it is serving a
+				// sandbox, and a reconnect recreates the record. This is the path a
+				// console delete takes, so it has to do both: close the tunnel and
+				// remember the deletion (the reconnect answers 410 and the agent
+				// stops).
+				sandboxTombstones.Add(name)
+				if t, ok := directStore.Get(name); ok {
+					if cerr := t.Close(); cerr != nil {
+						log.Printf("sandbox delete: closing agent tunnel for %s: %v", name, cerr)
+					}
+				}
+				if cfg.NodeURL != "" {
+					_ = stores.TunnelOwners.Release(name, cfg.NodeURL)
+				}
 				sandboxStore.Delete(name)
 				directStore.Remove(name)
 				notifyEvent("sandbox.deleted", sandboxEvent(sb, nil))
@@ -1679,9 +1695,9 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			// Best-effort: delete the DB record unconditionally so the name is
 			// freed even when the poder tunnel is gone (e.g. after a restart).
 			pID := sb.PoderID
-			// Direct (agent) sandboxes: remember the deletion and drop the tunnel.
-			// The agent's reconnect then answers 410 and it exits; without both,
-			// the record comes back a second later.
+			// Belt and braces: a record with no poder that is not marked direct://
+			// (an agent that registered before the proxy URL was stamped). The
+			// normal agent path returns above.
 			if pID == "" {
 				sandboxTombstones.Add(name)
 				if t, ok := directStore.Get(name); ok {
