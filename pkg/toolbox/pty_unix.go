@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -66,6 +67,14 @@ func (m *PtyManager) CreateSession(width, height int) (*PtySession, error) {
 	}
 	if !termSet {
 		env = append(env, "TERM=xterm-256color")
+	}
+	// History belongs to the sandbox, not to the host's home directory: the
+	// profile makes ~ read-only, so zsh warns
+	//   zsh: locking failed for /Users/…/.zsh_history: operation not permitted
+	// on every start and keeps nothing. Point it at the work tree instead, where
+	// writes are allowed and the file disappears with the sandbox.
+	if wd, err := os.Getwd(); err == nil && wd != "" {
+		env = append(env, "HISTFILE="+filepath.Join(wd, ".sandbox_history"))
 	}
 	cmd.Env = env
 	if err := wrapSandbox(cmd); err != nil {

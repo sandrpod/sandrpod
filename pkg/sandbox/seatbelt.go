@@ -89,6 +89,16 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 	// Run at all: a process that cannot fork or signal its own children is not
 	// a sandbox, it is a crash.
 	b.WriteString("(allow process*)\n")
+	// A terminal is a capability, not a file. Without it the shell cannot hand the
+	// tty to a job, so zsh's completion system prints
+	//   compdef:95: can't set tty pgrp: operation not permitted
+	// once per interactive start and Ctrl-C / fg / bg stop working.
+	b.WriteString("(allow pseudo-tty)\n")
+	// tcsetpgrp is an ioctl, not a read or a write. Without it a login shell cannot
+	// claim the terminal, so zsh prints
+	//   compdef:95: can't set tty pgrp: operation not permitted
+	// at every interactive start and job control (Ctrl-C, fg, bg) does not work.
+	b.WriteString("(allow file-ioctl (subpath \"/dev\"))\n")
 	b.WriteString("(allow signal (target same-sandbox))\n")
 	b.WriteString("(allow file-read-metadata)\n")
 	b.WriteString("(allow sysctl-read)\n")
@@ -171,6 +181,18 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 	// Writes: the work tree and the temp dirs only. With (deny default) the
 	// rest of the disk is already read-only, so no deny pass is needed.
 	writable := append([]string{policy.WorkDir}, policy.WriteAllow...)
+	// Shell history: rc files set HISTFILE to ~/.zsh_history regardless of the
+	// environment we hand them, so without these two the shell warns
+	//   zsh: locking failed for /Users/…/.zsh_history: operation not permitted
+	// on every start and saves nothing. Two files, named, in the user's own home —
+	// not the directory that holds them.
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		writable = append(writable,
+			filepath.Join(home, ".zsh_history"),
+			filepath.Join(home, ".zsh_history.LOCK"),
+			filepath.Join(home, ".bash_history"),
+		)
+	}
 	writable = append(writable, "/tmp", "/private/tmp", os.TempDir(), "/dev")
 	var rules []string
 	for _, dir := range expanded(writable) {

@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.7.7] - 2026-10-29
+
+### Fixed
+
+- **`compdef:95: can't set tty pgrp: operation not permitted`** — with the preference
+  noise gone, the next layer of the same problem was visible. Claiming a terminal is
+  an `ioctl`, not a read or a write, so the profile needs
+  `(allow file-ioctl (subpath "/dev"))`. Without it a login shell could not take the
+  tty: zsh complained at every interactive start and job control (Ctrl-C, `fg`,
+  `bg`) did not work inside a device sandbox.
+- **`zsh: locking failed for ~/.zsh_history: operation not permitted`** — `rc` files
+  set `HISTFILE` to `~/.zsh_history` regardless of the environment, so a shell in a
+  read-only home warns on start and saves nothing. The profile now allows writes to
+  exactly three files — `~/.zsh_history`, its lock, `~/.bash_history` — and to nothing
+  else outside the work tree. The shell also gets `HISTFILE` inside the work tree, so
+  a sandbox that keeps no host history keeps its own.
+
+Verified through a real PTY session against an agent on macOS: three consecutive
+interactive starts, zero warnings.
+
 ## [0.7.6] - 2026-10-29
 
 ### Fixed
