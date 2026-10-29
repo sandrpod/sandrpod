@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.8.0] - 2026-10-29
+
+A worker no longer authenticates with the invitation a human pasted.
+
+The join token was doing two jobs: getting a machine into the fleet once, and being
+the credential it used forever after. Those want opposite lifetimes, and the
+compromise broke a production fleet today — the token expired while the tunnel was
+up (authentication happens at the handshake), and the next restart took the node out
+of the console with nothing in it that said why.
+
+### Added
+
+- `POST /api/v1/poders/enroll`: a worker exchanges its invitation for a **worker
+  key** bound to its poder id. A `Config` seam (`Enrolment`), nil in the standard
+  build — a self-hosted server hands out static tokens and needs no exchange.
+- The worker stores the key beside its poder id (`worker-key`, `0600`, atomic
+  rename) and uses it across restarts, ignoring the token on its command line.
+
+### Changed
+
+- A **join token is an invitation**: one hour, one workspace, exchanged once. It is
+  no longer a credential.
+- A **worker key** is the credential: 180 days, bound to one machine, revocable per
+  machine from the console (`GET`/`DELETE /portal/v1/worker-keys`).
+
+### Verified
+
+On the deployment: a worker started with `jn_…` logged
+`Enrolled as worker poder-… — credential stored in /var/lib/sandrpod/worker-key`,
+and a restart **with no token at all** logged
+`Using the worker key from … (expires 2027-04-27)` and reconnected.
+
 ## [0.7.9] - 2026-10-29
 
 ### Fixed
