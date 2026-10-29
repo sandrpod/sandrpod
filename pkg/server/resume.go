@@ -24,6 +24,11 @@ import (
 // Delivery is at-least-once, so the worker side must tolerate a repeat. It does:
 // a pode names the container after the sandbox, so a second create for the same
 // name lands on the same container instead of a second one.
+// resumeMaxAge bounds how old a pending create may be and still be delivered.
+// Twice the 20-minute create budget: past that the job is a leftover, and
+// re-delivering it resurrects a sandbox somebody deleted.
+const resumeMaxAge = 40 * time.Minute
+
 const (
 	// ResumeStaleAfter is how long a job may sit PENDING before another attempt
 	// is made. Long enough that the in-flight delivery (2 min budget) usually
@@ -84,6 +89,19 @@ func resumeOnce(d resumeDeps) int {
 			})
 			continue
 		}
+		// A job older than the delivery window is archaeology, not a delivery in
+		// flight. The create budget is 20 minutes; past twice that, the sandbox it
+		// names was almost certainly deleted long ago and its record with it — and
+		// re-delivering one of those recreates the sandbox, the network and the
+		// container, once per pass, forever.
+		if !job.CreatedAt.IsZero() && now.Sub(job.CreatedAt) > resumeMaxAge {
+			_ = d.jobs.UpdateJob(job.ID, func(j *podpkg.Job) {
+				j.Status = podpkg.JobStatusFailed
+				j.ErrorMessage = "delivery window passed; the create never landed and is not retried"
+			})
+			continue
+		}
+
 		// The record decides, and its absence is not a verdict.
 		//
 		// The create path writes the job first and the record second, so "no
