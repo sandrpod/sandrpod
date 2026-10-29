@@ -272,7 +272,13 @@ func pushCreateToPoder(
 	fail func(msg string),
 ) (*podpkg.SandboxInfo, string, error) {
 	bodyBytes, _ := json.Marshal(req)
-	poderCtx, poderCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// Two minutes was enough for a warm worker and not for a cold one: the first
+	// create on a just-provisioned VM has to unpack the image and build the egress
+	// network on two vCPUs, and it overran the budget — which then looked like a
+	// failed create on a machine that was working. Delivery is idempotent
+	// (CreatePod replaces an existing container for the same sandbox), so waiting
+	// longer costs nothing but patience.
+	poderCtx, poderCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer poderCancel()
 	createReq, _ := http.NewRequestWithContext(poderCtx, http.MethodPost, "http://poder/sandboxes", bytes.NewReader(bodyBytes))
 	createReq.Header.Set("Content-Type", "application/json")
