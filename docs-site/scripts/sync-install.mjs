@@ -8,15 +8,24 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
-const src = join(here, '..', '..', 'deploy', 'node-install.sh')
-const dst = join(here, '..', 'public', 'install.sh')
+// Both installers: the worker one (a machine that hosts sandboxes) and the agent
+// one (a machine that is a sandbox).
+const scripts = [
+  ['node-install.sh', 'install.sh'],
+  ['agent-install.sh', 'agent.sh'],
+]
+const deployDir = join(here, '..', '..', 'deploy')
+const src = join(deployDir, 'node-install.sh')
 
-mkdirSync(dirname(dst), { recursive: true })
+mkdirSync(join(here, '..', 'public'), { recursive: true })
 if (!existsSync(src)) {
   // A docs-only checkout (the site is sometimes built without the rest of the
   // repository): publish nothing rather than a stale copy.
   console.warn(`[install.sh] ${src} not found — skipping`)
   process.exit(0)
 }
-copyFileSync(src, dst)
-console.log('[install.sh] published from deploy/node-install.sh')
+for (const [from, to] of scripts) {
+  const dst = join(here, '..', 'public', to)
+  copyFileSync(join(deployDir, from), dst)
+  console.log(`[${to}] published from deploy/${from}`)
+}

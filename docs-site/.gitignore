@@ -1,3 +1,6 @@
 
 # generated from ../deploy/node-install.sh by scripts/sync-install.mjs
 public/install.sh
+
+# generated from ../deploy/agent-install.sh
+public/agent.sh
