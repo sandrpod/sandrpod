@@ -1246,12 +1246,18 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 						// is a worse answer than ERROR with a reason a human can
 						// read. (Execute and the proxy paths forward; create needs
 						// the request to land on the owning node.)
-						var elsewhere *PoderTunnelElsewhereError
-						if errors.As(err, &elsewhere) {
-							_ = sandboxStore.Update(req.Name, func(sb *podpkg.SandboxInfo) {
+						// Whatever went wrong, a record left PENDING is the one
+						// answer nobody can act on: the caller polls, sees
+						// "provisioning", and waits for a sandbox that is never
+						// coming. The create paths do mark ERROR themselves; this is
+						// the belt for the ones that return without doing so (a
+						// provider that failed after the record was written, for
+						// example).
+						_ = sandboxStore.Update(req.Name, func(sb *podpkg.SandboxInfo) {
+							if sb.State == podpkg.StatePending {
 								sb.State = podpkg.StateError
-							})
-						}
+							}
+						})
 					}
 				}(req, job.ID, ident.Name, ident)
 				w.Header().Set("Content-Type", "application/json")
