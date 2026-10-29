@@ -239,6 +239,17 @@ func registerProviders() {
 
 var providerRegistration sync.Once
 
+// sandboxOwner names the owner of a record registered by ident. A tenant-bearing
+// credential (a join token included) owns it as `workspace:<tenant>` — the shape
+// the store and the portal filter on. An admin identity owns it by name, which is
+// what a self-hosted server has.
+func sandboxOwner(ident Identity) string {
+	if ident.Tenant != "" {
+		return "workspace:" + ident.Tenant
+	}
+	return ident.Name
+}
+
 // providerNames is what a client needs to decide which substrates to offer.
 func providerNames() []string {
 	names := []string{"local"}
@@ -522,10 +533,26 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 
 	// === Local agent direct-connect entry point (end-user scenario) ===
 	// sandrpod-agent dials this endpoint on startup to register the local machine as a direct sandbox
-	mux.HandleFunc("/ws/sandbox/connect", adminOnly(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/ws/sandbox/connect", workerRoute(func(w http.ResponseWriter, r *http.Request) {
 		sandboxName := r.Header.Get("X-Sandbox-Name")
 		if sandboxName == "" {
 			http.Error(w, "X-Sandbox-Name header required", http.StatusBadRequest)
+			return
+		}
+		// A worker credential with no tenant would register a sandbox that belongs
+		// to nobody — and an ownerless record is visible to every token on the
+		// server. Refuse rather than create one; a self-hosted server uses its
+		// admin token here, which is not a worker.
+		if ident := IdentityFrom(r); ident.IsWorker() && ident.Tenant == "" {
+			http.Error(w, "Forbidden: worker credential without a tenant", http.StatusForbidden)
+			return
+		}
+		// One name cannot belong to two workspaces: the store is keyed by name, so
+		// a second tenant registering "macbook" would take over the first one's
+		// record.
+		if existing, ok := sandboxStore.Get(sandboxName); ok && existing.Owner != "" &&
+			existing.Owner != sandboxOwner(IdentityFrom(r)) && !IdentityFrom(r).IsAdmin() {
+			http.Error(w, "Conflict: a sandbox with this name belongs to another workspace", http.StatusConflict)
 			return
 		}
 
@@ -554,13 +581,11 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		// not), so a non-UTF-8 value — e.g. a Chinese Windows `cmd /c ver`
 		// emitting GBK bytes in X-Sandbox-OS-Version — makes the INSERT fail.
 		// Sanitize at this boundary so the row always persists.
-		// Owner is the Identity that registered the agent (this route is
-		// adminOnly, so an operator/admin token). Without it the record is
-		// Owner=="" — which canAccessSandbox treats as world-visible, letting
-		// ANY authenticated token reach the employee's machine. Stamping the
-		// connecting Identity scopes access to that Identity (all admins still
-		// pass via isAdmin()). Empty only when auth is disabled (single-tenant).
-		owner := IdentityFrom(r).Name
+		// Owner is the workspace that registered the agent. Without it the record
+		// is Owner=="" — which canAccessSandbox treats as world-visible, letting
+		// ANY authenticated token reach the employee's machine. Empty only when
+		// auth is disabled (single-tenant).
+		owner := sandboxOwner(IdentityFrom(r))
 		sb := &podpkg.SandboxInfo{
 			ID:           sandboxName,
 			Name:         sandboxName,
