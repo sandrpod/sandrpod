@@ -149,6 +149,24 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 	for _, p := range prefs {
 		b.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", sbplString(p)))
 	}
+	// A daemon asks cfprefsd for preferences over XPC and needs a *sandbox
+	// extension* on the files, not just read permission. Without these two rules a
+	// launchd-installed agent prints, on stderr of every command that touches
+	// preferences (curl does, for proxy settings):
+	//
+	//   sandbox_extension_issue_file failed for /Library/Managed Preferences/…
+	//
+	// The scope is the preference roots and cfprefsd only: this is about letting a
+	// process read its own session's preferences, not about handing out extensions
+	// generally.
+	b.WriteString("(allow file-issue-extension (subpath \"/Library/Preferences\"))\n")
+	b.WriteString("(allow file-issue-extension (subpath \"/Library/Managed Preferences\"))\n")
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		b.WriteString(fmt.Sprintf("(allow file-issue-extension (subpath %s))\n",
+			sbplString(filepath.Join(home, "Library/Preferences"))))
+	}
+	b.WriteString("(allow mach-lookup (global-name \"com.apple.cfprefsd.daemon\"))\n")
+	b.WriteString("(allow mach-lookup (global-name \"com.apple.cfprefsd.agent\"))\n")
 
 	// Writes: the work tree and the temp dirs only. With (deny default) the
 	// rest of the disk is already read-only, so no deny pass is needed.
@@ -188,4 +206,41 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 func sbplString(p string) string {
 	r := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
 	return `"` + r.Replace(filepath.Clean(p)) + `"`
+}
+
+// seatbeltNoise reports whether a stderr line is macOS complaining that it could
+// not hand a process a sandbox extension for a preference file.
+//
+// It is not the program's output: libsystem prints it because the profile refused
+// an extension the program never asked for — CFPreferences asks on its behalf the
+// moment anything reads a setting. On a launchd-installed agent this lands in the
+// stderr of an ordinary `curl`, seven lines of it, and reads like a broken sandbox.
+//
+// The profile allows what it needs now; this stays as a belt for the cases the
+// profile cannot cover (an older profile already in flight, a sandbox created
+// before the upgrade), because the alternative is a user reading fifteen words of
+// kernel diagnostics before their command's output.
+func seatbeltNoise(line string) bool {
+	if !strings.HasPrefix(line, "sandbox_extension_issue_file failed for ") {
+		return false
+	}
+	return strings.Contains(line, "/Library/Preferences") ||
+		strings.Contains(line, "/Library/Managed Preferences")
+}
+
+// StripSeatbeltNoise removes those lines from a block of stderr. Everything else is
+// returned unchanged, including other sandbox refusals: those are real.
+func StripSeatbeltNoise(stderr string) string {
+	if stderr == "" || !strings.Contains(stderr, "sandbox_extension_issue_file failed for ") {
+		return stderr
+	}
+	lines := strings.Split(stderr, "\n")
+	out := lines[:0]
+	for _, l := range lines {
+		if seatbeltNoise(l) {
+			continue
+		}
+		out = append(out, l)
+	}
+	return strings.Join(out, "\n")
 }

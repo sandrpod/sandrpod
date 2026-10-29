@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/sandrpod/sandrpod/pkg/sandbox"
 	"io"
 	"os/exec"
 	"path/filepath"
@@ -417,9 +418,12 @@ func (e *Executor) ExecuteStream(ctx context.Context, language, code string, cal
 		// streamPipe readers above; nothing more to deliver here.
 
 		return &ProcessResult{
-			ExitCode:  exitCode,
-			Stdout:    strings.TrimSuffix(stdout.String(), "\n"),
-			Stderr:    strings.TrimSuffix(stderr.String(), "\n"),
+			ExitCode: exitCode,
+			Stdout:   strings.TrimSuffix(stdout.String(), "\n"),
+			// See sandbox.StripSeatbeltNoise: on macOS a launchd-installed agent
+			// otherwise prefixes every command's stderr with kernel diagnostics
+			// about preference files.
+			Stderr:    sandbox.StripSeatbeltNoise(strings.TrimSuffix(stderr.String(), "\n")),
 			StartedAt: start,
 			EndedAt:   ended,
 		}, nil

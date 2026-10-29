@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.7.6] - 2026-10-29
+
+### Fixed
+
+- **`sandbox_extension_issue_file failed for …` on a launchd-installed agent.**
+  0.7.5 allowed *reading* the preference plists, which is not what a daemon needs:
+  it asks cfprefsd for settings over XPC and the kernel hands it a **sandbox
+  extension** for the file. Without `file-issue-extension` on the preference roots
+  and `cfprefsd` in `mach-lookup`, the request is refused and libsystem prints one
+  line per file on the stderr of every command that reads a setting — seven lines
+  ahead of an ordinary `curl`'s output.
+
+  The earlier explanation (a sandbox created before the upgrade) was wrong: the
+  variable is how the agent was started. Agents run in the foreground are clean;
+  ones started by launchd — i.e. by the installer — are not.
+
+  The profile now allows both, scoped to the preference roots and the two cfprefsd
+  services, and `ProcessResult.Stderr` drops those lines if they still appear. Other
+  sandbox refusals are kept: they are the evidence the sandbox works.
+
 ## [0.7.5] - 2026-10-29
 
 ### Fixed
