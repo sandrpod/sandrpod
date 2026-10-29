@@ -74,6 +74,21 @@ away. They are recorded because the symptoms point everywhere except the cause.
 | First create timed out; container appeared afterwards | the 550 MB sandbox image was pulled inside a two-minute budget. It is pre-pulled during bootstrap now |
 | **VM outlived every sandbox** | the idle reaper was also only started from `Main()`, and an orphan container counted as busy |
 
+## Per-provider detail
+
+Each provider has a deployment guide with its own credentials, network objects and
+troubleshooting table — the Aliyun one is the most complete, and the others follow
+the same shape:
+
+- [Alibaba Cloud](https://github.com/sandrpod/sandrpod/blob/main/docs/ALIYUN_PROVISIONING.md)
+- [AWS](https://github.com/sandrpod/sandrpod/blob/main/docs/AWS_PROVISIONING.md) ·
+  [Azure](https://github.com/sandrpod/sandrpod/blob/main/docs/AZURE_PROVISIONING.md) ·
+  [GCP](https://github.com/sandrpod/sandrpod/blob/main/docs/GCP_PROVISIONING.md) ·
+  [Tencent](https://github.com/sandrpod/sandrpod/blob/main/docs/TENCENT_PROVISIONING.md) ·
+  [DigitalOcean](https://github.com/sandrpod/sandrpod/blob/main/docs/DIGITALOCEAN_PROVISIONING.md) ·
+  [Hetzner](https://github.com/sandrpod/sandrpod/blob/main/docs/HETZNER_PROVISIONING.md) ·
+  [Oracle](https://github.com/sandrpod/sandrpod/blob/main/docs/ORACLE_PROVISIONING.md)
+
 ## Verifying a deployment
 
 ```bash

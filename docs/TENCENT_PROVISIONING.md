@@ -118,7 +118,7 @@ mainland-China CVMs is often slow or unreliable** — strongly prefer **Tencent
 Container Registry (TCR)**:
 
 ```bash
-SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.5.0
+SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.7.1
 SANDRPOD_TOOLBOX_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/toolbox:v0.5.0
 ```
 
@@ -155,7 +155,7 @@ export TENCENTCLOUD_SECRET_ID=AKID...
 export TENCENTCLOUD_SECRET_KEY=...
 export TENCENTCLOUD_REGION=ap-guangzhou
 export TENCENTCLOUD_ZONE=ap-guangzhou-3
-export SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.5.0
+export SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.7.1
 export SANDRPOD_TOOLBOX_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/toolbox:v0.5.0
 
 go run ./cmd/server -port 8080 -public-url https://api.example.com \

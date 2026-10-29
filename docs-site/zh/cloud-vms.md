@@ -67,6 +67,19 @@ SANDRPOD_PODER_IDLE_TIMEOUT=20m
 | 首次创建超时，容器却在之后出现 | 550MB 的沙箱镜像要在 2 分钟预算内拉完。现在在引导阶段预拉 |
 | **机器比沙箱活得久** | 闲置回收同样只从 `Main()` 启动；而且孤儿容器被当成"忙" |
 
+## 各厂商的详细文档
+
+每家都有自己的部署文档：凭据、网络对象、以及各自的排错表。阿里云那份最完整，其余结构相同：
+
+- [阿里云](https://github.com/sandrpod/sandrpod/blob/main/docs/ALIYUN_PROVISIONING.md)
+- [AWS](https://github.com/sandrpod/sandrpod/blob/main/docs/AWS_PROVISIONING.md) ·
+  [Azure](https://github.com/sandrpod/sandrpod/blob/main/docs/AZURE_PROVISIONING.md) ·
+  [GCP](https://github.com/sandrpod/sandrpod/blob/main/docs/GCP_PROVISIONING.md) ·
+  [腾讯云](https://github.com/sandrpod/sandrpod/blob/main/docs/TENCENT_PROVISIONING.md) ·
+  [DigitalOcean](https://github.com/sandrpod/sandrpod/blob/main/docs/DIGITALOCEAN_PROVISIONING.md) ·
+  [Hetzner](https://github.com/sandrpod/sandrpod/blob/main/docs/HETZNER_PROVISIONING.md) ·
+  [Oracle](https://github.com/sandrpod/sandrpod/blob/main/docs/ORACLE_PROVISIONING.md)
+
 ## 怎么验
 
 ```bash
