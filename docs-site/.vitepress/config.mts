@@ -25,6 +25,7 @@ const zhSidebar = [
     items: [
       { text: "架构", link: "/zh/architecture" },
       { text: "Worker 与隧道", link: "/zh/workers" },
+      { text: "用云主机当底座", link: "/zh/cloud-vms" },
       { text: "隔离与放置", link: "/zh/isolation" },
       { text: "出网策略", link: "/zh/egress" },
     ],
@@ -182,6 +183,7 @@ export default defineConfig({
         items: [
           { text: "Architecture", link: "/architecture" },
           { text: "Workers and tunnels", link: "/workers" },
+          { text: "Cloud VMs as the substrate", link: "/cloud-vms" },
           { text: "Isolation and placement", link: "/isolation" },
           { text: "Egress policy", link: "/egress" },
         ],
