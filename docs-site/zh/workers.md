@@ -10,29 +10,37 @@ Worker 是跑沙箱的机器。它通过**主动拨出**加入，所以永远不
 
 ## 加入
 
+两种形状，回答两个不同的问题。
+
 ```bash
-# 在控制面上：为一个工作区签发 join token
+# 在控制面：为一个工作区签一张接入凭证
 curl -s -X POST "$API/portal/v1/join-tokens" \
   -H "X-Sandrpod-Token: $TOKEN" -H 'Content-Type: application/json' \
   -d '{"name":"worker-1"}'
 ```
 
 ```json
-{"secret":"jn_…","command":"docker run -d --name sandrpod-worker …"}
+{"secret":"jn_…",
+ "command":"curl -fsSL https://docs.sandrpod.com/install.sh | sudo bash -s -- --api-url=… --token=jn_… --yes",
+ "docker_run":"docker run -d --name sandrpod-worker …",
+ "agent_command":"curl -fsSL https://docs.sandrpod.com/agent.sh | sudo bash -s -- … --name=device-worker-1"}
 ```
 
-在新机器上跑那条命令即可。它会用这个 token 启动 `poder`，拨向 `-api-url` 并注册。
+| 这台机器 | 用哪个 | 区别 |
+|---|---|---|
+| 装了 Docker 的服务器 | `install.sh`（worker） | 它承载**很多**沙箱容器；脚本负责 Docker、数据盘、镜像源、swap 和沙箱需要的句柄上限 |
+| 笔记本、构建机、GPU 主机 | `agent.sh`（device） | 机器**本身就是**沙箱：它自己的文件、工具、GPU，中间没有容器 |
+| 已经装好 Docker | `docker_run` | 同一个 worker，省掉它本来会跳过的步骤 |
 
-| 参数 | 含义 |
-|---|---|
-| `-api-url` | 要拨的控制面 |
-| `-token` | join token（`jn_…`） |
-| `-region` | 这个 worker 服务的地域；必须和客户端请求的一致 |
-| `-network` | 沙箱容器使用的 Docker 网络（默认 `bridge`） |
-| `-max-containers` | 这台机器最多容纳多少个沙箱 |
+两个脚本都是幂等的，结束时都会打印怎么看日志、怎么卸载。用同一张凭证，因为 worker
+和 agent 都是 worker 角色。
 
-**地域是最容易咬人的字段。** CLI 和 E2B 面都默认 `local`；一个用 `-region=hk` 注册的
-worker 对它们不可见，创建会报 `no available local poder found`，而机队看起来一切正常。
+**这个区别很重要。** worker 把每个沙箱隔离在容器里，一台能放十几个；agent 除了操作系统
+本身没有任何额外隔离——对"整台机器只服务一个智能体"的场景正是你要的，对共享机队则正好
+相反。
+
+**最容易踩的是地域。** CLI 和 E2B 面默认都是 `local`；用 `-region=hk` 注册的 worker 对它们
+不可见，创建会报 `no available local poder found`，而机队看起来一切正常。
 
 ## Worker 宣告了什么
 

@@ -10,6 +10,8 @@ never needs an inbound port, a public address, or a firewall exception.
 
 ## Joining
 
+There are two shapes, and they answer different questions.
+
 ```bash
 # on the control plane: mint a join token for one workspace
 curl -s -X POST "$API/portal/v1/join-tokens" \
@@ -18,19 +20,25 @@ curl -s -X POST "$API/portal/v1/join-tokens" \
 ```
 
 ```json
-{"secret":"jn_…","command":"docker run -d --name sandrpod-worker …"}
+{"secret":"jn_…",
+ "command":"curl -fsSL https://docs.sandrpod.com/install.sh | sudo bash -s -- --api-url=… --token=jn_… --yes",
+ "docker_run":"docker run -d --name sandrpod-worker …",
+ "agent_command":"curl -fsSL https://docs.sandrpod.com/agent.sh | sudo bash -s -- … --name=device-worker-1"}
 ```
 
-Run that command on the new machine. It starts `poder` with the token, which
-dials `-api-url` and registers.
+| This machine | Use | Why |
+|---|---|---|
+| a server with Docker | `install.sh` (the worker) | it hosts **many** sandbox containers; the installer handles Docker, the data disk, mirrors, swap and the ulimits a sandbox needs |
+| a laptop, a build box, a GPU host | `agent.sh` (the device) | the machine **is** the sandbox: its files, its tools, its GPU, no container in between |
+| Docker already installed | `docker_run` | the same worker, without the steps it would skip |
 
-| Flag | Meaning |
-|---|---|
-| `-api-url` | the control plane to dial |
-| `-token` | the join token (`jn_…`) |
-| `-region` | which region this worker serves; must match what clients ask for |
-| `-network` | Docker network for sandbox containers (default `bridge`) |
-| `-max-containers` | how many sandboxes this machine will hold |
+Both scripts are idempotent and both end by printing how to watch and remove the
+service. Same credential, because a worker and an agent are both worker-role.
+
+**The difference matters.** A worker isolates every sandbox in a container and can
+hold a dozen of them; an agent has no isolation at all beyond the OS itself, which is
+what you want for a machine whose whole job is to be one agent's hands — and exactly
+what you do not want for a shared fleet.
 
 **Region is the field that bites.** The CLI and the E2B surface both default to
 `local`; a worker registered with `-region=hk` is invisible to them, and creation
