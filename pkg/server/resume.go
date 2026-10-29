@@ -84,21 +84,25 @@ func resumeOnce(d resumeDeps) int {
 			})
 			continue
 		}
-		// The record decides. Three cases, and only one of them is a delivery:
+		// The record decides, and its absence is not a verdict.
 		//
-		//   gone        the customer deleted it (or it was reaped). Delivering now
-		//               would resurrect a sandbox somebody removed — the resumer
-		//               would recreate it on the next pass, forever.
-		//   terminal    ERROR/STOPPED/TERMINATED: the delivery already happened, or
-		//               failed for a reason retrying cannot fix.
-		//   RUNNING     up already: the completion write was what got lost.
+		// The create path writes the job first and the record second, so "no
+		// record" is the normal state of a delivery that never got going — exactly
+		// the case this pass exists for. Failing it turned a lost delivery into a
+		// permanent failure and broke the multi-instance check, which plants
+		// precisely that row.
+		//
+		// A deletion does not produce this state either: the delete path fails the
+		// sandbox's pending jobs itself, so by the time a job could be re-delivered
+		// it is no longer pending.
+		//
+		//   absent      never delivered → deliver
+		//   RUNNING     up already: the completion write was what got lost
+		//   terminal    ERROR/STOPPED/TERMINATED: retrying cannot fix it
 		sb, exists := d.sandboxes.Get(job.SandboxName)
 		if !exists {
-			_ = d.jobs.UpdateJob(job.ID, func(j *podpkg.Job) {
-				j.Status = podpkg.JobStatusFailed
-				j.ErrorMessage = "sandbox was deleted before its delivery completed"
-			})
-			continue
+			sb = &podpkg.SandboxInfo{Name: job.SandboxName}
+			exists = true
 		}
 		switch sb.State {
 		case podpkg.StateRunning:

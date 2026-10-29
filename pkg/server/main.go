@@ -125,6 +125,25 @@ func logDeletedRejection(name string) {
 	log.Printf("Agent %s rejected: sandbox was deleted (its agent is retrying; stop the service on that machine)", name)
 }
 
+// failJobsFor finishes the pending creates of a sandbox that is being deleted.
+//
+// It has to happen here, at the delete, because the resumer cannot tell "never
+// delivered" from "delivered and then deleted": both leave the same evidence. A
+// pending job left behind would be delivered on the next pass and recreate the
+// sandbox somebody just removed.
+func failJobsFor(jobs podpkg.JobRepository, sandboxName, reason string) {
+	for _, j := range jobs.ListJobs() {
+		if j.SandboxName != sandboxName || j.Status != podpkg.JobStatusPending {
+			continue
+		}
+		_ = jobs.UpdateJob(j.ID, func(x *podpkg.Job) {
+			x.Status = podpkg.JobStatusFailed
+			x.ErrorMessage = reason
+		})
+		log.Printf("sandbox delete: failed pending job %s for %s (%s)", j.ID, sandboxName, reason)
+	}
+}
+
 // sandboxTombstones remembers recently-deleted direct (agent) sandboxes. Without
 // it, deleting one does not stick: the agent is still running, its tunnel drops, it
 // reconnects seconds later and re-registers the record — the delete looks like it
@@ -1700,6 +1719,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				// console delete takes, so it has to do both: close the tunnel and
 				// remember the deletion (the reconnect answers 410 and the agent
 				// stops).
+				failJobsFor(jobStore, name, "sandbox was deleted before its delivery completed")
 				sandboxTombstones.Add(name)
 				if t, ok := directStore.Get(name); ok {
 					if cerr := t.Close(); cerr != nil {
@@ -1729,6 +1749,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					t.Close()
 				}
 			}
+			failJobsFor(jobStore, name, "sandbox was deleted before its delivery completed")
 			sandboxStore.Delete(name)
 			poderStore.UpdateUsage(pID, func(u *podpkg.PoderUsage) {
 				if u.Containers > 0 {

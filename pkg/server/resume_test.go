@@ -152,26 +152,56 @@ func TestResume_OnlyOneInstanceClaims(t *testing.T) {
 // A deleted sandbox must not be resurrected. Without this check the resumer
 // delivered a create for a record that no longer existed, and the customer's
 // deleted sandbox came back — repeatedly, on every pass.
-func TestResume_DoesNotResurrectDeletedSandboxes(t *testing.T) {
+// No record is not a verdict: the create path writes the job before the record, so
+// a job with no record is a delivery that never got going — the case this pass
+// exists for. The multi-instance check plants exactly this row.
+//
+// A deletion does not produce this state: the delete path fails the sandbox's
+// pending jobs itself (see TestFailJobsFor_FinishesPendingCreatesOnly).
+func TestResume_DeliversWhenRecordWasNeverWritten(t *testing.T) {
 	memory := store.NewMemoryStores()
 	job := &podpkg.Job{
-		ID: "j-del", Type: podpkg.JobTypeCreateSandbox, Status: podpkg.JobStatusPending,
-		SandboxName: "deleted-box", PoderID: "p1", Request: []byte(`{"name":"deleted-box"}`),
+		ID: "j-lost", Type: podpkg.JobTypeCreateSandbox, Status: podpkg.JobStatusPending,
+		SandboxName: "never-delivered", PoderID: "p1",
+		Request:   []byte(`{"name":"never-delivered"}`),
 		CreatedAt: time.Now().Add(-5 * time.Minute), UpdatedAt: time.Now().Add(-5 * time.Minute),
 	}
 	_ = memory.Jobs.AddJob(job)
-	// No sandbox record: the customer deleted it.
 	delivered := false
 	d := resumeDeps{
 		jobs: memory.Jobs, sandboxes: memory.Sandboxes, tunnels: tunnel.NewTunnelStore(),
 		deliver: func(*podpkg.Job, *podpkg.CreateSandboxRequest) error { delivered = true; return nil },
 	}
 	resumeOnce(d)
-	if delivered {
-		t.Fatal("re-delivered a create for a sandbox that no longer exists")
+	if !delivered {
+		t.Fatal("never delivered a create whose record was never written")
 	}
-	if j, _ := memory.Jobs.GetJob("j-del"); j.Status != podpkg.JobStatusFailed {
-		t.Fatalf("job status = %s, want FAILED", j.Status)
+}
+
+// The delete path finishes the sandbox's pending creates, so the resumer cannot
+// deliver one and resurrect what somebody removed.
+func TestFailJobsFor_FinishesPendingCreatesOnly(t *testing.T) {
+	memory := store.NewMemoryStores()
+	add := func(id, sandbox string, status podpkg.JobStatus) {
+		_ = memory.Jobs.AddJob(&podpkg.Job{
+			ID: id, Type: podpkg.JobTypeCreateSandbox, Status: status, SandboxName: sandbox,
+			CreatedAt: time.Now(), UpdatedAt: time.Now(),
+		})
+	}
+	add("j-pending", "gone-box", podpkg.JobStatusPending)
+	add("j-other", "other-box", podpkg.JobStatusPending)
+	add("j-done", "gone-box", podpkg.JobStatusCompleted)
+
+	failJobsFor(memory.Jobs, "gone-box", "sandbox was deleted before its delivery completed")
+
+	if j, _ := memory.Jobs.GetJob("j-pending"); j.Status != podpkg.JobStatusFailed {
+		t.Errorf("pending create of the deleted sandbox = %s, want FAILED", j.Status)
+	}
+	if j, _ := memory.Jobs.GetJob("j-other"); j.Status != podpkg.JobStatusPending {
+		t.Errorf("another sandbox's job was touched: %s", j.Status)
+	}
+	if j, _ := memory.Jobs.GetJob("j-done"); j.Status != podpkg.JobStatusCompleted {
+		t.Errorf("a completed job was rewritten: %s", j.Status)
 	}
 }
 
