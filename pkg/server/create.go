@@ -106,6 +106,17 @@ func runSandboxCreate(
 		req.Workspace = requester.Tenant
 	}
 
+	// A cloud provider needs a region it recognises. `local` is this control
+	// plane's own word for "the docker workers" and means nothing to a cloud SDK,
+	// which turns it into an endpoint like `ecs.local.aliyuncs.com` and fails with
+	// a DNS error that says nothing about the mistake.
+	if isCloudProviderName(req.ProviderType) && (req.Region == "" || req.Region == "local") {
+		msg := fmt.Sprintf("provider %q needs a region (for example cn-hongkong); %q is not one a cloud provider knows",
+			req.ProviderType, nonEmpty(req.Region, "empty"))
+		failBoth(preJobID, msg)
+		return nil, preJobID, errors.New(msg)
+	}
+
 	// The choke point: every path that provisions a sandbox passes through
 	// here, so a new entry point cannot silently skip the deployment's gate.
 	// Handlers already refused early for a better error surface; Admission is
@@ -402,4 +413,22 @@ type PoderTunnelElsewhereError struct {
 
 func (e *PoderTunnelElsewhereError) Error() string {
 	return "worker tunnel is held by another instance (poder " + e.PoderID + ")"
+}
+
+// isCloudProviderName reports whether providerType names a cloud substrate rather
+// than this machine's workers.
+func isCloudProviderName(providerType string) bool {
+	switch providerType {
+	case "", "local", "local-agent", "agent", "docker":
+		return false
+	}
+	return true
+}
+
+// nonEmpty is for messages: an empty region should read as "empty", not as "".
+func nonEmpty(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
 }
