@@ -55,13 +55,18 @@ you can see:
 | Default | What it does | How to change it |
 |---|---|---|
 | runs as the **user who ran sudo**, not root | a laptop is not a build server | `--user` |
-| `--work-dir ~/sandrpod-work` | the only directory writes are allowed in; created `0700` | `--work-dir` |
+| `--work-dir ~/sandrpod-work` | writes are confined here — plus the system temp dir, which build tools expect; created `0700` | `--work-dir` |
 | `--permission-mode prompt` | anything outside the work dir is asked about, and denied when nobody answers | `--permission-mode strict\|off` |
 | `--os-sandbox auto` | kernel-enforced: root filesystem read-only, writes only under the work dir (seatbelt on macOS, bwrap on Linux) | `--os-sandbox off` |
 
 `--full-machine` opens all of it — `/`, no gate, no kernel sandbox — and asks first.
 It is the right choice for a box dedicated to one agent and the wrong one for the
 laptop you are typing on.
+
+Measured with the defaults on macOS: `$HOME`, `~/Documents`, `/usr/local/bin` and
+`/private/var` refuse writes; `~/.ssh`, `~/Library/Mail`, `~/Library/Messages` and
+`~/Library/Cookies` refuse reads; `/tmp` stays writable, because `pip` and `npm` fail
+in ways that look like bugs when it does not. Everything else is read-only.
 
 Running as root is the part people skip. As root, `/` and `./` are the same place and
 a single bad command has no boundary to hit; the default now avoids it, and the

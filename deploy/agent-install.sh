@@ -45,7 +45,8 @@ Turn this machine into a SandrPod sandbox (an agent, not a worker).
   --name NAME       sandbox name for this machine    (default: hostname)
   --version TAG     release to install               (default: latest)
   --prefix DIR      where to install the binary      (default: /usr/local/bin)
-  --work-dir DIR    the only directory the agent may write (default: ~/sandrpod-work)
+  --work-dir DIR    writes are confined here (plus the system temp dir);
+                    default: ~/sandrpod-work
   --permission-mode MODE  prompt | strict | off      (default: prompt)
   --os-sandbox MODE off | auto | bwrap | seatbelt    (default: auto: read-only root,
                     writes only under the work dir, enforced by the kernel)
@@ -118,7 +119,10 @@ RUN_HOME="$(getent passwd "$RUN_USER" 2>/dev/null | cut -d: -f6)"
 [ -z "$RUN_HOME" ] && RUN_HOME="/root"
 [ -z "$WORK_DIR" ] && WORK_DIR="${RUN_HOME}/sandrpod-work"
 info "runs as: ${RUN_USER} (${RUN_HOME})"
-info "writes only under: ${WORK_DIR}"
+info "writes confined to: ${WORK_DIR} (+ the system temp dir)"
+info "  measured with -os-sandbox=auto on macOS: \$HOME, /usr/local/bin, /private/var"
+info "  and ~/Documents refuse writes; ~/.ssh and ~/Library/{Mail,Messages,Cookies}"
+info "  refuse reads; /tmp stays writable because build tools expect it"
 info "permission gate: ${PERMISSION_MODE}, kernel sandbox: ${OS_SANDBOX}"
 
 case "$PERMISSION_MODE" in off|prompt|strict) ;; *) die "--permission-mode must be off, prompt or strict" ;; esac
