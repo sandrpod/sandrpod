@@ -288,7 +288,10 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType, region str
 		return fmt.Errorf("failed to install docker: %w", err)
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("docker install failed: %s", result.Stderr)
+		// The command's own words beat a summary: "exit code is not zero" is what
+		// sent someone reading a scheduler for an hour when the answer was that the
+		// image pull was refused.
+		return fmt.Errorf("docker install failed (exit %d): %s", result.ExitCode, execOutput(result))
 	}
 
 	// 2. Start the Poder container.
@@ -337,7 +340,7 @@ func (s *Scheduler) setupPoderOnVM(ctx context.Context, providerType, region str
 		return fmt.Errorf("failed to start poder: %w", err)
 	}
 	if result.ExitCode != 0 {
-		return fmt.Errorf("poder start failed: %s", result.Stderr)
+		return fmt.Errorf("poder start failed (exit %d): %s", result.ExitCode, execOutput(result))
 	}
 
 	log.Printf("[Scheduler] Poder container started on VM %s", vm.ID)
@@ -540,4 +543,30 @@ func (s *Scheduler) onlineWithoutCapability(providerType, region string, require
 		}
 	}
 	return n
+}
+
+// execOutput joins what a remote command said, so a failure on a VM that has
+// already been terminated still explains itself.
+func execOutput(r *provider.CommandResult) string {
+	if r == nil {
+		return "(no result)"
+	}
+	parts := []string{}
+	if v := strings.TrimSpace(r.Output); v != "" {
+		parts = append(parts, "output: "+truncate(v, 500))
+	}
+	if v := strings.TrimSpace(r.Stderr); v != "" {
+		parts = append(parts, "stderr: "+truncate(v, 500))
+	}
+	if len(parts) == 0 {
+		return "(the command printed nothing)"
+	}
+	return strings.Join(parts, " | ")
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }
