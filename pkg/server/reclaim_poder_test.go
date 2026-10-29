@@ -72,14 +72,24 @@ func TestReapEmptyPodersOnce_Chain(t *testing.T) {
 	}
 }
 
-// A poder that still has a container/sandbox is never reaped, and its
-// empty-since tracking is cleared.
+// A poder that still holds a sandbox record is never reaped, and its empty-since
+// tracking is cleared.
+//
+// The record is the test, not the container counter: a container whose record is
+// gone is an orphan nothing can reach, and counting it kept a metered VM alive
+// forever after a create timed out and left one behind. See the next test for that
+// case.
 func TestReapEmptyPodersOnce_BusyPoderSpared(t *testing.T) {
 	stores := store.NewMemoryStores()
 	ts := tunnel.NewTunnelStore()
 	const pid = "reap-busy-poder"
 	_, _ = stores.Poders.Register(&podpkg.RegisterPoderRequest{ID: pid, ProviderType: "gcp", VMID: "vm-busy"})
 	_ = stores.Poders.UpdateUsage(pid, func(u *podpkg.PoderUsage) { u.Containers = 1 })
+	// The reason the worker is busy: a sandbox record that still points at it.
+	_ = stores.Sandboxes.Add(&podpkg.SandboxInfo{
+		Name: "busy-box", PoderID: pid, State: podpkg.StateRunning,
+		ProxyURL: "tunnel://" + pid,
+	})
 
 	terminate := func(context.Context, string, string) error {
 		t.Fatal("busy poder must never be terminated")
@@ -112,5 +122,25 @@ func TestReapEmptyPodersOnce_LocalPoderIgnored(t *testing.T) {
 	}
 	if _, ok := stores.Poders.Get(pid); !ok {
 		t.Error("local poder must survive")
+	}
+}
+
+// A container nobody has a record for must not pin a metered VM: that is the
+// orphan a timed-out create leaves behind, and the bill it used to incur.
+func TestReapEmptyPodersOnce_OrphanContainerDoesNotPin(t *testing.T) {
+	stores := store.NewMemoryStores()
+	ts := tunnel.NewTunnelStore()
+	const pid = "reap-orphan-poder"
+	_, _ = stores.Poders.Register(&podpkg.RegisterPoderRequest{ID: pid, ProviderType: "gcp", VMID: "vm-orphan"})
+	// A container exists, but no sandbox record does.
+	_ = stores.Poders.UpdateUsage(pid, func(u *podpkg.PoderUsage) { u.Containers = 1 })
+
+	terminated := 0
+	terminate := func(context.Context, string, string) error { terminated++; return nil }
+	// Empty since an hour ago, past the TTL.
+	emptySince := map[string]time.Time{pid: time.Now().Add(-time.Hour)}
+	reapEmptyPodersOnce(context.Background(), time.Now(), time.Minute, stores.Poders, stores.Sandboxes, ts, emptySince, terminate)
+	if terminated != 1 {
+		t.Fatalf("orphan container pinned the VM: terminated=%d", terminated)
 	}
 }
