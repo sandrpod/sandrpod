@@ -205,7 +205,57 @@ type Config struct {
 // mount the same control plane next to its own routes. Main() is the usual
 // caller; anything that wants different auth, admission or event handling
 // builds a Config and gets the same handlers.
+// registerProviders installs the cloud providers whose configuration is present.
+//
+// It lives here rather than inline in Main because an embedding build never runs
+// Main: the commercial binary calls New() directly, so its factory stayed empty
+// and every cloud provider was "not found" — the console offered AWS, Aliyun,
+// Azure and five more, and each one failed at create time.
+func registerProviders() {
+	providerRegistration.Do(func() {
+		registrations := []struct {
+			name string
+			fn   func() error
+		}{
+			{"AWS", aws.Register},
+			{"Aliyun", aliyun.Register},
+			{"Azure", azure.Register},
+			{"GCP", gcp.Register},
+			{"Tencent", tencent.Register},
+			{"DigitalOcean", digitalocean.Register},
+			{"Hetzner", hetzner.Register},
+			{"Oracle", oracle.Register},
+		}
+		for _, r := range registrations {
+			if err := r.fn(); err != nil {
+				log.Printf("Warning: Failed to register %s provider: %v", r.name, err)
+				continue
+			}
+			log.Printf("%s provider registered", r.name)
+		}
+		log.Printf("Registered providers: %v", provider.GetFactory().Names())
+	})
+}
+
+var providerRegistration sync.Once
+
+// providerNames is what a client needs to decide which substrates to offer.
+func providerNames() []string {
+	names := []string{"local"}
+	seen := map[string]bool{"local": true}
+	for _, n := range provider.GetFactory().Names() {
+		if !seen[n] {
+			names = append(names, n)
+			seen[n] = true
+		}
+	}
+	return names
+}
+
 func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.TunnelStore) http.Handler {
+	// An embedding build (the commercial one) never calls Main, so this is the
+	// only place provider registration can happen for it. Idempotent either way.
+	registerProviders()
 	jobStore := stores.Jobs
 	sandboxStore := stores.Sandboxes
 	poderStore := stores.Poders
@@ -933,6 +983,11 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				podpkg.CapabilityEgressPolicy,  // GET/PUT/DELETE /sandboxes/{name}/egress
 				podpkg.CapabilityEgressDecider, // POST /policy/decide
 			},
+			// Which substrates this deployment can actually provision on. A client
+			// that offers a provider the server cannot reach produces a create that
+			// fails after the customer has filled in a form; "local" is the docker
+			// worker fleet and is always offered.
+			"providers": providerNames(),
 		})
 	}))
 
@@ -1766,50 +1821,7 @@ func Main() {
 
 	log.Printf("Starting SandrPod API Server %s (Control Plane)", version)
 
-	// Register cloud providers
-	if err := aws.Register(); err != nil {
-		log.Printf("Warning: Failed to register AWS provider: %v", err)
-	} else {
-		log.Printf("AWS provider registered")
-	}
-	if err := aliyun.Register(); err != nil {
-		log.Printf("Warning: Failed to register Aliyun provider: %v", err)
-	} else {
-		log.Printf("Aliyun provider registered")
-	}
-	if err := azure.Register(); err != nil {
-		log.Printf("Warning: Failed to register Azure provider: %v", err)
-	} else {
-		log.Printf("Azure provider registered")
-	}
-	if err := gcp.Register(); err != nil {
-		log.Printf("Warning: Failed to register GCP provider: %v", err)
-	} else {
-		log.Printf("GCP provider registered")
-	}
-	if err := tencent.Register(); err != nil {
-		log.Printf("Warning: Failed to register Tencent provider: %v", err)
-	} else {
-		log.Printf("Tencent provider registered")
-	}
-	if err := digitalocean.Register(); err != nil {
-		log.Printf("Warning: Failed to register DigitalOcean provider: %v", err)
-	} else {
-		log.Printf("DigitalOcean provider registered")
-	}
-	if err := hetzner.Register(); err != nil {
-		log.Printf("Warning: Failed to register Hetzner provider: %v", err)
-	} else {
-		log.Printf("Hetzner provider registered")
-	}
-	if err := oracle.Register(); err != nil {
-		log.Printf("Warning: Failed to register Oracle provider: %v", err)
-	} else {
-		log.Printf("Oracle provider registered")
-	}
-
-	factory := provider.GetFactory()
-	log.Printf("Registered providers: %v", factory.Names())
+	registerProviders()
 
 	// ── Store construction ────────────────────────────────────────────────────
 	var stores podpkg.Stores
