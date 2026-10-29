@@ -142,7 +142,11 @@ DOCS_ROOT ?= /var/www/docs
 
 .PHONY: docs docs-serve docs-deploy
 docs: ## Build the documentation site (checks links)
-	cd docs-site && npm install --silent && npx vitepress build
+	# `npm run build`, not `npx vitepress build`: the prebuild step publishes
+	# deploy/node-install.sh at /install.sh, and the console's attach-a-machine
+	# command points at that URL. Calling vitepress directly ships a site whose
+	# install command 404s.
+	cd docs-site && npm install --silent && npm run build
 
 docs-serve: ## Preview the documentation site on :5173
 	cd docs-site && npm run dev
