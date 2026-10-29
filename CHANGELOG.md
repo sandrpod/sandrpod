@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.7.2] - 2026-10-29
+
+Two hours after 0.7.1, from running it. The resumer told the truth about a lost
+delivery and then kept telling it about every delivery ever lost.
+
+### Fixed
+
+- **A pending create with no sandbox record is delivered again.** The create writes
+  the job first and the record second, so that state is a delivery that never got
+  going — which is what this pass exists for. 0.7.1's parent commit had made it a
+  permanent failure, and the multi-instance check had been red since.
+- **Only deliveries inside the window are retried.** With that restored, the pending
+  jobs of sandboxes deleted days earlier came back: each one recreated its sandbox,
+  its egress network and its container, on a real worker until docker ran out of
+  addresses (`all predefined address pools have been fully subnetted`) and every new
+  create failed. A job older than 40 minutes is now failed with a reason.
+- **Deleting a sandbox finishes its pending creates**, so the resumer cannot deliver
+  one and resurrect what somebody removed.
+
 ## [0.7.1] - 2026-10-29
 
 The release that made the cloud path real. Driving a live Aliyun deployment from the
