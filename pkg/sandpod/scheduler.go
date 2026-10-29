@@ -363,6 +363,19 @@ docker --version ||
 		shellQuoteSingleValue(poderImage(providerType)),
 	)
 
+	// Pull the sandbox image before the worker can be asked to create anything.
+	// On a fresh VM this is 550 MB from a registry — several minutes on a cold
+	// cache — and the first create only waits two minutes for the container,
+	// so it timed out while the pull was still running and left the container to
+	// appear afterwards with no record pointing at it.
+	if tb := providerEnv("SANDRPOD_TOOLBOX_IMAGE", providerType); tb != "" {
+		log.Printf("[Scheduler] Pre-pulling %s on VM %s", tb, vm.ID)
+		pull, perr := p.ExecuteCommand(ctx, vm.ID, "docker pull '"+shellQuoteSingleValue(tb)+"' 2>&1 | tail -3")
+		if perr != nil || pull.ExitCode != 0 {
+			return fmt.Errorf("pre-pulling %s failed (%s): %w", tb, execOutput(pull), perr)
+		}
+	}
+
 	log.Printf("[Scheduler] Starting poder container on VM %s", vm.ID)
 
 	result, err = p.ExecuteCommand(ctx, vm.ID, poderStartCmd)
