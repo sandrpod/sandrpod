@@ -141,6 +141,17 @@ Plus `SANDRPOD_PUBLIC_URL` (or `-public-url`), which must be an address the VM c
 reach — the worker dials it to come home. Reuse the systemd unit + `service.d`
 drop-in pattern from [AWS_PROVISIONING.md](AWS_PROVISIONING.md).
 
+### Who owns a provisioned worker
+
+The VM worker dials in with the platform token, which has no tenant. Registration
+therefore takes the workspace from the create that provisioned the machine, so the
+node appears in **that** workspace's list and is not eligible for another tenant's
+sandboxes. Both halves matter: a machine nobody can see is a machine nobody can
+manage, and an unscoped machine is one two tenants can share.
+
+A worker registered before 0.7.1 stays unscoped until it is reclaimed and
+re-provisioned — check with `psql … select id, workspace from poders`.
+
 ### Reclamation is not optional on a metered cloud
 
 A VM provisioned for a sandbox becomes a worker afterwards, and deleting the
@@ -266,6 +277,8 @@ are recorded verbatim.
 | `poder registration timeout` for other reasons | the server is not reachable from the VM at `SANDRPOD_PUBLIC_URL`; the join token is forwarded automatically |
 | Worker ONLINE but the scheduler keeps waiting | the request region (not AZ) and `aliyun` must match what the worker registered with |
 | `No such image` for toolbox | the image is not pullable from the VM (private ACR without a login, or a wrong path) |
+| `InvalidVSwitchId.NotExist` | the VSwitch is in a **different region** than `region` in the request. The subnet and security group are region-scoped, so a deployment configured for one region cannot provision in another — use the region the VPC lives in, or run a second control plane for the second region |
+| the VM exists but the workspace's node list does not show it | the worker registered before 0.7.1, which inherited nothing: a VM worker dials in with the platform token (no tenant) and was recorded unscoped. Fixed in 0.7.1 — the worker now inherits the workspace that provisioned it |
 
 Every one of the first five now fails loudly instead of leaving a machine behind, but
 a deployment running an older build still has the old behaviour — check
