@@ -332,7 +332,12 @@ func (p *AliyunProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error
 // CloudAssist invocation to reach a terminal state when the caller's
 // context carries no deadline of its own. Bootstrap commands (e.g. Docker
 // install) can run for minutes.
-const cloudAssistExecTimeout = 5 * time.Minute
+const cloudAssistExecTimeout = 10 * time.Minute
+
+// cloudAssistCommandTimeout is how long the *remote* command may run before Cloud
+// Assistant stops it. The API default is 60 s, which is short enough to kill a
+// Docker install — the exact failure this constant exists to prevent.
+const cloudAssistCommandTimeout = 10 * time.Minute
 
 // cloudAssistRegistrationTimeout bounds how long we retry RunCommand while a
 // freshly launched instance's CloudAssist agent is still starting up.
@@ -358,6 +363,14 @@ var invocationTerminalStatuses = map[string]bool{
 	"Timeout":  true,
 }
 
+// commandTimeoutStatuses are terminal *without* an exit code: the invocation was
+// cut off. Reporting those as success is how a truncated Docker install became a
+// "successful" bootstrap followed by "docker: command not found".
+var commandTimeoutStatuses = map[string]bool{
+	"Stopped": true,
+	"Timeout": true,
+}
+
 // ExecuteCommand runs a shell command on the instance via the Alibaba Cloud
 // CloudAssist service and waits for the result.
 func (p *AliyunProvider) ExecuteCommand(ctx context.Context, vmID, command string) (*provider.CommandResult, error) {
@@ -380,6 +393,10 @@ func (p *AliyunProvider) ExecuteCommand(ctx context.Context, vmID, command strin
 	// create a fresh one per ExecuteCommand call, so retaining them would
 	// leak against the CloudAssist command quota.
 	runReq.KeepCommand = requests.NewBoolean(false)
+	// Cloud Assistant's default is 60 s. A Docker install from get.docker.com takes
+	// two or three minutes on a cold VM, so the default killed it mid-download — and
+	// the timeout was then reported as a successful, silent install.
+	runReq.Timeout = requests.NewInteger(int(cloudAssistCommandTimeout / time.Second))
 
 	var runResp *ecs.RunCommandResponse
 	for {
@@ -436,6 +453,11 @@ func (p *AliyunProvider) ExecuteCommand(ctx context.Context, vmID, command strin
 		if !invocationTerminalStatuses[result.InvocationStatus] {
 			// Still Running/Pending — Output/ExitCode aren't final yet.
 			continue
+		}
+		if commandTimeoutStatuses[result.InvocationStatus] {
+			return nil, fmt.Errorf("command %s on %s: %s after %s (raise the timeout or shorten the command): %s",
+				runResp.InvokeId, vmID, result.InvocationStatus, cloudAssistCommandTimeout,
+				decodeCloudAssistOutput(result.Output))
 		}
 
 		stderr := result.ErrorInfo
