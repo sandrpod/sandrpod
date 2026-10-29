@@ -242,6 +242,11 @@ type Config struct {
 	// Events receives lifecycle notifications. Nil keeps the built-in webhook
 	// (SANDRPOD_WEBHOOK_URL). Billing and audit export plug in here.
 	Events EventSink
+
+	// Enrolment, when set, lets a worker exchange a short-lived join token for its
+	// own credential (POST /api/v1/poders/enroll). Nil disables the endpoint: a
+	// self-hosted server hands out static tokens and needs no exchange.
+	Enrolment Enrolment
 }
 
 // New constructs and returns the HTTP mux for the API server.
@@ -485,6 +490,10 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 
 	// === Inter-node: deliver a create through a tunnel this instance holds ===
 	mountProvision(mux, cfg, tunnelStore, sandboxStore, jobStore)
+
+	// Workers exchange their invitation for their own credential here. Mounted
+	// before the tunnel so a machine can enrol before it ever dials.
+	mountEnrolment(mux, authMiddleware, cfg.Enrolment)
 
 	// === Poder tunnel entry point ===
 	// Poder dials this endpoint on startup to register and establish a yamux reverse tunnel

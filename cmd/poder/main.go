@@ -737,7 +737,7 @@ func connectTunnel(ctx context.Context, poderID string, mux http.Handler, p *pod
 			}
 			switch status {
 			case http.StatusUnauthorized, http.StatusForbidden:
-				log.Printf("Tunnel rejected (HTTP %d): this worker's join token is invalid or revoked — "+
+				log.Printf("Tunnel rejected (HTTP %d): this worker's credential is expired, revoked or unknown — "+
 					"issue a new one in the console (节点 → 添加节点) and restart with it (retrying in 5s)", status)
 			case http.StatusGone:
 				log.Printf("Tunnel rejected (HTTP %d): this worker was deleted from the platform; "+
