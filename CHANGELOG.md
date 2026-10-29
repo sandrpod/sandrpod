@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.7.3] - 2026-10-29
+
+The same evening, from watching 0.7.2 run for ten minutes.
+
+### Fixed
+
+- **A resumed delivery was never marked complete.** The resumer delivered the job,
+  logged it, and left it PENDING — so the next pass delivered it again, once a
+  minute, for as long as the record lived. On a worker that looked like
+  "Creating sandbox: smoke6" every 60 seconds.
+- **Creating a container was not idempotent.** Because delivery is at-least-once, a
+  retry must land on the same sandbox; instead each attempt made a new `sp-…`
+  container (and its egress network). `CreatePod` now removes any existing container
+  labelled with that sandbox name first, which is what makes the retry a retry.
+- **A worker that stopped heartbeating stayed ONLINE forever.** The liveness and
+  reclamation reapers were started from `Main()` too, so an embedding build never
+  ran them: a killed agent still showed "ONLINE, usage=70/10" and counted against
+  placement for as long as the process was gone. `New` now starts them.
+
 ## [0.7.2] - 2026-10-29
 
 Two hours after 0.7.1, from running it. The resumer told the truth about a lost

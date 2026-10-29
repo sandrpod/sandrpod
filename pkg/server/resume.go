@@ -148,6 +148,14 @@ func resumeOnce(d resumeDeps) int {
 			continue
 		}
 		delivered++
+		// The delivery is what the job was for, so it is finished. Leaving it
+		// PENDING re-delivers it on the next pass — and a create is not idempotent
+		// at the container level, so each pass made another sandbox container:
+		// observed as "Creating sandbox: smoke6" once a minute, on and on.
+		_ = d.jobs.UpdateJob(job.ID, func(j *podpkg.Job) {
+			j.Status = podpkg.JobStatusCompleted
+			j.ErrorMessage = ""
+		})
 		log.Printf("resume: delivered job %s (%s) on attempt after %s",
 			job.ID, job.SandboxName, now.Sub(job.UpdatedAt).Truncate(time.Second))
 	}

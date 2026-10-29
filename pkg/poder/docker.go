@@ -103,6 +103,19 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 		}
 	}
 
+	// A create for a sandbox that already has a container is a retry, not a second
+	// sandbox: the delivery promise is at-least-once, so the same request can
+	// arrive twice. Removing the previous container first makes the operation
+	// idempotent — without it each retry leaked a container (and, with an egress
+	// policy, a network), which on a real worker ended in "all predefined address
+	// pools have been fully subnetted".
+	if existing, err := p.findContainerBySandboxName(ctx, req.Name); err == nil && existing != "" {
+		log.Printf("poder: replacing existing container %s for sandbox %s (retry of a create)", existing, req.Name)
+		if err := p.DeletePod(ctx, existing); err != nil {
+			log.Printf("poder: could not remove the previous container %s for %s: %v", existing, req.Name, err)
+		}
+	}
+
 	// Generate a unique Pod ID
 	podID := fmt.Sprintf("sp-%d-%s", time.Now().Unix(), randomString(8))
 
@@ -597,4 +610,20 @@ func randomString(n int) string {
 // ptr returns a pointer to the given value.
 func ptr[T any](v T) *T {
 	return &v
+}
+
+// findContainerBySandboxName returns the ID of the container that already serves
+// req.Name, if any. The label is what CreatePod stamps, so it survives restarts.
+func (p *DockerPoder) findContainerBySandboxName(ctx context.Context, name string) (string, error) {
+	containers, err := p.dockerClient.ContainerList(ctx, container.ListOptions{
+		All:     true,
+		Filters: filters.NewArgs(filters.Arg("label", "sandrpod/sandbox-name="+name)),
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(containers) == 0 {
+		return "", nil
+	}
+	return containers[0].ID, nil
 }
