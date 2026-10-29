@@ -134,6 +134,12 @@ func main() {
 		log.Fatalf("Failed to resolve Poder ID: %v", err)
 	}
 
+	// The invitation becomes a key, once. Everything after this uses *apiToken:
+	// the tunnel handshake, the heartbeat, the job poll.
+	if resolved := resolveWorkerToken(*apiURL, *apiToken, poderID); resolved != *apiToken {
+		*apiToken = resolved
+	}
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
