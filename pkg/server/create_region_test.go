@@ -1,6 +1,8 @@
 package server
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -53,6 +55,32 @@ func TestCreate_RegionRefusalLeavesNoJob(t *testing.T) {
 	req := &podpkg.CreateSandboxRequest{Name: "no-job", ProviderType: "aliyun", Region: "local"}
 	_, _, _ = runSandboxCreate(nil, stores.Sandboxes, stores.Poders, stores.Jobs,
 		tunnel.NewTunnelStore(), Config{}, stores.TunnelOwners, req, "", "owner", nil, Identity{Name: "owner"})
+	if jobs := stores.Jobs.ListJobs(); len(jobs) != 0 {
+		t.Fatalf("a refused create left %d job(s) behind", len(jobs))
+	}
+}
+
+// The handler refuses before writing anything, so the caller sees 400 and no
+// PENDING record appears that would turn ERROR a second later.
+func TestCreateHandler_CloudWithLocalRegionIs400(t *testing.T) {
+	stores := store.NewMemoryStores()
+	h := New(Config{Token: "t"}, stores, tunnel.NewTunnelStore(), tunnel.NewDirectTunnelStore())
+
+	body := `{"name":"bad-region","provider_type":"aliyun","region":"local","async":true}`
+	req, _ := http.NewRequest(http.MethodPost, "/api/v1/sandboxes", strings.NewReader(body))
+	req.Header.Set("Authorization", "Bearer t")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "needs a region") {
+		t.Fatalf("unhelpful body: %s", rec.Body.String())
+	}
+	if _, exists := stores.Sandboxes.Get("bad-region"); exists {
+		t.Fatal("a refused create left a sandbox record behind")
+	}
 	if jobs := stores.Jobs.ListJobs(); len(jobs) != 0 {
 		t.Fatalf("a refused create left %d job(s) behind", len(jobs))
 	}

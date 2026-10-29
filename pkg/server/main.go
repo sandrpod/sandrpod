@@ -1170,6 +1170,14 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				}
 			}
 
+			// A cloud provider with "local" as its region fails at the SDK with a
+			// DNS error about a hostname that does not exist. Answer here, while
+			// the caller still has the request in front of them.
+			if err := validateCreateRegion(&req); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+
 			if _, exists := sandboxStore.Get(req.Name); exists {
 				http.Error(w, fmt.Sprintf("sandbox %s already exists", req.Name), http.StatusConflict)
 				return

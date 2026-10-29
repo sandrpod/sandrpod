@@ -110,11 +110,9 @@ func runSandboxCreate(
 	// plane's own word for "the docker workers" and means nothing to a cloud SDK,
 	// which turns it into an endpoint like `ecs.local.aliyuncs.com` and fails with
 	// a DNS error that says nothing about the mistake.
-	if isCloudProviderName(req.ProviderType) && (req.Region == "" || req.Region == "local") {
-		msg := fmt.Sprintf("provider %q needs a region (for example cn-hongkong); %q is not one a cloud provider knows",
-			req.ProviderType, nonEmpty(req.Region, "empty"))
-		failBoth(preJobID, msg)
-		return nil, preJobID, errors.New(msg)
+	if err := validateCreateRegion(req); err != nil {
+		failBoth(preJobID, err.Error())
+		return nil, preJobID, err
 	}
 
 	// The choke point: every path that provisions a sandbox passes through
@@ -413,6 +411,23 @@ type PoderTunnelElsewhereError struct {
 
 func (e *PoderTunnelElsewhereError) Error() string {
 	return "worker tunnel is held by another instance (poder " + e.PoderID + ")"
+}
+
+// validateCreateRegion refuses a cloud provider that was given no region, or this
+// control plane's own "local".
+//
+// The handler calls it before writing a job or a record, so the customer gets a 400
+// with a sentence instead of a PENDING sandbox that turns ERROR a second later. The
+// create path calls it again: a handler is not the only way in.
+func validateCreateRegion(req *podpkg.CreateSandboxRequest) error {
+	if !isCloudProviderName(req.ProviderType) {
+		return nil
+	}
+	if req.Region == "" || req.Region == "local" {
+		return fmt.Errorf("provider %q needs a region (for example cn-hongkong); %q is not one a cloud provider knows",
+			req.ProviderType, nonEmpty(req.Region, "empty"))
+	}
+	return nil
 }
 
 // isCloudProviderName reports whether providerType names a cloud substrate rather
