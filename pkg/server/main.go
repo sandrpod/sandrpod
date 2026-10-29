@@ -313,18 +313,33 @@ func providerNames() []string {
 // configured TTL. Shared by Main and New for the same reason registration is: an
 // embedding build never runs Main, and without this every cloud VM a customer's
 // create provisioned stays up — and billed — after the sandbox is deleted.
-func startPoderReaper(ctx context.Context, stores podpkg.Stores, tunnelStore *tunnel.TunnelStore) {
-	// The TTL is a package-level flag whose default comes from the environment, so
-	// this reads the same value Main would.
+func startFleetReapers(ctx context.Context, stores podpkg.Stores, tunnelStore *tunnel.TunnelStore) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Liveness first: a worker that stops heartbeating is marked OFFLINE, and only
+	// then eligible for reclamation. Both run from New as well as Main because an
+	// embedding build never calls Main — without them a killed agent stays ONLINE
+	// forever, holding capacity it does not have and showing up in every placement
+	// decision.
+	offline := 30 * time.Second
+	if offlineTimeout != nil {
+		offline = *offlineTimeout
+	}
+	reap := 10 * time.Minute
+	if reapTimeout != nil {
+		reap = *reapTimeout
+	}
+	log.Printf("Fleet reapers: offline after %v, reclaim after %v", offline, reap)
+	go cleanupOfflinePoders(ctx, stores.Poders, offline)
+	go reapOfflinePoders(ctx, stores.Poders, reap)
+
 	ttl := time.Duration(0)
 	if poderIdleTTL != nil {
 		ttl = *poderIdleTTL
 	}
 	if ttl <= 0 {
 		return
-	}
-	if ctx == nil {
-		ctx = context.Background()
 	}
 	log.Printf("Idle-poder reaper enabled: ttl=%v (empty cloud poders reclaimed, VMs terminated)", ttl)
 	go reapIdlePoders(ctx, ttl, stores.Poders, stores.Sandboxes, tunnelStore)
@@ -334,9 +349,9 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	// An embedding build (the commercial one) never calls Main, so this is the
 	// only place provider registration can happen for it. Idempotent either way.
 	registerProviders()
-	// Same reason: without this, cloud VMs provisioned on demand are never
-	// reclaimed and the bill grows with every create.
-	startPoderReaper(context.Background(), stores, tunnelStore)
+	// Same reason: without these, a worker that stops heartbeating stays ONLINE
+	// forever and cloud VMs provisioned on demand are never reclaimed.
+	startFleetReapers(context.Background(), stores, tunnelStore)
 	jobStore := stores.Jobs
 	sandboxStore := stores.Sandboxes
 	poderStore := stores.Poders
@@ -2126,8 +2141,7 @@ func Main() {
 		server.Shutdown(ctx)
 	}()
 
-	go cleanupOfflinePoders(rootCtx, stores.Poders, *offlineTimeout)
-	go reapOfflinePoders(rootCtx, stores.Poders, *reapTimeout)
+	startFleetReapers(rootCtx, stores, tunnelStore)
 	// Idle reclamation (cost safety). The sandbox reaper always runs so
 	// per-sandbox ttl_seconds work; the global default stays opt-in (0 = only
 	// sandboxes that set their own TTL are reaped).
@@ -2135,7 +2149,6 @@ func Main() {
 		log.Printf("Idle-sandbox reaper enabled: default ttl=%v", *sandboxIdleTTL)
 	}
 	go reapIdleSandboxes(rootCtx, *sandboxIdleTTL, stores.Sandboxes, stores.Poders, tunnelStore)
-	startPoderReaper(rootCtx, stores, tunnelStore)
 
 	if cfg.Registry != nil && *tokensFile != "" {
 		go watchTokensFile(rootCtx, *tokensFile, cfg.Registry)
