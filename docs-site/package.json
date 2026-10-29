@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "vitepress dev",
     "build": "vitepress build",
-    "preview": "vitepress preview"
+    "preview": "vitepress preview",
+    "sync-install": "node scripts/sync-install.mjs",
+    "predev": "npm run -s sync-install",
+    "prebuild": "npm run -s sync-install"
   },
   "devDependencies": {
     "vitepress": "^1.6.3"
