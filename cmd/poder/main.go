@@ -725,9 +725,26 @@ func connectTunnel(ctx context.Context, poderID string, mux http.Handler, p *pod
 		headers.Set("X-Poder-OS-Version", resources.OSVersion)
 		headers.Set("X-Poder-Kernel-Version", resources.KernelVersion)
 
-		wsConn, _, err := websocket.DefaultDialer.DialContext(ctx, wsURL, headers)
+		wsConn, resp, err := websocket.DefaultDialer.DialContext(ctx, wsURL, headers)
 		if err != nil {
-			log.Printf("Tunnel dial failed: %v (retrying in 5s)", err)
+			// "bad handshake" is what the library says for every rejection, and it
+			// sent this deployment to the wrong place for half an hour: the status
+			// code says whether the credential is revoked (401/403) or the sandbox
+			// was deleted (410), and those need different answers.
+			status := 0
+			if resp != nil {
+				status = resp.StatusCode
+			}
+			switch status {
+			case http.StatusUnauthorized, http.StatusForbidden:
+				log.Printf("Tunnel rejected (HTTP %d): this worker's join token is invalid or revoked — "+
+					"issue a new one in the console (节点 → 添加节点) and restart with it (retrying in 5s)", status)
+			case http.StatusGone:
+				log.Printf("Tunnel rejected (HTTP %d): this worker was deleted from the platform; "+
+					"re-attach it with a new join token (retrying in 5s)", status)
+			default:
+				log.Printf("Tunnel dial failed (HTTP %d): %v (retrying in 5s)", status, err)
+			}
 			select {
 			case <-ctx.Done():
 				return
