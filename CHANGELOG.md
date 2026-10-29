@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.7.5] - 2026-10-29
+
+### Fixed
+
+- **A denied preference read printed an error into every command's output.** Under
+  the seatbelt profile, any process that touches CFPreferences asks the kernel for a
+  sandbox extension on `/Library/Preferences`, `~/Library/Preferences` and the managed
+  variants; the refusal printed, on stderr, once per file:
+
+  ```
+  sandbox_extension_issue_file failed for /Library/Managed Preferences/…:
+  1 (Operation not permitted)
+  ```
+
+  So an ordinary `curl` in a device sandbox came back with seven alarming lines
+  before its output. Reading global preferences is not a persistence vector — writing
+  them is, and that stays denied — so the profile allows the read now. Verified:
+  `stderr` empty, no `sandbox_extension_issue_file` lines, `http=200`.
+
 ## [0.7.4] - 2026-10-29
 
 The one-line cause of everything in 0.7.2 and 0.7.3: the resumer never looked at

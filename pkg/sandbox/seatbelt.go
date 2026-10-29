@@ -130,6 +130,26 @@ func BuildSeatbeltProfile(policy Policy) (string, error) {
 		b.WriteString(fmt.Sprintf("(deny file-read* (subpath %s))\n", sbplString(p)))
 	}
 
+	// Preference files are readable even when a hardlock covers the directory that
+	// holds them, because denying them does not stop anything — it only produces
+	// noise. Every process that touches CFPreferences asks the kernel for a sandbox
+	// extension on these paths, and a refusal prints, on stderr, once per file:
+	//
+	//   sandbox_extension_issue_file failed for /Library/Managed Preferences/…:
+	//   1 (Operation not permitted)
+	//
+	// which lands in the output of an ordinary `curl` and looks like a failure of
+	// the sandbox. Reading global preferences is not a persistence vector; writing
+	// them is, and that stays denied because the write rules are a separate allow
+	// list.
+	prefs := []string{"/Library/Preferences", "/Library/Managed Preferences"}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		prefs = append(prefs, filepath.Join(home, "Library/Preferences"))
+	}
+	for _, p := range prefs {
+		b.WriteString(fmt.Sprintf("(allow file-read* (subpath %s))\n", sbplString(p)))
+	}
+
 	// Writes: the work tree and the temp dirs only. With (deny default) the
 	// rest of the disk is already read-only, so no deny pass is needed.
 	writable := append([]string{policy.WorkDir}, policy.WriteAllow...)
