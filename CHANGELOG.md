@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.7.9] - 2026-10-29
+
+### Fixed
+
+- **`Tunnel dial failed: websocket: bad handshake`** — the library's wording for
+  every rejection, and it hid the actual cause for hours: every join token had been
+  revoked, so the worker was refused, went offline, and its record was reaped after
+  ten minutes. The dial now reports the status code and what to do about it: 401/403
+  is a credential problem (issue a new token and restart), 410 is "this worker was
+  deleted, re-attach it".
+
 ## [0.7.8] - 2026-10-29
 
 ### Fixed
