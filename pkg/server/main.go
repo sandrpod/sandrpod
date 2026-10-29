@@ -252,10 +252,34 @@ func providerNames() []string {
 	return names
 }
 
+// startPoderReaper reclaims cloud workers that have had no sandboxes for the
+// configured TTL. Shared by Main and New for the same reason registration is: an
+// embedding build never runs Main, and without this every cloud VM a customer's
+// create provisioned stays up — and billed — after the sandbox is deleted.
+func startPoderReaper(ctx context.Context, stores podpkg.Stores, tunnelStore *tunnel.TunnelStore) {
+	// The TTL is a package-level flag whose default comes from the environment, so
+	// this reads the same value Main would.
+	ttl := time.Duration(0)
+	if poderIdleTTL != nil {
+		ttl = *poderIdleTTL
+	}
+	if ttl <= 0 {
+		return
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	log.Printf("Idle-poder reaper enabled: ttl=%v (empty cloud poders reclaimed, VMs terminated)", ttl)
+	go reapIdlePoders(ctx, ttl, stores.Poders, stores.Sandboxes, tunnelStore)
+}
+
 func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.TunnelStore) http.Handler {
 	// An embedding build (the commercial one) never calls Main, so this is the
 	// only place provider registration can happen for it. Idempotent either way.
 	registerProviders()
+	// Same reason: without this, cloud VMs provisioned on demand are never
+	// reclaimed and the bill grows with every create.
+	startPoderReaper(context.Background(), stores, tunnelStore)
 	jobStore := stores.Jobs
 	sandboxStore := stores.Sandboxes
 	poderStore := stores.Poders
@@ -1978,10 +2002,7 @@ func Main() {
 		log.Printf("Idle-sandbox reaper enabled: default ttl=%v", *sandboxIdleTTL)
 	}
 	go reapIdleSandboxes(rootCtx, *sandboxIdleTTL, stores.Sandboxes, stores.Poders, tunnelStore)
-	if *poderIdleTTL > 0 {
-		log.Printf("Idle-poder reaper enabled: ttl=%v (empty cloud poders reclaimed, VMs terminated)", *poderIdleTTL)
-		go reapIdlePoders(rootCtx, *poderIdleTTL, stores.Poders, stores.Sandboxes, tunnelStore)
-	}
+	startPoderReaper(rootCtx, stores, tunnelStore)
 
 	if cfg.Registry != nil && *tokensFile != "" {
 		go watchTokensFile(rootCtx, *tokensFile, cfg.Registry)
