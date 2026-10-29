@@ -72,10 +72,15 @@ func (c *wsConn) WriteText(msg []byte) error {
 // The Poder node initiates the WebSocket connection; the API Server
 // acts as the yamux client and opens streams to Poder's HTTP server.
 type PoderTunnel struct {
-	ID       string
-	session  *yamux.Session
-	Client   *http.Client      // routes HTTP through yamux streams
-	WSDialer *websocket.Dialer // routes WebSocket through yamux streams (PTY)
+	ID      string
+	session *yamux.Session
+	// transport is the connection under the yamux session. Kept so Close can shut
+	// it explicitly: a session close that only writes a GoAway leaves a peer that
+	// is waiting on reads exactly where it was, and that peer is an agent on
+	// somebody's laptop that then never learns its sandbox was deleted.
+	transport io.Closer
+	Client    *http.Client      // routes HTTP through yamux streams
+	WSDialer  *websocket.Dialer // routes WebSocket through yamux streams (PTY)
 
 	// Built on first use rather than in the constructor: most tunnels never
 	// carry a streaming request, and this keeps one client per tunnel instead
@@ -142,10 +147,11 @@ func NewPoderTunnelFromConn(id string, conn io.ReadWriteCloser) (*PoderTunnel, e
 	}
 
 	return &PoderTunnel{
-		ID:       id,
-		session:  session,
-		Client:   client,
-		WSDialer: wsDialer,
+		ID:        id,
+		session:   session,
+		transport: conn,
+		Client:    client,
+		WSDialer:  wsDialer,
 	}, nil
 }
 
@@ -177,7 +183,16 @@ func (t *PoderTunnel) Wait() {
 func (t *PoderTunnel) Close() error {
 	closeIdle(t.Client)
 	closeIdle(t.streamCli)
-	return t.session.Close()
+	err := t.session.Close()
+	if t.transport != nil {
+		// Closing the session alone leaves the socket open when the peer is blocked
+		// on a read and never sends anything back. Close the transport too, so the
+		// other end's read fails promptly and it can act on it.
+		if cerr := t.transport.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}
+	return err
 }
 
 func closeIdle(c *http.Client) {
