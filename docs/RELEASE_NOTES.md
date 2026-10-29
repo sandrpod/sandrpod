@@ -1,136 +1,119 @@
-# SandrPod 0.7.0
+# SandrPod 0.7.1
 
-> The release that makes SandrPod **embeddable**: a control plane another program
-> can import, three seams it can plug into, and tenant isolation that holds on
-> every path — including the ones nobody was looking at.
+> The release that made the cloud path real, and the one where a machine you attach
+> stops being a machine you handed over.
 
-0.6.0 finished the boundaries around a sandbox. 0.7.0 turns the API server into a
-library: `pkg/server` replaces `cmd/server`'s guts, a host build supplies its own
-authentication, admission and event sink, and E2B compatibility becomes a handler
-you mount rather than a binary you run. Everything the commercial build needs, and
-none of it required: `cmd/server` behaves exactly as before.
-
----
-
-## 1. What is new
-
-### 1.1 `pkg/server`: the control plane as a library
-
-`server.New(cfg, stores, tunnelStore, directStore)` returns the mux that
-`server.Main()` serves. The flags move into a private `FlagSet` inside `Main()`,
-so an embedding program can define its own `-port`/`-db` without a
-`flag redefined` panic — a bug that only appears when the second program starts.
-
-`NewE2BGateway(domain, cfg, stores, tunnelStore, directStore)` exposes the
-E2B-compatible surface as a handler. Mount it at your own path, or not at all.
-
-### 1.2 Three seams a different build can plug into
-
-| Seam | Decides | Built-in |
-|---|---|---|
-| `Config.Authenticator` | who a request is | the token scheme |
-| `Config.Admission` | whether a create may proceed | nothing |
-| `Config.Events` | what happened | nothing |
-
-`Admission` is called early *and* at the create choke point, so it must be
-idempotent; a refusal at the choke point now marks the job and the record failed
-instead of leaving a sandbox `PENDING` forever. `Events` payloads carry owner,
-`cpu_cores`, `memory_mb`, `ttl_seconds` and `poder_id`, so a metering sink does
-not have to reconstruct them — and the delete event carries them too, which it
-did not before this release.
-
-### 1.3 Tenant-scoped placement, on every path
-
-A sandbox is scheduled only onto a worker with the same tenant, or onto one with
-no tenant at all. That held on the native API and did *not* hold on two other
-paths, both fixed here: the async create rebuilt the identity without its tenant,
-and the grace-period fallback used an unscoped selector. The E2B gateway now
-resolves its own keys (`Config.E2BAPIKeys`) and carries the tenant through to
-placement as well.
-
-`RoleWorker` is a new role: the two routes a worker needs (the tunnel handshake
-and the job poll), and nothing else. A join token can no longer list the fleet,
-create sandboxes or read another tenant's anything.
-
-### 1.4 Sandbox creation is 230 ms, not 4.2 s
-
-The worker pulled the toolbox image before creating every container, even when it
-was already on disk. It now inspects first and pulls only when missing.
+0.7.0 turned the control plane into a library. This is what happened when the library
+was driven by a commercial build against a real cloud account: five defects, each in a
+different layer, each producing a symptom that pointed somewhere else. Between them,
+**no provider other than `local` had ever worked end to end** — the paths existed,
+ran, and failed late.
 
 ---
 
-## 2. Upgrading from 0.6.x
+## 1. What the live Aliyun test found
 
-Read this before rolling: everything below is what an existing deployment can
-notice.
+The order below is the order they appeared. Each one hid the next.
 
-- **Defaults are unchanged.** Nothing in this release turns itself on.
-- **Workers before the control plane**, as in 0.6.0. A 0.6 worker ignores the
-  tenant header; a 0.7 control plane refuses to place a tenant-scoped sandbox
-  onto it rather than silently co-locating two tenants.
-- **`/api/v1/poders/{id}/heartbeat` now accepts a worker token** for the worker's
-  own record. If you routed that path through an admin-only proxy, workers using
-  join tokens will start succeeding where they previously received 403 — and,
-  more importantly, will stop going stale.
-- **Unknown resource readings are negative.** `cpu_usage`/`memory_usage` in the
-  heartbeat are `-1` when the worker cannot read `/proc`, where they used to be a
-  confident `0.5`. A dashboard that treated the value as a fraction will show
-  `-100%`; clamp at zero or read the sign.
+| # | Symptom | Layer | What was wrong |
+|---|---|---|---|
+| 1 | `provider aliyun not found` | registration | providers were registered in `Main()`, which an embedding build never runs |
+| 2 | VM created, then `docker: command not found` | bootstrap | Cloud Assistant's 60 s default killed the Docker install, and `Timeout` was read as success |
+| 3 | worker started, never dialled | configuration | the VM was handed loopback as the control-plane address |
+| 4 | first create timed out, container appeared afterwards | budget | the 550 MB sandbox image was pulled inside a two-minute create |
+| 5 | **the VM outlived every sandbox** | reclamation | the idle reaper also only ran in `Main()`, and an orphan container counted as busy |
 
-### Breaking Go API changes
+Only #3 and #4 were visible from the outside. #1, #2 and #5 needed the deployment to
+be driven by something that did not go through `Main()` — which is exactly the
+commercial build, and exactly why the open-source path had looked healthy.
 
-An embedding build from 0.6 must adapt:
+The fixes are unremarkable individually. What they share is worth stating: **each
+failure reported itself as a different problem than it was**, and none was reachable by
+reading the code that owned the symptom.
 
-- `cmd/server` internals moved to `pkg/server`; `main.version` is no longer the
-  ldflags symbol — use `-X github.com/sandrpod/sandrpod/pkg/server.version`.
-- `server.New` takes `(cfg Config, stores podpkg.Stores, tunnelStore, directStore)`.
-- `Scheduler.SelectBestFor(region, provider, require []string, tenant string)`
-  replaces the three-argument form; `SelectBest` remains for unscoped callers.
-- `SandboxInfo.Owner` is populated on delete events (it was empty before).
+Verified end to end afterwards on a real ECS instance: create → VM → Docker → worker
+registered → sandbox `RUNNING` in 30 s → `execute` → delete → **idle reaper terminates
+the VM**.
 
----
+## 2. Device agents
 
-## 3. Known limits, stated
+Two changes, both about not surprising the person whose laptop it is.
 
-- **Placement is tenant-scoped, not tenant-isolated at the network layer.** Two
-  tenants on the same docker daemon share its bridge; a sandbox on one can reach
-  a sandbox IP on the other. The egress policy bounds what leaves a *container*,
-  not what it can see inside the bridge. Run one daemon per tenant where that
-  matters.
-- **The terminal is HTTP/1.1 only** when credential masking terminates TLS, so
-  interactive tools that negotiate h2 fall back.
-- **No per-sandbox metric history.** The toolbox reports live metrics; a time
-  series would need a worker-side sampler.
-- **The E2B surface is path-mode opt-in.** Mounting it takes over `/sandboxes`.
+**A workspace can attach one.** The route was `adminOnly`, so a hosted tenant could not
+attach a machine at all. It accepts a worker credential now — but an ownerless record
+is world-visible, so a worker credential without a tenant is refused, the record is
+owned as `workspace:<tenant>`, and a name that belongs to someone else answers 409.
 
----
+**It is confined by default.** The installer used to start it as root, from `/`, with
+no gate and no kernel sandbox: everything, with no boundary to hit. Now it runs as the
+invoking user, writes only under `~/sandrpod-work` (plus the system temp dir), gates
+the rest, and uses the kernel sandbox where the platform has one. `--full-machine`
+still opens all of it, and asks first.
 
-## 4. How this release was verified
+Measured with the defaults on macOS: `$HOME`, `~/Documents`, `/usr/local/bin` and
+`/private/var` refuse writes; `~/.ssh`, `~/Library/Mail`, `~/Library/Messages` and
+`~/Library/Cookies` refuse reads; `/tmp` stays writable because build tools fail in
+ways that look like bugs when it does not.
 
-- `go test ./...` on linux/amd64 and darwin/arm64, plus the privileged netns
-  suite, which now asserts the proxy's *decision* rather than whether the
-  internet answered — a flaky test that failed on a bad runner link and passed on
-  rerun was telling us nothing.
-- The playground (`hack/playground/run.sh`) builds the sidecar for real and fails
-  when the build fails; it had been silently skipping that phase on CI.
-- Cold start measured at 230 ms p50 locally, 616 ms on the CI runner.
-- Tenant placement verified in both directions: bob cannot see, place onto, or
-  delete alice's workers, and an async create keeps its tenant.
+**Deleting one sticks.** It used to drop a pointer instead of the connection, so the
+agent kept the socket, believed it was still serving, and its reconnect recreated the
+record. Deleted names are tombstoned (refreshed on each rejected attempt, so a
+pre-release agent cannot resurrect it either), the tunnel closes its transport, and an
+agent told `410` stops and exits — with the installed service set to restart on
+*failure* only, so a deliberate exit stays down.
 
----
+## 3. Installers
 
-## 5. 中文摘要
+`deploy/node-install.sh` (published at `docs.sandrpod.com/install.sh`) turns a fresh
+machine into a worker: data disk first, then swap, then Docker from a mirror that
+answers in China, then `daemon.json`, then the sysctls development tooling needs, then
+the fleet. `deploy/agent-install.sh` (`/agent.sh`) turns a machine into a sandbox.
 
-0.7.0 的主线是**可嵌入**：控制面从 `cmd/server` 抽成 `pkg/server`，另一个程序可以
-`import` 它，并通过三个 seam（认证、准入、事件）接入自己的逻辑；E2B 兼容面变成可挂载
-的 handler，而不是必须运行的二进制。`cmd/server` 行为不变，所有新能力默认关闭。
+Both are idempotent, both accept `--flag=value`, both have `--dry-run`, and both were
+written for the machine people actually run them on — which is why `agent.sh` on macOS
+turned out to be the one that exited silently: `getent` does not exist there.
 
-租户隔离在这版补齐了三条曾经漏掉的路径：异步创建丢 tenant、宽限期回退用了无作用域
-选择器、E2B 网关不带 tenant。worker 现在有独立角色 `RoleWorker`（只能握手和领任务），
-join token 不再能读舰队视图或创建沙箱。
+## 4. Upgrading
 
-顺带两个"看着像功能、其实是 bug"的修复：worker 用 join token 时心跳一直 403（在线但
-状态不再更新），以及沙箱创建从 4.2s 降到 230ms（每次创建前都无条件拉镜像）。
+No Go API changed. Two behaviours a deployment may notice:
 
-**升级顺序：先 poder，再 server。** 破坏性 Go API 变更见上；心跳里的未知读数现在是负数，
-仪表盘按 0..1 处理会显示 -100%，请钳到 0 或读符号位。
+- `/api/v1/capabilities` grows a `providers` field. Old clients ignore it.
+- A device agent deleted from the platform now **stops** instead of reconnecting. If
+  you relied on "delete the record, the agent comes back", start the service again —
+  that is one command now, not an automatic reconnect.
+
+The image build no longer requires buildx: `FROM --platform=$BUILDPLATFORM` with the
+variable unset is a parse error, and a plain `docker build` does not set it. Pass
+`--build-arg BUILDPLATFORM=linux/arm64` on an arm64 host that has no buildx.
+
+## 5. Known limits, unchanged
+
+- **Placement is tenant-scoped, not tenant-isolated at the network layer.** Two tenants
+  on one docker daemon share its bridge; run one daemon per tenant where that matters.
+- **A provisioned VM is a worker, not a sandbox.** Deleting the sandbox leaves the
+  worker for the next one, which is what `SANDRPOD_PODER_IDLE_TIMEOUT` exists for.
+- **One region per provider per control plane.** The VSwitch and security group are
+  region-scoped, so a request for another region fails with
+  `InvalidVSwitchId.NotExist`.
+- **A device agent has no isolation beyond the OS.** That is the point of it, and the
+  reason it is not a shared fleet.
+
+## 6. 中文摘要
+
+0.7.1 是把云这条路走通的版本。用商业构建驱动一个真实的阿里云账号，暴露出五个缺陷，分处
+不同层，而每一个的症状都指向别处：厂商没注册（注册写在 `Main()` 里，嵌入构建不执行）、
+云助手 60 秒默认超时掐断 Docker 安装且超时被当成功、云主机被告知去连 `127.0.0.1`、
+首次创建在 2 分钟预算内拉 550MB 镜像、以及**闲置回收同样只在 `Main()` 启动**，导致每台
+云主机都在持续计费。
+
+设备 agent 有两处变化：工作区现在可以自己接入一台机器（路由从 `adminOnly` 放宽到 worker
+凭据，归属写成 `workspace:<租户>`，重名返回 409）；并且**默认就是关起来的**——以执行 sudo
+的用户运行，只写 `~/sandrpod-work`（外加系统临时目录），其余交给权限门禁和内核沙箱，
+`--full-machine` 才打开整台机器。
+
+删除设备沙箱以前不生效：删的是指针不是连接，agent 保留 socket 继续以为自己在线，重连又把
+记录建回来。现在删除会真正断开、记忆删除（每次被拒都刷新窗口），agent 收到 `410` 后退出，
+服务配置改为"失败才重启"，所以主动退出不会被拉起来。
+
+两个安装脚本：`/install.sh` 把一台空机器变成 worker，`/agent.sh` 把一台机器变成沙箱。都幂等、
+都支持 `--flag=value`、都有 `--dry-run`。

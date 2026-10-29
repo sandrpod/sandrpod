@@ -6,19 +6,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
-## [Unreleased]
+## [0.7.1] - 2026-10-29
+
+The release that made the cloud path real. Driving a live Aliyun deployment from the
+console found five defects that between them made every `provider_type` other than
+`local` fail — each one in a different layer, each one pointing somewhere else. Also
+the lifecycle of a device agent, and an installer for a machine that has nothing on it.
 
 ### Added
 
+- `deploy/node-install.sh`: a guided installer for a fresh worker — data disk, swap,
+  Docker from a China-reachable mirror, registry mirrors, the sysctls development
+  tooling needs, and the two images it will pull. `--dry-run` prints the plan.
+- `deploy/agent-install.sh` (published at `docs.sandrpod.com/agent.sh`): turns a
+  machine into a sandbox — installs the release binary, writes a systemd unit or
+  launchd plist, and confines it by default.
+- `/api/v1/capabilities` reports `providers`: which substrates this deployment can
+  actually provision, so a client can stop offering the others.
+- A device agent can be attached by a workspace, not only by an operator.
 - [docs/UPSTREAM_CHANGES.md](docs/UPSTREAM_CHANGES.md): for each release, what
-  breaks, who it breaks, and how to roll back — the checklist a release review
-  needs, kept separate from the release narrative.
+  breaks, who it breaks, and how to roll back.
+
+### Fixed
+
+- **An embedding build registered no cloud providers at all.** Registration lived in
+  `Main()`, which a commercial build never runs, so every provider answered
+  `provider aws not found` — after the customer had filled in a region and a size.
+- **Provisioned VMs were told to dial `127.0.0.1`.** The address handed to a worker
+  was the loopback fallback, so a cloud VM connected to itself and the create timed
+  out waiting for a worker that could never arrive.
+- **Cloud Assistant's 60-second default killed the Docker install, and a timeout
+  counted as success.** The bootstrap then ran `docker run` on a machine with no
+  Docker and reported `docker: command not found` after it had been terminated. The
+  command timeout is 10 minutes now and `Timeout`/`Stopped` are failures.
+- **The first create pulled a 550 MB image inside a two-minute budget.** The container
+  appeared after the caller was told the create had failed, with no record pointing at
+  it. The image is pre-pulled during bootstrap.
+- **The idle reaper never ran in an embedding build**, so every cloud VM provisioned
+  for a sandbox stayed up and billed after the sandbox was deleted. It also judged
+  "empty" by container count, so an orphan container pinned a machine alive.
+- **A delete leaked the egress sidecar, on every delete.** Create named the sidecar
+  after the container's name; delete looked it up by the container's ID and treated
+  "not found" as success. One container and one bridge network per egress sandbox.
+- **Deleting a device sandbox did not stick.** The delete dropped a pointer instead of
+  the connection, so the agent kept the socket, believed it was still serving, and a
+  reconnect recreated the record. Deleted names are tombstoned, the tunnel is closed
+  for real, and an agent told `410` stops and exits.
+- **A provisioned VM's worker belonged to nobody.** It registered with the platform
+  token, so it was invisible in the workspace that paid for it and eligible for every
+  other tenant's sandboxes. It inherits the requesting workspace now.
+- A closed tunnel left the peer blocked on a read: `Close` shut the yamux session and
+  not the transport.
+- `agent.sh` exited silently on macOS — `getent` does not exist there, and `set -e`
+  turned that into a script that printed two lines and stopped.
+- The images could not be built without buildx: `FROM --platform=$BUILDPLATFORM` with
+  the variable unset is a parse error on its first line.
 
 ### Changed
 
-- The project positions itself as a **production service**, not a prototype:
-  version support policy, upgrade guarantees, and support channels are stated in
-  the README; the personal contact addresses are replaced with support mailboxes.
+- The project positions itself as a **production service**, not a prototype: version
+  support policy, upgrade guarantees and support channels are in the README.
+- A device agent is confined by default: it runs as the invoking user, writes only
+  under `~/sandrpod-work` (plus the system temp dir), gates the rest, and uses the
+  kernel sandbox where the platform has one. `--full-machine` opens all of it and
+  says so.
+- Both installers accept `--flag=value`, the form the console prints.
 
 ## [0.7.0] - 2026-10-27
 
