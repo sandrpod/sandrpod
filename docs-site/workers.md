@@ -72,6 +72,39 @@ Running as root is the part people skip. As root, `/` and `./` are the same plac
 a single bad command has no boundary to hit; the default now avoids it, and the
 service runs under your user with the machine's own tools.
 
+
+### Two credentials, not one
+
+The command a customer pastes carries a **join token**: one hour, one workspace, meant
+to be used once. The machine exchanges it for its own **worker key** on the first
+connection, and keeps that — 180 days, bound to that machine's id.
+
+| | join token (`jn_…`) | worker key (`wk_…`) |
+|---|---|---|
+| lives | 1 hour | 180 days |
+| handed to | a human, to paste once | the machine, which stores it `0600` |
+| travels in | the install command | the tunnel handshake, every reconnect |
+| revoked | with the workspace's invitations | **per machine** |
+| if it leaks | an hour to enrol a machine | access as that one worker |
+
+The split exists because the two roles are different. A credential that lives long
+enough to survive a reboot is one worth stealing, and it was issued to somebody who
+has long since forgotten it; a credential short enough to be safe cannot survive a
+reboot, and the first restart after it expires takes the node out of the fleet —
+silently, until someone notices the console is empty.
+
+```bash
+# what the machine keeps, inside its data volume
+$ docker exec sandrpod-worker cat /var/lib/sandrpod/worker-key
+{"token":"wk_…","expires_at":"2027-04-27T15:01:40Z"}
+```
+
+Enrolment happens automatically. A worker that finds a stored key uses it and ignores
+the token on its command line; one whose key expired says so in its log and enrols
+again. If enrolment fails — older control plane, expired invitation — it falls back to
+the invitation and keeps retrying, because refusing to start turns a missing feature
+into an outage.
+
 ## What a worker advertises
 
 At handshake the worker sends its identity, resources, **capabilities**, and
