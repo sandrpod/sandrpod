@@ -72,6 +72,22 @@ SDK 不会把 API key 发给 envd。它把创建响应里的 `envdAccessToken` �
 `<端口>-<id>.<域名>`；请求落到了控制面。托管构建在 0.7.1 已修；检查你的反向代理是否
 原样传递 `Host` 头。
 
+## `failed to parse platform : "" is an invalid OS component`
+
+从仓库构建镜像时，第一行就失败，还没编到代码。
+
+所有 Dockerfile 都写的是 `FROM --platform=$BUILDPLATFORM golang:…`，而
+`BUILDPLATFORM` 是**只有 buildx 才会注入**的变量。普通 `docker build` —— 很多机器
+（包括大多数自托管 Linux 服务器）的默认方式 —— 会让它展开成空串，而
+`FROM --platform=` 拿到空值是解析错误。
+
+0.7.1 通过给它默认值修掉了：buildx 仍然注入自己的值（多架构构建依旧在原生架构上编译，
+而不是落到仿真里），普通构建拿到 `linux/amd64`。arm64 机器且没有 buildx 时：
+
+```bash
+docker build --build-arg BUILDPLATFORM=linux/arm64 -f docker/Dockerfile.poder -t sandrpod-poder .
+```
+
 ## 自签部署上 TLS 失败
 
 证书通常只签了一个名字。用 IP 连接、而证书上是主机名时，即使 CA 被信任也会验证失败。

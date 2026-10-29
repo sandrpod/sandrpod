@@ -83,6 +83,24 @@ enough for create and kill and not for `<port>-<id>.<domain>`; the request falls
 through to the control plane. Fixed in 0.7.1 for the hosted build; check your
 reverse proxy passes the `Host` header unchanged.
 
+## `failed to parse platform : "" is an invalid OS component`
+
+Building an image from this repository fails on its first line, before any code
+compiles.
+
+Every Dockerfile used `FROM --platform=$BUILDPLATFORM golang:…`, and
+`BUILDPLATFORM` is a variable only **buildx** injects. A plain `docker build` — the
+default on many hosts, including most self-hosted Linux servers — leaves it empty,
+and `FROM --platform=` with an empty value is a parse error.
+
+Fixed in 0.7.1 by defaulting it: buildx still supplies its own value (so a
+multi-arch build is still compiled natively rather than under emulation), and a
+plain build gets `linux/amd64`. On an arm64 host without buildx:
+
+```bash
+docker build --build-arg BUILDPLATFORM=linux/arm64 -f docker/Dockerfile.poder -t sandrpod-poder .
+```
+
 ## TLS fails on a self-signed deployment
 
 The certificate is usually issued for one name. A worker or peer that connects by
