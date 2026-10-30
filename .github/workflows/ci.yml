@@ -72,3 +72,24 @@ jobs:
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -ldflags="-s -w" -o /dev/null ./cmd/server
+
+  security:
+    # Two scanners, two different questions: govulncheck asks "does a CVE in a
+    # dependency reach code we actually call", gosec asks "does this source do the
+    # things source does wrong" (hardcoded creds, weak randomness, subprocess
+    # injection). gosec runs last and only fails on high-confidence,
+    # medium+severity findings — the noise floor that keeps the job worth having.
+    name: security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: govulncheck (reachable CVEs in dependencies)
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: gosec (source patterns)
+        run: |
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+          gosec -severity medium -confidence medium -quiet ./...
