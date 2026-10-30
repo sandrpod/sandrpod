@@ -336,7 +336,7 @@ func startFleetReapers(ctx context.Context, stores podpkg.Stores, tunnelStore *t
 		reap = *reapTimeout
 	}
 	log.Printf("Fleet reapers: offline after %v, reclaim after %v", offline, reap)
-	go cleanupOfflinePoders(ctx, stores.Poders, offline)
+	go cleanupOfflinePoders(ctx, stores.Poders, tunnelStore, offline)
 	go reapOfflinePoders(ctx, stores.Poders, reap)
 
 	ttl := time.Duration(0)
@@ -2577,7 +2577,7 @@ func reconcileByHeartbeat(poderID string, containerNames []string, ss podpkg.San
 // cleanupOfflinePoders marks Poder nodes as offline when heartbeats stop.
 // Serves as a safety net alongside the tunnel disconnect handler.
 // Exits when ctx is cancelled.
-func cleanupOfflinePoders(ctx context.Context, ps podpkg.PoderRepository, timeout time.Duration) {
+func cleanupOfflinePoders(ctx context.Context, ps podpkg.PoderRepository, ts *tunnel.TunnelStore, timeout time.Duration) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	for {
@@ -2585,13 +2585,37 @@ func cleanupOfflinePoders(ctx context.Context, ps podpkg.PoderRepository, timeou
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			now := time.Now()
-			for _, p := range ps.List() {
-				if p.State == podpkg.PoderStateOnline && now.Sub(p.LastHeartbeat) > timeout {
-					ps.SetOffline(p.ID)
-					log.Printf("Poder %s marked OFFLINE (no heartbeat for %v)", p.ID, now.Sub(p.LastHeartbeat))
+			sweepBody(ps, ts, timeout, time.Now())
+		}
+	}
+}
+
+// sweepBody is one liveness pass, split out so tests can run it without a ticker.
+func sweepBody(ps podpkg.PoderRepository, ts *tunnel.TunnelStore, timeout time.Duration, now time.Time) {
+	for _, p := range ps.List() {
+		// An open tunnel outranks a missed heartbeat. The heartbeat is a
+		// second connection that can fail on its own — a local proxy, a
+		// reset path — while the worker is demonstrably alive: it is serving
+		// sandboxes over that tunnel and its terminal works. Marking such a
+		// worker OFFLINE hides it from placement and from its operator for a
+		// reason that has nothing to do with the worker.
+		tunnelUp := false
+		if ts != nil {
+			if t, ok := ts.Get(p.ID); ok && t != nil && !t.Closed() {
+				tunnelUp = true
+			}
+		}
+		if tunnelUp {
+			if p.State != podpkg.PoderStateOnline {
+				if err := ps.SetOnline(p.ID); err == nil {
+					log.Printf("Poder %s marked ONLINE: its tunnel is up (heartbeats were missing)", p.ID)
 				}
 			}
+			continue
+		}
+		if p.State == podpkg.PoderStateOnline && now.Sub(p.LastHeartbeat) > timeout {
+			ps.SetOffline(p.ID)
+			log.Printf("Poder %s marked OFFLINE (no heartbeat for %v, no tunnel)", p.ID, now.Sub(p.LastHeartbeat))
 		}
 	}
 }

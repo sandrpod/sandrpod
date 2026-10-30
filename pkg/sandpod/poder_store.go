@@ -307,6 +307,25 @@ func (s *PoderStore) SetOffline(id string) {
 	}
 }
 
+// SetOnline marks a Poder node online again.
+//
+// The tunnel is the authority: a worker that is serving its sandboxes is not
+// offline because one HTTPS heartbeat missed. Without this, a worker whose
+// heartbeat channel is flaky (a local proxy, a reset connection) disappears from
+// placement and from the operator's list while it keeps running sandboxes.
+func (s *PoderStore) SetOnline(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	poder, ok := s.poders[id]
+	if !ok {
+		return fmt.Errorf("poder %s not found", id)
+	}
+	poder.State = PoderStateOnline
+	poder.LastHeartbeat = time.Now()
+	return nil
+}
+
 // Delete removes the Poder record from the store.
 func (s *PoderStore) Delete(id string) error {
 	s.mu.Lock()

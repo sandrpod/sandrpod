@@ -181,6 +181,17 @@ func (r *poderRepo) SetOffline(id string) {
 	r.db.Exec(`UPDATE poders SET state='OFFLINE' WHERE id=?`, id)
 }
 
+func (r *poderRepo) SetOnline(id string) error {
+	res, err := r.db.Exec(`UPDATE poders SET state='ONLINE' WHERE id=?`, id)
+	if err != nil {
+		return fmt.Errorf("set poder online: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("poder %s not found", id)
+	}
+	return nil
+}
+
 func (r *poderRepo) Delete(id string) error {
 	res, err := r.db.Exec(`DELETE FROM poders WHERE id=?`, id)
 	if err != nil {

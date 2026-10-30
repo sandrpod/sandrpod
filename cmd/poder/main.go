@@ -797,6 +797,9 @@ func connectTunnel(ctx context.Context, poderID string, mux http.Handler, p *pod
 func heartbeatLoop(ctx context.Context, poderID string, p *poder.DockerPoder) {
 	ticker := time.NewTicker(*heartbeatInterval)
 	defer ticker.Stop()
+	// Consecutive failures, so a persistent one is logged once instead of every
+	// tick. Reset on success.
+	beatFailures := 0
 
 	for {
 		select {
@@ -833,10 +836,27 @@ func heartbeatLoop(ctx context.Context, poderID string, p *poder.DockerPoder) {
 			client := &http.Client{Timeout: 5 * time.Second}
 			resp, err := client.Do(req)
 			if err != nil {
-				log.Printf("Heartbeat failed: %v", err)
+				// One failure is news; the same failure every ten seconds for an
+				// hour is noise that buries everything else in the log — and it is
+				// what a broken local proxy looks like, while the worker keeps
+				// serving sandboxes over its tunnel. Say it once, then rarely, and
+				// say what it probably means.
+				beatFailures++
+				if beatFailures == 1 || beatFailures%30 == 0 {
+					log.Printf("Heartbeat failed (%d in a row): %v", beatFailures, err)
+					if beatFailures == 1 {
+						log.Printf("  The tunnel is separate and may be fine — sandboxes can keep working while this fails. " +
+							"If it persists, check that the control plane's host resolves to its real address here " +
+							"(a local proxy or DNS override is the usual cause).")
+					}
+				}
 				continue
 			}
 			resp.Body.Close()
+			if beatFailures > 0 {
+				log.Printf("Heartbeat recovered after %d failure(s)", beatFailures)
+				beatFailures = 0
+			}
 		}
 	}
 }

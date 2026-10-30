@@ -28,6 +28,10 @@ type PoderRepository interface {
 	SelectBestFor(region, providerType string, require []string, tenant string) (*PoderInfo, error)
 	UpdateUsage(id string, fn func(*PoderUsage)) error
 	SetOffline(id string)
+	// SetOnline brings a record back when the tunnel says it is alive but the
+	// heartbeat channel did not. Returns an error so a stale id is not silently
+	// reported as "brought back".
+	SetOnline(id string) error
 	Delete(id string) error
 }
 

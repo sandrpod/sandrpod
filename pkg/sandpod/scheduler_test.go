@@ -67,6 +67,8 @@ func (m *mockPoderRepo) UpdateUsage(id string, fn func(*PoderUsage)) error {
 
 func (m *mockPoderRepo) SetOffline(id string) {}
 
+func (m *mockPoderRepo) SetOnline(id string) error { return nil }
+
 func (m *mockPoderRepo) Delete(id string) error {
 	return nil
 }
