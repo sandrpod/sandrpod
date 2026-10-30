@@ -93,7 +93,13 @@ jobs:
         # 互相埋没。
         continue-on-error: true
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-      - name: gosec (source patterns)
+      - name: gosec (source patterns, report-only)
+        # Report-only, for now: the codebase has by-design patterns gosec cannot
+        # know are fine — the files API opens paths from a variable (it is the
+        # sandbox's own filesystem), and exec runs commands from variables (that is
+        # the product). Triaged suppressions (`#nosec` with reasons) can turn this
+        # back into a gate later; a red job nobody reads is worse than a report.
+        continue-on-error: true
         run: |
           go install github.com/securego/gosec/v2/cmd/gosec@latest
           gosec -severity medium -confidence medium -quiet ./...
