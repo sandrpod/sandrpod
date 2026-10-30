@@ -401,6 +401,19 @@ docker --version ||
 			return fmt.Errorf("pre-pulling %s failed (%s): %w", tb, execOutput(pull), perr)
 		}
 	}
+	// The egress proxy is pulled too, because the first sandbox to ask for a policy
+	// needs it and nothing else pulls it: without this the create fails with
+	// `No such image: ghcr.io/sandrpod/egress-proxy:latest` on a machine that is
+	// otherwise perfectly healthy. A registry blip here is not fatal — a sandbox
+	// with no policy does not need the proxy — so it only warns.
+	if eg := providerEnv("SANDRPOD_EGRESS_IMAGE", providerType); eg != "" {
+		log.Printf("[Scheduler] Pre-pulling %s on VM %s", eg, vm.ID)
+		pull, perr := p.ExecuteCommand(ctx, vm.ID, "docker pull '"+shellQuoteSingleValue(eg)+"' 2>&1 | tail -3")
+		if perr != nil || pull.ExitCode != 0 {
+			log.Printf("[Scheduler] WARNING: could not pre-pull %s on VM %s (%s); sandboxes with an egress policy will fail to create until it is present",
+				eg, vm.ID, execOutput(pull))
+		}
+	}
 
 	log.Printf("[Scheduler] Starting poder container on VM %s", vm.ID)
 

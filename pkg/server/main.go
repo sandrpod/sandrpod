@@ -1212,6 +1212,13 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					CreatedAt:    time.Now(),
 					UpdatedAt:    time.Now(),
 				}
+				// The payload goes on the row *now*, not later in runSandboxCreate:
+				// a control-plane restart between the two leaves a job that no other
+				// process can deliver and a sandbox stuck at PENDING forever
+				// ("delivery payload was not recorded; cannot resume").
+				if payload, perr := json.Marshal(req); perr == nil {
+					job.Request = payload
+				}
 				if err := jobStore.AddJob(job); err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return

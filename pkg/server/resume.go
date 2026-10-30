@@ -81,11 +81,18 @@ func resumeOnce(d resumeDeps) int {
 		}
 		var req podpkg.CreateSandboxRequest
 		if len(job.Request) == 0 {
-			// A job from before this existed: nothing to resend. Fail it rather
-			// than leaving a PENDING row forever.
+			// Nothing to resend: this job was written by a process that died before
+			// recording the intent. Fail the job *and* the record — a job marked
+			// failed beside a sandbox that still says PENDING is the worst of both,
+			// because the only thing the customer can see is the one that lies.
 			_ = d.jobs.UpdateJob(job.ID, func(j *podpkg.Job) {
 				j.Status = podpkg.JobStatusFailed
 				j.ErrorMessage = "delivery payload was not recorded; cannot resume"
+			})
+			_ = d.sandboxes.Update(job.SandboxName, func(sb *podpkg.SandboxInfo) {
+				if sb.State == podpkg.StatePending {
+					sb.State = podpkg.StateError
+				}
 			})
 			continue
 		}
