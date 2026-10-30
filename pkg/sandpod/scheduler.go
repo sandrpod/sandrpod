@@ -126,6 +126,28 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 			providerType, LocalPoderGracePeriod)
 	}
 
+	// Someone else may already be bringing a worker up for this provider and
+	// region. Wait for it rather than provisioning a second machine: a VM takes
+	// minutes to register, so two creates seconds apart otherwise both see an empty
+	// fleet and both provision — measured on a real deployment.
+	key := provisioningKey(providerType, req.Region)
+	if !provisioning.reserve(key) {
+		log.Printf("[Scheduler] Another create is provisioning a %s worker in %s; waiting for it instead of starting a second VM",
+			providerType, orDefault(req.Region, "the default region"))
+		if p := s.waitForPoderRegistration(providerType, req.Region, provisioningTTL, 5*time.Second, require, req.Workspace); p != nil {
+			log.Printf("[Scheduler] Poder %s came up while waiting, scheduling on it", p.ID)
+			return s.createJobForPoder(req, p)
+		}
+		// The attempt we waited for did not produce a worker. Take the claim
+		// ourselves; if a third create arrives it will wait for us.
+		log.Printf("[Scheduler] No worker appeared within %s; provisioning one for %s in %s",
+			provisioningTTL, providerType, orDefault(req.Region, "the default region"))
+		provisioning.reserve(key)
+	}
+	// The reservation is ours now: release it however this attempt ends, so a
+	// failed provision does not make the next create wait for nothing.
+	defer provisioning.release(key)
+
 	log.Printf("[Scheduler] No available poder for %s, creating new VM", providerType)
 
 	// 3. Create VM via provider
@@ -654,4 +676,12 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+// orDefault keeps log lines readable when the region is empty.
+func orDefault(v, fallback string) string {
+	if v == "" {
+		return fallback
+	}
+	return v
 }
