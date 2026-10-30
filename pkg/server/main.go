@@ -1971,7 +1971,7 @@ func poderWorkspaceOrProvisioner(r *http.Request) string {
 	if vmID == "" {
 		return ""
 	}
-	if tenant, ok := podpkg.TakeVMTenant(vmID); ok {
+	if tenant, ok := podpkg.VMTenant(vmID); ok {
 		log.Printf("Poder %s on VM %s inherits workspace %s from the create that provisioned it",
 			r.Header.Get("X-Poder-ID"), vmID, tenant)
 		return tenant

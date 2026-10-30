@@ -510,17 +510,24 @@ func RecordVMTenant(vmID, tenant string) {
 	pendingVMTenant.Store(vmID, vmTenantEntry{tenant: tenant, at: time.Now()})
 }
 
-// TakeVMTenant returns and forgets the workspace recorded for vmID.
-func TakeVMTenant(vmID string) (string, bool) {
+// VMTenant returns the workspace recorded for vmID, keeping the record.
+//
+// It used to be consumed on first read, which broke the case it exists for: the
+// worker on a provisioned VM registers, drops its tunnel (a control-plane restart, a
+// network blip) and registers again — and the second registration inherited nothing,
+// so the machine vanished from the workspace that was paying for it while its
+// sandboxes kept running.
+func VMTenant(vmID string) (string, bool) {
 	v, ok := pendingVMTenant.Load(vmID)
 	if !ok {
 		return "", false
 	}
-	pendingVMTenant.Delete(vmID) // one worker registers once
 	e, ok := v.(vmTenantEntry)
 	if !ok || time.Since(e.at) > vmTenantTTL {
 		return "", false
 	}
+	// Refresh on use: a worker that stays connected keeps its claim.
+	pendingVMTenant.Store(vmID, vmTenantEntry{tenant: e.tenant, at: time.Now()})
 	return e.tenant, true
 }
 

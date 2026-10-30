@@ -34,7 +34,13 @@ func (r *poderRepo) Register(req *sandpod.RegisterPoderRequest) (*sandpod.PoderI
 		  max_containers=excluded.max_containers, arch=excluded.arch,
 		  os=excluded.os, os_version=excluded.os_version,
 		  kernel_version=excluded.kernel_version,
-		  capabilities=excluded.capabilities, workspace=excluded.workspace,
+		  capabilities=excluded.capabilities,
+		  -- A reconnect may arrive without a tenant (a worker on a provisioned VM
+		  -- dials in with the platform token; the tenant comes from a record that is
+		  -- consumed once). Overwriting a scoped record with an empty value makes a
+		  -- worker disappear from the workspace that owns it, so an empty value
+		  -- never clears one.
+		  workspace=CASE WHEN excluded.workspace='' THEN poders.workspace ELSE excluded.workspace END,
 		  last_heartbeat=excluded.last_heartbeat`,
 		req.ID, req.Name, req.URL, req.Region, req.ProviderType, req.VMID,
 		req.Resources.CPUCores, req.Resources.MemoryBytes, req.Resources.MaxContainers,
