@@ -10,6 +10,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -17,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -149,3 +151,54 @@ func enrol(apiURL, joinToken, poderID string) (workerKey, error) {
 	}
 	return workerKey{Token: out.Token, ExpiresAt: out.ExpiresAt}, nil
 }
+
+// currentToken is the credential in use. It starts as whatever was resolved at
+// startup (a stored worker key, a fresh invitation, a static token) and is replaced
+// if a background enrolment later succeeds.
+var currentToken atomic.Value
+
+func token() string {
+	if v, ok := currentToken.Load().(string); ok {
+		return v
+	}
+	return ""
+}
+
+// retryEnrolment keeps trying to trade the invitation for a worker key.
+//
+// Enrolment fails for reasons that come and go: a proxy that resets half the new
+// connections, a control plane restarting, a DNS answer arriving late. Without a
+// retry the worker runs happily on an invitation that expires within the hour, and
+// then cannot reconnect at all — the node disappears an hour after somebody set it
+// up, with the reason buried in a log line from startup.
+func retryEnrolment(ctx context.Context, apiURL, poderID string) {
+	cur := token()
+	if !strings.HasPrefix(cur, "jn_") {
+		return // already a key, or a static token: nothing to trade
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(enrolRetryInterval):
+		}
+		if !strings.HasPrefix(token(), "jn_") {
+			return // something else already replaced it
+		}
+		key, err := enrol(apiURL, token(), poderID)
+		if err != nil {
+			log.Printf("Enrolment retry failed: %v", err)
+			continue
+		}
+		currentToken.Store(key.Token)
+		if err := writeWorkerKey(filepath.Join(env("PODER_DATA_DIR", "/var/lib/sandrpod"), workerKeyFile), key); err != nil {
+			log.Printf("Enrolled, but could not persist the key (%v); it will not survive a restart", err)
+		}
+		log.Printf("Enrolled as worker %s on retry — credential stored, expires %s", poderID, key.ExpiresAt)
+		return
+	}
+}
+
+// enrolRetryInterval is short enough to catch a flaky window and long enough not to
+// hammer a control plane that is down.
+const enrolRetryInterval = 2 * time.Minute

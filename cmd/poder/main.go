@@ -134,11 +134,19 @@ func main() {
 		log.Fatalf("Failed to resolve Poder ID: %v", err)
 	}
 
-	// The invitation becomes a key, once. Everything after this uses *apiToken:
+	// The invitation becomes a key, once. Everything after this uses token():
 	// the tunnel handshake, the heartbeat, the job poll.
 	if resolved := resolveWorkerToken(*apiURL, *apiToken, poderID); resolved != *apiToken {
 		*apiToken = resolved
 	}
+	currentToken.Store(*apiToken)
+
+	// Enrolment is retried in the background until it succeeds. It fails for
+	// reasons that come and go — a connection reset while the control plane is
+	// reachable a second later — and without a retry the worker keeps running on an
+	// invitation that expires within the hour, then stops being able to reconnect at
+	// all. That is a node that dies quietly an hour after it was set up.
+	go retryEnrolment(ctx, *apiURL, poderID)
 
 	mux := http.NewServeMux()
 
@@ -702,8 +710,8 @@ func connectTunnel(ctx context.Context, poderID string, mux http.Handler, p *pod
 		}
 
 		headers := http.Header{}
-		if *apiToken != "" {
-			headers.Set("Authorization", "Bearer "+*apiToken)
+		if tok := token(); tok != "" {
+			headers.Set("Authorization", "Bearer "+tok)
 		}
 		headers.Set("X-Poder-ID", poderID)
 		headers.Set("X-Poder-Name", p.Name())
@@ -830,8 +838,8 @@ func heartbeatLoop(ctx context.Context, poderID string, p *poder.DockerPoder) {
 				continue
 			}
 			req.Header.Set("Content-Type", "application/json")
-			if *apiToken != "" {
-				req.Header.Set("Authorization", "Bearer "+*apiToken)
+			if tok := token(); tok != "" {
+				req.Header.Set("Authorization", "Bearer "+tok)
 			}
 			client := &http.Client{Timeout: 5 * time.Second}
 			resp, err := client.Do(req)
