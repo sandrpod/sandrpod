@@ -511,6 +511,20 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			return
 		}
 
+		// A worker credential carries its tenant; a client-declared workspace must
+		// agree with it. The header exists for self-hosted operators whose workers
+		// scope themselves explicitly, and for auth-disabled installs. Without the
+		// agreement check, any holder of ANY workspace's join token could claim
+		// another workspace on the handshake and take placement there.
+		ident := IdentityFrom(r)
+		claimed := strings.TrimSpace(r.Header.Get("X-Poder-Workspace"))
+		if ident.IsWorker() && ident.Tenant != "" && claimed != "" && claimed != ident.Tenant {
+			log.Printf("Poder %s rejected: workspace header %q does not match its credential (%q)",
+				poderID, claimed, ident.Tenant)
+			http.Error(w, "Forbidden: workspace does not match credential", http.StatusForbidden)
+			return
+		}
+
 		ws, err := wsUpgrader.Upgrade(w, r, nil)
 		if err != nil {
 			log.Printf("Poder %s WebSocket upgrade failed: %v", poderID, err)
@@ -1980,10 +1994,16 @@ func poderWorkspaceOrProvisioner(r *http.Request) string {
 }
 
 func poderWorkspace(r *http.Request) string {
+	// The credential's tenant wins. The header remains only as the self-hosted
+	// escape hatch for operators running with auth disabled (identity empty) — a
+	// hosted worker's own credential always carries the right tenant.
+	if t := IdentityFrom(r).Tenant; t != "" {
+		return t
+	}
 	if h := strings.TrimSpace(r.Header.Get("X-Poder-Workspace")); h != "" {
 		return h
 	}
-	return IdentityFrom(r).Tenant
+	return ""
 }
 
 // splitCapabilities parses the comma-separated capability header a worker sends
