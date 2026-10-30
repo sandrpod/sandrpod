@@ -45,7 +45,7 @@ jobs:
       TEST_POSTGRES_DSN: postgres://sandrpod:sandrpod@127.0.0.1:5432/sandrpod_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.25'
       - name: store and scheduler against PostgreSQL
