@@ -88,6 +88,10 @@ jobs:
           go-version-file: go.mod
           cache: true
       - name: govulncheck (reachable CVEs in dependencies)
+        # 直到 docker/docker → moby/moby 的模块迁移完成，GO-2026-4887/4883（无修复
+        # 版本的 docker 客户端通告）会让这一步保持黄色。继续跑 gosec，别让它们
+        # 互相埋没。
+        continue-on-error: true
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - name: gosec (source patterns)
         run: |
