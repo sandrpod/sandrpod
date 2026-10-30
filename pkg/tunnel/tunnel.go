@@ -136,7 +136,12 @@ func NewPoderTunnelFromConn(id string, conn io.ReadWriteCloser) (*PoderTunnel, e
 			},
 			MaxIdleConnsPerHost: 32,
 		},
-		Timeout: 60 * time.Second,
+		// No blanket timeout. This client routes every tunnel request — including a
+		// container create on a cold VM, which legitimately takes minutes to unpack
+		// an image and build its egress network. A 60-second cap here killed those
+		// regardless of the caller's own budget, and the retry masked it: the first
+		// create always failed, the second always worked. Each caller sets a context
+		// with the deadline that suits it.
 	}
 
 	wsDialer := &websocket.Dialer{
