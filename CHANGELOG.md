@@ -940,3 +940,17 @@ host router — so none of these could show up there.
   files, sessions); WebSocket + yamux reverse tunnel (zero inbound ports
   on workers); `sandrpod-agent` direct-machine mode; AWS and Aliyun
   providers; Python SDK (`langchain-sandrpod`) and `sandrpod-cli`.
+
+### Security
+
+- Dependencies: `golang.org/x/net` v0.60.0, `google.golang.org/grpc` v1.85.0, and the
+  Go toolchain 1.26.10 — clearing 40+ reachable CVEs in net/http, crypto/tls, x/net
+  and grpc (one of them an HTTP/2 OOM in grpc, reachable through the Aliyun SDK).
+- The two remaining docker-client advisories (GO-2026-4887/4883) are accepted with
+  rationale: they are daemon-side AuthZ-plugin paths, and this code only speaks the
+  client API to the local daemon. The real fix is the `docker/docker` → `moby/moby`
+  module migration, tracked as tech debt.
+- CI gains a security job: `govulncheck` (reachable CVEs) and `gosec`
+  (medium+severity, high confidence) on every push to main.
+- Control-plane session/record ids widened from 96 to 128 bits of entropy: session
+  ids are looked up by value, so their entropy is the session's.
