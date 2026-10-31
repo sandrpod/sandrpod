@@ -160,27 +160,18 @@ parks in `waiting_auth` with an authorization URL), persists the token under
 agent flags `-mcp-oauth` / `-mcp-oauth-callback` / `-mcp-oauth-token-dir`.
 Full details in [MCP_AUTH.md](MCP_AUTH.md).
 
-**Inside containers** (toolbox sandboxes) the loopback OAuth callback is not
-reachable, so the browser flow can't complete there. Use the community
-[`mcp-remote`](https://github.com/geelen/mcp-remote) stdio bridge instead,
-which Notion's own docs recommend:
+**Inside containers** (toolbox sandboxes): the bridge builds its redirect_uri from
+the sandbox name and the E2B domain — `https://7099-{sandbox}.{domain}/callback` —
+so the OAuth redirect reaches the sandbox's bridge through the E2B gateway's port
+proxy. The token exchange happens inside the sandbox, directly with the provider;
+the control plane sees a one-time code and nothing else. Requires
+`SANDRPOD_E2B_DOMAIN` and `SANDRPOD_SANDBOX_NAME` in the container env (the pode
+sets both).
 
-```jsonc
-{
-  "mcpServers": {
-    "notion": {
-      "command": "npx",
-      "args": ["-y", "mcp-remote", "https://mcp.notion.com/mcp"],
-      "sandrpod": {
-        // OAuth means: spawn → mcp-remote opens a browser → you click
-        // "authorize" → token cached. That round-trip easily exceeds the
-        // 30s default handshake window, so widen it.
-        "startup_timeout_sec": 180
-      }
-    }
-  }
-}
-```
+**mcp-remote** (a stdio bridge that handles OAuth itself) remains useful for
+providers whose OAuth deviates from the standard flow, but is no longer needed for
+Notion, Linear, GitHub, Sentry or anything else speaking standard OAuth 2.1 + PKCE
+with dynamic client registration.
 
 What happens on first start:
 
