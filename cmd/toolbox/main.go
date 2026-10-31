@@ -34,6 +34,11 @@ var (
 	mcpHotReload     = flag.Bool("mcp-hot-reload", envBool("SANDRPOD_MCP_HOT_RELOAD", true), "Watch mcp.json and diff-reload on change")
 	mcpToken         = flag.String("mcp-token", os.Getenv("SANDRPOD_MCP_TOKEN"), "Shared secret required on /mcp requests (empty = no MCP auth)")
 	mcpGuardManifest = flag.Bool("mcp-guard-manifest", envBool("SANDRPOD_MCP_GUARD_MANIFEST", false), "Also require -mcp-token on /mcp/manifest (default false: manifest is read-only metadata, reachable with platform auth alone)")
+	// OAuth 公开回调地址的原料：沙箱名 + E2B 域名。两者都有时 bridge 的
+	// redirect_uri 用 "https://7099-{name}.{domain}/callback"（浏览器可达，
+	// 经 E2B gateway 的 PortProxy 转发回沙箱），否则退回回环地址（agent 模式）。
+	mcpSandboxName = flag.String("mcp-sandbox-name", os.Getenv("SANDRPOD_SANDBOX_NAME"), "This sandbox's name; builds the public OAuth callback URL")
+	mcpE2BDomain   = flag.String("mcp-e2b-domain", os.Getenv("SANDRPOD_E2B_DOMAIN"), "The E2B wildcard domain; combined with the sandbox name for the public OAuth callback")
 )
 
 func envBool(key string, def bool) bool {
@@ -115,12 +120,18 @@ func installMCPBridge(ctx context.Context, server *toolbox.Server) *mcpbridge.Ch
 	// host — inside a container the flow can't complete, so OAuth entries are
 	// an agent-first feature (docs/MCP_AUTH.md); the entry parks in
 	// waiting_auth with the URL visible on the admin surface.
+	var pubCallback string
+	if *mcpSandboxName != "" && *mcpE2BDomain != "" {
+		pubCallback = fmt.Sprintf("https://7099-%s.%s", *mcpSandboxName, *mcpE2BDomain)
+		log.Printf("MCP bridge: public OAuth callback = %s/callback", pubCallback)
+	}
 	mgr := mcpbridge.NewManager(mcpbridge.ManagerOptions{
 		ConfigPath: path,
 		HotReload:  *mcpHotReload,
 		Logger:     log.Default(),
 		OAuth: &mcpbridge.OAuthOptions{
-			TokenDir: filepath.Join(filepath.Dir(path), "oauth"),
+			TokenDir:           filepath.Join(filepath.Dir(path), "oauth"),
+			PublicCallbackBase: pubCallback,
 		},
 	})
 

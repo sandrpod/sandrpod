@@ -45,6 +45,13 @@ type OAuthOptions struct {
 	// ClientName is the client_name presented during RFC7591 dynamic client
 	// registration. Defaults to "sandrpod-mcp-bridge".
 	ClientName string
+	// PublicCallbackBase, when set, overrides the loopback redirect_uri with a
+	// publicly reachable one: "https://7099-{sandbox}.{domain}" built by the
+	// caller. The browser reaches it, the control plane forwards to the sandbox
+	// through the E2B gateway's PortProxy, and the callback lands on the same
+	// loopback listener — the bridge never knows the difference. Tokens stay in
+	// the sandbox; the control plane sees only a one-time code.
+	PublicCallbackBase string
 	// OnAuthorizationRequired fires when a child parks in waiting_auth.
 	// The agent wires this to open the system browser; leave nil to only
 	// surface the URL via the admin manifest.
@@ -239,10 +246,17 @@ func (b *oauthBroker) close() {
 }
 
 // redirectURI returns the callback URL the browser will be sent back to.
-// Uses the bound address so an ephemeral ":0" port works too.
+// PublicCallbackBase wins when set (container sandboxes: the preview URL is the
+// only address a browser can reach); otherwise the bound loopback address is
+// used (agent hosts: the employee's own machine). The loopback listener still
+// receives the request either way — the control plane's PortProxy forwards into
+// the sandbox's toolbox, which proxies to the same port.
 func (b *oauthBroker) redirectURI() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	if pub := b.opts.PublicCallbackBase; pub != "" {
+		return strings.TrimSuffix(pub, "/") + callbackPath
+	}
 	addr := b.opts.CallbackAddr
 	if b.ln != nil {
 		addr = b.ln.Addr().String()

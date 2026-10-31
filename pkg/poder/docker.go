@@ -158,6 +158,12 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 		"TOOLBOX_API_URL=" + req.APIURL,
 		"PODER_VERSION=" + req.PoderVersion,
 		"LOG_LEVEL=" + req.LogLevel,
+		// The sandbox name drives the OAuth redirect_uri: the bridge constructs
+		// "https://7099-{name}.{domain}/callback" from it, so a browser's OAuth
+		// redirect reaches this sandbox's bridge through the E2B gateway's port
+		// proxy. Without the name the bridge would build a loopback URL that no
+		// browser can reach.
+		"SANDRPOD_SANDBOX_NAME=" + req.Name,
 	}
 	if req.Network != nil {
 		enforced, eerr := p.setupEgress(ctx, podID, req.Network)

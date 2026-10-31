@@ -26,7 +26,7 @@ require (
 	github.com/hashicorp/yamux v0.1.2
 	github.com/hetznercloud/hcloud-go/v2 v2.47.0
 	github.com/jackc/pgx/v5 v5.10.0
-	github.com/mark3labs/mcp-go v0.58.0
+	github.com/mark3labs/mcp-go v1.5.0
 	github.com/oracle/oci-go-sdk/v65 v65.123.2
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common v1.3.166
 	github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/cvm v1.3.162
