@@ -1494,6 +1494,18 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			// subPath is "mcp", "mcp/manifest", "mcp/sse", … A direct-agent embeds
 			// the bridge at /mcp; a poder serves it behind /toolbox/<name>/mcp.
 			subPath := strings.TrimPrefix(path, name+"/")
+			// ?admin=1 reaches the bridge's admin manifest, which carries the
+			// pending OAuth authorization URL the public manifest redacts. The
+			// URL is a credential handoff (whoever opens it consents), so only
+			// the sandbox's owner may fetch it — not another tenant, not a
+			// worker credential that happens to relay traffic for it.
+			if r.URL.Query().Get("admin") == "1" {
+				if !canAccessSandbox(IdentityFrom(r), sb) {
+					http.Error(w, "Forbidden", http.StatusForbidden)
+					return
+				}
+				subPath = strings.Replace(subPath, "mcp/manifest", "admin/manifest", 1)
+			}
 			targetURL := "http://poder/toolbox/" + name + "/" + subPath
 			if strings.HasPrefix(sb.ProxyURL, "direct://") {
 				targetURL = "http://agent/" + subPath

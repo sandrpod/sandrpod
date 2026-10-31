@@ -1168,12 +1168,28 @@ def mcp_ls(ctx, name, config_path):
             click.echo(f"(no MCP servers configured in {path})")
             return
         click.echo(f"# {path}")
+
+        # 桥接的运行时状态（含 waiting_auth 的授权 URL）。bridge 没跑或沙箱不可达时
+        # 降级为只显示配置——配置文件还是有效的，只是看不到运行时。
+        runtime = {}
+        try:
+            manifest = client.mcp_manifest(name)
+            runtime = {s.get("name", ""): s for s in manifest.get("servers", [])}
+        except Exception:
+            pass
+
         for sname, sc in servers.items():
+            rt = runtime.get(sname, {})
+            state = rt.get("state", "")
+            suffix = f"  [{state}]" if state else ""
             if sc.get("url"):
-                click.echo(f"  {sname}  →  {sc['url']}  ({sc.get('type', 'streamable-http')})")
+                click.echo(f"  {sname}  →  {sc['url']}  ({sc.get('type', 'streamable-http')}){suffix}")
             else:
                 argv = " ".join([sc.get("command", "")] + sc.get("args", [])).strip()
-                click.echo(f"  {sname}  →  {argv}")
+                click.echo(f"  {sname}  →  {argv}{suffix}")
+            # waiting_auth 的服务器把授权 URL 打印出来——用户点开就完成授权。
+            if state == "waiting_auth" and rt.get("auth_url"):
+                click.echo(f"    ↳ 授权: {rt['auth_url']}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)

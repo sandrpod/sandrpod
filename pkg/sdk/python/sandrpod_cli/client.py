@@ -362,7 +362,9 @@ class CLIClient:
         headers = {}
         if self.mcp_token:
             headers["Authorization"] = f"Bearer {self.mcp_token}"
-        resp = self._request("GET", f"/api/v1/sandboxes/{name}/mcp/manifest", headers=headers)
+        # admin=1: the owner sees the pending OAuth authorization URL (the public
+        # manifest redacts it). The CLI holds the owner's token by definition.
+        resp = self._request("GET", f"/api/v1/sandboxes/{name}/mcp/manifest?admin=1", headers=headers)
         return resp.json()
 
     def mcp_url(self, name: str) -> str:
