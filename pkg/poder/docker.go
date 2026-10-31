@@ -165,6 +165,11 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 		// browser can reach.
 		"SANDRPOD_SANDBOX_NAME=" + req.Name,
 	}
+	// The wildcard domain comes from the worker's own env (operators set it once
+	// on the worker container; the pode forwards it to every sandbox it creates).
+	if dom := os.Getenv("SANDRPOD_E2B_DOMAIN"); dom != "" {
+		env = append(env, "SANDRPOD_E2B_DOMAIN="+dom)
+	}
 	if req.Network != nil {
 		enforced, eerr := p.setupEgress(ctx, podID, req.Network)
 		if eerr != nil {

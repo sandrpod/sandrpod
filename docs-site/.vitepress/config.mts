@@ -14,6 +14,7 @@ const zhSidebar = [
     text: "接入任何 SDK",
     items: [
       { text: "E2B 直接替换", link: "/zh/e2b" },
+      { text: "MCP 桥接", link: "/zh/mcp" },
       { text: "Python SDK", link: "/zh/python" },
       { text: "LangChain 与 deepagents", link: "/zh/langchain" },
       { text: "命令行 CLI", link: "/zh/cli" },
@@ -172,6 +173,7 @@ export default defineConfig({
         text: "Speak any SDK",
         items: [
           { text: "E2B (drop-in)", link: "/e2b" },
+          { text: "MCP bridge", link: "/mcp" },
           { text: "Python SDK", link: "/python" },
           { text: "LangChain & deepagents", link: "/langchain" },
           { text: "CLI", link: "/cli" },
