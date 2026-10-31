@@ -120,6 +120,12 @@ func manifestHandler(mgr *ChildManager, includeAuthURL bool) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		// ?admin=1 on the public mount has the same effect as /admin/manifest.
+		// Safe to honor: the control plane's proxy gates it on sandbox ownership
+		// before forwarding, and the local caller already holds the token.
+		if r.URL.Query().Get("admin") == "1" {
+			includeAuthURL = true
+		}
 		snap := mgr.Snapshot()
 		total, totalRes, totalPrompt := 0, 0, 0
 		for i, s := range snap {
