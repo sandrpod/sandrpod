@@ -603,19 +603,44 @@ func (p *AliyunProvider) GetDefaultImage(ctx context.Context, region string) (st
 		return "", fmt.Errorf("no linux x86_64 system image found in region %s", region)
 	}
 
+	// GPU-driver and CUDA variants of an image family only match GPU instance
+	// types — on a plain instance type RunInstances answers NotMatch. The newest
+	// Ubuntu in cn-hongkong is exactly such a variant, so usability is filtered
+	// here rather than at the API level.
+	usable := func(img ecs.Image) bool {
+		n := strings.ToLower(img.OSName + " " + img.ImageId)
+		return !strings.Contains(n, "gpu") && !strings.Contains(n, "cuda")
+	}
+
 	// DescribeImages does not guarantee ordering, so sort by CreationTime
 	// explicitly rather than trusting Images[0]. Ubuntu wins over other distros
 	// (the bootstrap is proven on it); newest otherwise.
-	newest := resp.Images.Image[0]
-	for _, candidate := range resp.Images.Image[1:] {
-		if candidate.CreationTime <= newest.CreationTime {
+	var newest *ecs.Image
+	ubuntuNewest := ""
+	for i := range resp.Images.Image {
+		img := resp.Images.Image[i]
+		if !usable(img) {
 			continue
 		}
-		better := strings.Contains(newest.OSName, "Ubuntu") == false &&
-			strings.Contains(candidate.OSName, "Ubuntu")
-		if better || strings.Contains(candidate.OSName, "Ubuntu") == strings.Contains(newest.OSName, "Ubuntu") {
-			newest = candidate
+		better := false
+		if newest == nil {
+			better = true
+		} else if strings.Contains(img.OSName, "Ubuntu") {
+			better = ubuntuNewest == "" || img.CreationTime > ubuntuNewest
+		} else if ubuntuNewest == "" {
+			better = img.CreationTime > newest.CreationTime
 		}
+		if better {
+			if strings.Contains(img.OSName, "Ubuntu") {
+				ubuntuNewest = img.CreationTime
+			} else if newest == nil {
+				newest = &resp.Images.Image[i]
+			}
+			newest = &resp.Images.Image[i]
+		}
+	}
+	if newest == nil {
+		return "", fmt.Errorf("no usable linux x86_64 system image found in region %s (gpu/cuda variants excluded)", region)
 	}
 
 	p.mu.Lock()
