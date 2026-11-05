@@ -76,6 +76,27 @@ var (
 
 // ptr returns a pointer to v, so the settings above keep the pointer shape the
 // rest of the package reads while being initialised to a usable default.
+// experienceSandboxLimitPerUser caps how many live sandboxes one user may hold on
+// a configured platform experience node. The node ids come from
+// SANDRPOD_EXPERIENCE_PODER_IDS (comma-separated); empty disables the limit
+// entirely — self-hosted installs have no experience node and no limit.
+const experienceSandboxLimitPerUser = 1
+
+// experiencePoderIDs lists the platform experience workers (from
+// SANDRPOD_EXPERIENCE_PODER_IDS). Empty = no experience node configured; the
+// per-user gate is a no-op and unscoped workers are plain shared workers.
+// experiencePoderIDs re-reads the env on every call so tests (and a future
+// dynamic config) can set it without process restarts.
+func experiencePoderIDs() map[string]bool {
+	ids := map[string]bool{}
+	for _, id := range strings.Split(strings.TrimSpace(os.Getenv("SANDRPOD_EXPERIENCE_PODER_IDS")), ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			ids[id] = true
+		}
+	}
+	return ids
+}
+
 func ptr[T any](v T) *T { return &v }
 
 // registerFlags binds the settings to fs. Called once from Main, so the
@@ -1190,6 +1211,43 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			if err := validateCreateRegion(&req); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
+			}
+
+			// Hosted deployments run the control plane only: a tenant must not
+			// provision cloud VMs on the operator's provider accounts. Provisioning
+			// stays an operator action (admin credential, or an auth-disabled
+			// self-hosted install). Tenants bring nodes (添加节点) or use the
+			// platform experience node. Admission is not enough for this one — the
+			// default admission is quota-oriented and deployments may not install
+			// one at all.
+			ident := IdentityFrom(r)
+			if isCloudProviderName(req.ProviderType) && !ident.IsAdmin() && !cfg.authDisabled() {
+				http.Error(w, "cloud VM provisioning is operator-only in this deployment; "+
+					"add your own node (节点 → 添加节点) or use the platform experience node",
+					http.StatusForbidden)
+				return
+			}
+
+			// Node pinning: a tenant may pin only to its own workspace's workers,
+			// or to a configured platform experience node (one sandbox per user on
+			// those — the scheduler enforces the workspace match; the count gate
+			// lives here where the identity is known).
+			if pin := req.PoderID; pin != "" && !ident.IsAdmin() && experiencePoderIDs()[pin] {
+				if p, ok := poderStore.Get(pin); ok && p.Workspace == "" {
+					existing := 0
+					for _, s := range sandboxStore.ListByPoderID(pin) {
+						if s.Owner == ident.Name && s.State != podpkg.StateTerminated && s.State != podpkg.StateError {
+							existing++
+						}
+					}
+					if existing >= experienceSandboxLimitPerUser {
+						http.Error(w, fmt.Sprintf(
+							"the platform experience node allows one running sandbox per user; "+
+								"you already have %d (stop or delete it first, or register your own node)",
+							existing), http.StatusForbidden)
+						return
+					}
+				}
 			}
 
 			if _, exists := sandboxStore.Get(req.Name); exists {

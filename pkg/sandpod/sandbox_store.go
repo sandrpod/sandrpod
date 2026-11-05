@@ -80,6 +80,11 @@ type CreateSandboxRequest struct {
 	// progress. Cloud provisioning takes minutes — long synchronous responses
 	// are routinely killed by intermediate proxies.
 	Async bool `json:"async,omitempty"`
+	// PoderID pins this sandbox to one worker: "the node I registered", or a
+	// platform experience node. Placement is skipped; the scheduler validates
+	// the worker exists, is online, and accepts this tenant (its own, or an
+	// unscoped platform node). Empty = automatic placement.
+	PoderID string `json:"poder_id,omitempty"`
 	// Network is the egress allow-list for this sandbox. Validated at create
 	// time (a policy that does not parse is a 400, not a sandbox that starts
 	// and then denies everything), stored with the record, and handed to the

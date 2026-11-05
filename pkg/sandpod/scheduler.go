@@ -78,6 +78,29 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 	//    worker that advertises the capability; scheduling it onto an older one
 	//    would produce a sandbox reported as walled and running unwalled.
 	require := capabilityRequirement(req)
+
+	// A pinned worker skips placement entirely: "put it on the node I chose".
+	// The pin must name a worker this tenant may use — its own (workspace
+	// match) or an unscoped platform node. Everything else is a refusal, not a
+	// silent re-route onto a different node.
+	if req.PoderID != "" {
+		poder, ok := s.poderStore.Get(req.PoderID)
+		if !ok {
+			return nil, fmt.Errorf("worker %q does not exist — check the node id or pick another node", req.PoderID)
+		}
+		if poder.Workspace != "" && poder.Workspace != req.Workspace {
+			return nil, fmt.Errorf("worker %q belongs to another workspace", req.PoderID)
+		}
+		for _, cap := range capabilityRequirement(req) {
+			if !poder.HasCapability(cap) {
+				return nil, fmt.Errorf("%w: worker %q does not support %q required by this sandbox's policy",
+					ErrPoderCapability, poder.ID, cap)
+			}
+		}
+		log.Printf("[Scheduler] Pinned placement on poder %s (requested by tenant %q)", poder.ID, req.Workspace)
+		return s.createJobForPoder(req, poder)
+	}
+
 	poder, err := s.poderStore.SelectBestFor(req.Region, providerType, require, req.Workspace)
 	if err == nil && poder != nil {
 		log.Printf("[Scheduler] Found available poder %s for provider %s", poder.ID, providerType)
