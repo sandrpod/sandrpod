@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -187,7 +188,8 @@ func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMReq
 
 	resp, err := p.ecsClient.RunInstances(runReq)
 	if err != nil {
-		return nil, fmt.Errorf("failed to run instance: %w", err)
+		return nil, fmt.Errorf("failed to run instance (image=%s type=%s vswitch=%s): %w",
+			imageID, runReq.InstanceType, runReq.VSwitchId, err)
 	}
 	if len(resp.InstanceIdSets.InstanceIdSet) == 0 {
 		return nil, fmt.Errorf("RunInstances returned no instance id")
@@ -580,9 +582,17 @@ func (p *AliyunProvider) GetDefaultImage(ctx context.Context, region string) (st
 		return img, nil
 	}
 
+	// The bootstrap script installs Docker via apt and waits on cloud-init: it
+	// assumes an Ubuntu, x86_64 system image. "Newest system image" without an
+	// OS/architecture filter once returned an image whose boot mode did not
+	// match ecs.e-c1m2.large, and RunInstances answered InvalidParameter.NotMatch
+	// — a create that should never have been attempted.
 	req := ecs.CreateDescribeImagesRequest()
 	req.RegionId = region
 	req.ImageOwnerAlias = "system"
+	req.OSType = "linux"
+	req.Architecture = "x86_64"
+	req.Status = "Available"
 
 	resp, err := p.ecsClient.DescribeImages(req)
 	if err != nil {
@@ -590,14 +600,20 @@ func (p *AliyunProvider) GetDefaultImage(ctx context.Context, region string) (st
 	}
 
 	if len(resp.Images.Image) == 0 {
-		return "", fmt.Errorf("no system image found in region %s", region)
+		return "", fmt.Errorf("no linux x86_64 system image found in region %s", region)
 	}
 
-	// DescribeImages does not guarantee ordering, so pick the newest by
-	// CreationTime explicitly rather than trusting Images[0].
+	// DescribeImages does not guarantee ordering, so sort by CreationTime
+	// explicitly rather than trusting Images[0]. Ubuntu wins over other distros
+	// (the bootstrap is proven on it); newest otherwise.
 	newest := resp.Images.Image[0]
 	for _, candidate := range resp.Images.Image[1:] {
-		if candidate.CreationTime > newest.CreationTime {
+		if candidate.CreationTime <= newest.CreationTime {
+			continue
+		}
+		better := strings.Contains(newest.OSName, "Ubuntu") == false &&
+			strings.Contains(candidate.OSName, "Ubuntu")
+		if better || strings.Contains(candidate.OSName, "Ubuntu") == strings.Contains(newest.OSName, "Ubuntu") {
 			newest = candidate
 		}
 	}
