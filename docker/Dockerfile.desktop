@@ -15,6 +15,8 @@ RUN CGO_ENABLED=0 go build -o /toolbox ./cmd/toolbox
 FROM ubuntu:22.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/root
+# TARGETARCH 是 BuildKit 预置变量（构建机架构）；必须在使用它的 stage 内重新声明
+ARG TARGETARCH=amd64
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -29,8 +31,15 @@ RUN apt-get update \
 RUN mkdir -p /root/.vnc /etc/kasmvnc /workspace \
  && printf 'network:\n  protocol: http\n  websocket_port: 6901\n  ssl:\n    require_ssl: false\n' > /etc/kasmvnc/kasmvnc.yaml
 
+# jammy 的 arm64 deb 把 Depends 硬编码成了 :amd64（上游打包瑕疵）——dpkg 强装，
+# perl 依赖手动按本机架构补齐（运行时读的是本机 arch 的模块路径）。
 COPY docker/kasmvncserver_jammy_${TARGETARCH:-amd64}.deb /tmp/kasmvnc.deb
-RUN apt-get install -y /tmp/kasmvnc.deb && rm -f /tmp/kasmvnc.deb
+RUN dpkg --force-depends -i /tmp/kasmvnc.deb || true; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      libscalar-list-utils-perl liblist-moreutils-perl libtry-tiny-perl \
+      libdatetime-perl libdatetime-timezone-perl || true; \
+    rm -f /tmp/kasmvnc.deb
 
 # 密码文件 + 桌面选择标记 + xstartup（烘焙，避免首启交互菜单）
 COPY docker/desktop-kasmpasswd /root/.kasmpasswd
