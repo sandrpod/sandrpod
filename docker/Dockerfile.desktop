@@ -32,7 +32,7 @@ RUN apt-get update \
       libscalar-list-utils-perl liblist-moreutils-perl libtry-tiny-perl \
       libdatetime-perl libdatetime-timezone-perl \
       libgl1 libpixman-1-0 libxfont2 libxcursor1 libxtst6 libxrandr2 \
-      xauth x11-xkb-utils xkb-data procps ssl-cert libunwind8 \
+      xauth x11-xkb-utils xkb-data procps ssl-cert libunwind8 ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
 # 浏览器：amd64 装 Google Chrome（官方 deb），arm64 没有官方构建，回退 epiphany。
