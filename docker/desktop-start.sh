@@ -18,7 +18,7 @@ TB=$!
 # FrameRate 30：60fps 对远程桌面是纯浪费，编码吃满 CPU 还看不清；
 # ffmpeg 在镜像里时 KasmVNC 会用 H.264（比 webp 便宜一个数量级）。
 /usr/bin/Xvnc :1 -SecurityTypes None -DisableBasicAuth 1 -websocketPort 6901 \
-  -httpd /usr/share/kasmvnc/www -interface 0.0.0.0 -FrameRate 30 \
+  -httpd /usr/share/kasmvnc/www -interface 0.0.0.0 -FrameRate 30 -videoCodec h264 \
   -geometry 1280x800 -depth 24 >/tmp/xvnc.log 2>&1 &
 # 等 X 真正可用（xdpyinfo 来自 x11-utils）
 i=0
