@@ -49,7 +49,7 @@ RUN if [ "${TARGETARCH:-amd64}" = "amd64" ]; then \
       && apt-get install -y --no-install-recommends libunwind8 \
       && rm -rf /var/lib/apt/lists/* \
       && mv /usr/bin/google-chrome-stable /usr/bin/google-chrome-real \
-      && printf '#!/bin/sh\nexec /usr/bin/google-chrome-real --no-sandbox --disable-dev-shm-usage --disable-gpu "$@"\n' > /usr/bin/google-chrome \
+      && printf '#!/bin/sh\nexec /usr/bin/google-chrome-real --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --no-default-browser-check --disable-session-crashed-bubble "$@"\n' > /usr/bin/google-chrome \
       && chmod +x /usr/bin/google-chrome; \
     else \
       apt-get update && apt-get install -y --no-install-recommends epiphany-browser \
@@ -70,6 +70,9 @@ RUN mkdir -p /root/.vnc /workspace \
  && mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml /root/Desktop \
  && printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xsettings" version="1.0">\n  <property name="Net" type="empty">\n    <property name="ThemeName" type="string" value="Yaru"/>\n    <property name="IconThemeName" type="string" value="Yaru"/>\n  </property>\n  <property name="Xft" type="empty">\n    <property name="DPI" type="int" value="96"/>\n    <property name="Antialias" type="int" value="1"/>\n    <property name="HintStyle" type="string" value="hintslight"/>\n    <property name="RGBA" type="string" value="rgb"/>\n  </property>\n</channel>\n' > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml \
  && printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfwm4" version="1.0">\n  <property name="general" type="empty">\n    <property name="theme" type="string" value="Yaru"/>\n  </property>\n</channel>\n' > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml \
+ && printf '[Desktop Entry]\nType=Application\nName=Google Chrome\nExec=/usr/bin/google-chrome\nIcon=google-chrome\nTerminal=false\n' > /root/Desktop/google-chrome.desktop \
+ && chmod +x /root/Desktop/google-chrome.desktop \
+ && printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-desktop" version="1.0">\n  <property name="backdrop" type="empty">\n    <property name="screen0" type="empty">\n      <property name="monitor0" type="empty">\n        <property name="workspace0" type="empty">\n          <property name="image-path" type="string" value="/usr/share/backgrounds/Blue_flower_by_Elena_Stravoravdi.jpg"/>\n          <property name="image-style" type="int" value="5"/>\n        </property>\n      </property>\n    </property>\n  </property>\n</channel>\n' > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml \
  && touch /root/.vnc/.de-was-selected \
  && printf '#!/bin/sh\nexport HOME=/root\nexec startxfce4\n' > /root/.vnc/xstartup \
  && chmod +x /root/.vnc/xstartup
