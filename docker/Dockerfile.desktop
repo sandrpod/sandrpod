@@ -23,9 +23,10 @@ ARG TARGETARCH=amd64
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      wget ca-certificates curl perl \
+      wget ca-certificates curl perl gnupg \
       xfce4 xfce4-terminal dbus-x11 x11-xserver-utils xdotool scrot \
-      epiphany-browser \
+      yaru-theme-gtk yaru-theme-icon yaru-theme-sound fonts-ubuntu \
+      ubuntu-wallpapers \
       fonts-noto-cjk fonts-noto-color-emoji language-pack-zh-hans \
       libswitch-perl libyaml-tiny-perl libhash-merge-simple-perl \
       libscalar-list-utils-perl liblist-moreutils-perl libtry-tiny-perl \
@@ -33,6 +34,20 @@ RUN apt-get update \
       libgl1 libpixman-1-0 libxfont2 libxcursor1 libxtst6 libxrandr2 \
       xauth x11-xkb-utils xkb-data procps ssl-cert \
  && rm -rf /var/lib/apt/lists/*
+
+# 浏览器：amd64 装 Google Chrome（官方 deb），arm64 没有官方构建，回退 epiphany。
+# Chrome 以 root 跑必须 --no-sandbox（容器内本就是隔离边界），包一层 wrapper 免得每次带参数。
+RUN if [ "${TARGETARCH:-amd64}" = "amd64" ]; then \
+      wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
+      && apt-get update && apt-get install -y --no-install-recommends /tmp/chrome.deb \
+      && rm -f /tmp/chrome.deb && rm -rf /var/lib/apt/lists/* \
+      && mv /usr/bin/google-chrome-stable /usr/bin/google-chrome-real \
+      && printf '#!/bin/sh\nexec /usr/bin/google-chrome-real --no-sandbox --disable-dev-shm-usage --disable-gpu "$@"\n' > /usr/bin/google-chrome \
+      && chmod +x /usr/bin/google-chrome; \
+    else \
+      apt-get update && apt-get install -y --no-install-recommends epiphany-browser \
+      && rm -rf /var/lib/apt/lists/*; \
+    fi
 
 # 1) KasmVNC deb。jammy 的 arm64 包把 Depends 硬编码成了 :amd64（上游打包瑕疵），
 #    所以强装；perl/x11 依赖上一条已按本机架构补齐。
@@ -45,6 +60,9 @@ RUN mkdir -p /root/.vnc /workspace \
  && printf 'network:\n  protocol: http\n  websocket_port: 6901\n  ssl:\n    require_ssl: false\nserver:\n  advanced:\n    kasm_password_file: /root/.kasmpasswd\ncommand_line:\n  prompt: false\n' > /etc/kasmvnc/kasmvnc.yaml \
  && printf 'sandrbox' > /root/.kasmpasswd \
  && chmod 600 /root/.kasmpasswd \
+ && mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml /root/Desktop \
+ && printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xsettings" version="1.0">\n  <property name="Net" type="empty">\n    <property name="ThemeName" type="string" value="Yaru"/>\n    <property name="IconThemeName" type="string" value="Yaru"/>\n  </property>\n  <property name="Xft" type="empty">\n    <property name="DPI" type="int" value="96"/>\n    <property name="Antialias" type="int" value="1"/>\n    <property name="HintStyle" type="string" value="hintslight"/>\n    <property name="RGBA" type="string" value="rgb"/>\n  </property>\n</channel>\n' > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml \
+ && printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfwm4" version="1.0">\n  <property name="general" type="empty">\n    <property name="theme" type="string" value="Yaru"/>\n  </property>\n</channel>\n' > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml \
  && touch /root/.vnc/.de-was-selected \
  && printf '#!/bin/sh\nexport HOME=/root\nexec startxfce4\n' > /root/.vnc/xstartup \
  && chmod +x /root/.vnc/xstartup
