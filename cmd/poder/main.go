@@ -1162,8 +1162,16 @@ func proxyUpgradeTo(w http.ResponseWriter, r *http.Request, targetURL string) {
 	}
 
 	done := make(chan struct{}, 2)
-	go func() { _, _ = io.Copy(conn, cb); done <- struct{}{} }()
-	go func() { _, _ = io.Copy(cc, br); done <- struct{}{} }()
+	go func() {
+		n, err := io.Copy(conn, cb)
+		log.Printf("ws relay to toolbox: %d bytes, err=%v", n, err)
+		done <- struct{}{}
+	}()
+	go func() {
+		n, err := io.Copy(cc, br)
+		log.Printf("ws relay to client: %d bytes, err=%v", n, err)
+		done <- struct{}{}
+	}()
 	<-done
 }
 
