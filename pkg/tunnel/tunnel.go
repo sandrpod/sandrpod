@@ -26,6 +26,17 @@ type wsConn struct {
 }
 
 func newWSConn(conn *websocket.Conn) *wsConn {
+	// gorilla writes a frame as header+payload in two write calls. On a link
+	// with latency Nagle plus delayed ACK turns that into one message per RTT
+	// (~40 KiB/s measured on loopback). Disable Nagle and give the socket a
+	// real buffer so the two writes leave as one segment.
+	if uc := conn.UnderlyingConn(); uc != nil {
+		if tcp, ok := uc.(*net.TCPConn); ok {
+			_ = tcp.SetNoDelay(true)
+			_ = tcp.SetWriteBuffer(1 << 20)
+			_ = tcp.SetReadBuffer(1 << 20)
+		}
+	}
 	return &wsConn{conn: conn}
 }
 
@@ -102,7 +113,11 @@ func NewPoderTunnel(id string, ws *websocket.Conn) (*PoderTunnel, error) {
 func NewPoderTunnelFromConn(id string, conn io.ReadWriteCloser) (*PoderTunnel, error) {
 	cfg := yamux.DefaultConfig()
 	cfg.KeepAliveInterval = 5 * time.Second // faster dead-connection detection (was 30s)
-	cfg.ConnectionWriteTimeout = 5 * time.Second
+	cfg.ConnectionWriteTimeout = 30 * time.Second
+	// A preview stream (desktop VNC) moves megabytes through one yamux stream.
+	// The 256 KiB default window turns file and screen transfers into a
+	// stop-and-wait crawl on any link with latency; 8 MiB keeps the pipe full.
+	cfg.MaxStreamWindowSize = 8 * 1024 * 1024
 	session, err := yamux.Client(conn, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("yamux client: %w", err)
