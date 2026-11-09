@@ -32,7 +32,7 @@ RUN apt-get update \
       libscalar-list-utils-perl liblist-moreutils-perl libtry-tiny-perl \
       libdatetime-perl libdatetime-timezone-perl \
       libgl1 libpixman-1-0 libxfont2 libxcursor1 libxtst6 libxrandr2 \
-      xauth x11-xkb-utils xkb-data procps ssl-cert \
+      xauth x11-xkb-utils xkb-data procps ssl-cert libunwind8 \
  && rm -rf /var/lib/apt/lists/*
 
 # 浏览器：amd64 装 Google Chrome（官方 deb），arm64 没有官方构建，回退 epiphany。
@@ -40,7 +40,9 @@ RUN apt-get update \
 RUN if [ "${TARGETARCH:-amd64}" = "amd64" ]; then \
       wget -q -O /tmp/chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
       && apt-get update && apt-get install -y --no-install-recommends /tmp/chrome.deb \
-      && rm -f /tmp/chrome.deb && rm -rf /var/lib/apt/lists/* \
+      && rm -f /tmp/chrome.deb \
+      && apt-get install -y --no-install-recommends libunwind8 \
+      && rm -rf /var/lib/apt/lists/* \
       && mv /usr/bin/google-chrome-stable /usr/bin/google-chrome-real \
       && printf '#!/bin/sh\nexec /usr/bin/google-chrome-real --no-sandbox --disable-dev-shm-usage --disable-gpu "$@"\n' > /usr/bin/google-chrome \
       && chmod +x /usr/bin/google-chrome; \
