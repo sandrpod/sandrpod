@@ -12,10 +12,12 @@ rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null
 /app/toolbox -port 8080 &
 TB=$!
 
-# 1) KasmVNC：X 服务器 + Web 客户端一起起（websocket_port 6901 已固定在 yaml）。
-#    首次启动它会问"给谁写权限"——菜单喂 '1'（给已烘焙的 sandrbox 用户写权限），
-#    非交互直接放行，不挂起容器。
-printf '1\n' | kasmvncserver :1
+# 1) Xvnc 直启：绕过 kasmvncserver 包装器的交互菜单，并关闭 websocket 的
+#    basic auth（-DisableBasicAuth 必须带值 1；裸写会被忽略而仍强制认证）。
+#    沙箱本身就是隔离边界，preview URL 是入口，不需要再叠一层 VNC 口令。
+/usr/bin/Xvnc :1 -DisableBasicAuth 1 -websocketPort 6901 \
+  -httpd /usr/share/kasmvnc/www -interface 0.0.0.0 \
+  -geometry 1280x800 -depth 24 >/tmp/xvnc.log 2>&1 &
 # 等 X 真正可用（xdpyinfo 来自 x11-utils）
 i=0
 while [ $i -lt 50 ]; do
