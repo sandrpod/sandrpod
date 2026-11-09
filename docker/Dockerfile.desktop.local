@@ -1,0 +1,61 @@
+# 桌面沙箱镜像：Ubuntu 22.04（jammy）+ XFCE + KasmVNC + 浏览器 + CJK 字体
+# toolbox 从源码构建进镜像（执行/文件/MCP 全能力不变），桌面栈 apt 安装。
+#
+# KasmVNC deb 预先下载到 docker/（arm64 + amd64 各一），构建不依赖运行时网络。
+#
+# 顺序很关键：先装 deb（此时 /etc/kasmvnc 还没有我们的 kasmvnc.yaml，不会触发
+# conffile 冲突提示卡死构建），之后再写我们的精简配置覆盖它。
+#
+# 构建（amd64，HK/生产）： docker build -f docker/Dockerfile.desktop -t sandrpod-desktop:v1 .
+# 构建（arm64，Mac）：     docker build --build-arg TARGETARCH=arm64 -f docker/Dockerfile.desktop -t sandrpod-desktop:v1 .
+# 运行： docker run -p 6901:6901 sandrpod-desktop:v1 → 浏览器 https://localhost:6901
+# （沙箱里端口不映射，经 toolbox /proxy/6901 + preview URL 暴露）
+FROM golang:1.27 AS builder
+WORKDIR /src
+COPY . .
+ENV GOPROXY=https://goproxy.cn,direct
+RUN CGO_ENABLED=0 GOFLAGS=-mod=mod go build -o /toolbox ./cmd/toolbox
+
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+ENV HOME=/root
+# TARGETARCH 是 BuildKit 预置变量（构建机架构）；必须在使用它的 stage 内重新声明
+ARG TARGETARCH=amd64
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      wget ca-certificates curl perl \
+      xfce4 xfce4-terminal dbus-x11 x11-xserver-utils xdotool scrot \
+      epiphany-browser \
+      fonts-noto-cjk fonts-noto-color-emoji language-pack-zh-hans \
+      libswitch-perl libyaml-tiny-perl libhash-merge-simple-perl \
+      libscalar-list-utils-perl liblist-moreutils-perl libtry-tiny-perl \
+      libdatetime-perl libdatetime-timezone-perl \
+      libgl1 libpixman-1-0 libxfont2 libxcursor1 libxtst6 libxrandr2 \
+      xauth x11-xkb-utils xkb-data procps ssl-cert \
+ && rm -rf /var/lib/apt/lists/*
+
+# 1) KasmVNC deb。jammy 的 arm64 包把 Depends 硬编码成了 :amd64（上游打包瑕疵），
+#    所以强装；perl/x11 依赖上一条已按本机架构补齐。
+COPY docker/kasmvncserver_jammy_${TARGETARCH:-amd64}.deb /tmp/kasmvnc.deb
+RUN dpkg --force-depends -i /tmp/kasmvnc.deb && rm -f /tmp/kasmvnc.deb
+
+# 2) 覆盖为沙箱的精简配置：web 端口固定 6901、不强制自签 HTTPS（外层 Caddy 已有 TLS）。
+#    连接口令烘焙在 .kasmpasswd（默认 sandrbox，改法：容器内 vncpasswd -u root -w）。
+RUN mkdir -p /root/.vnc /workspace \
+ && printf 'network:\n  protocol: http\n  websocket_port: 6901\n  ssl:\n    require_ssl: false\nserver:\n  advanced:\n    kasm_password_file: /root/.kasmpasswd\ncommand_line:\n  prompt: false\n' > /etc/kasmvnc/kasmvnc.yaml \
+ && printf 'sandrbox' > /root/.kasmpasswd \
+ && chmod 600 /root/.kasmpasswd \
+ && touch /root/.vnc/.de-was-selected \
+ && printf '#!/bin/sh\nexport HOME=/root\nexec startxfce4\n' > /root/.vnc/xstartup \
+ && chmod +x /root/.vnc/xstartup
+
+# 3) toolbox（执行/文件/MCP）+ 启动脚本
+COPY --from=builder /toolbox /app/toolbox
+COPY docker/desktop-start.sh /app/desktop-start.sh
+RUN chmod +x /app/desktop-start.sh
+
+# 桌面端口（容器内）；toolbox 仍在 8080
+EXPOSE 6901 5901 8080
+
+ENTRYPOINT ["/app/desktop-start.sh"]

@@ -299,3 +299,27 @@ func (t *PoderTunnel) StreamClient() *http.Client {
 func NewWSConn(conn *websocket.Conn) io.ReadWriteCloser {
 	return newWSConn(conn)
 }
+
+// OpenRaw opens one yamux stream to the peer, for protocols that are not HTTP
+// request/response: a browser's WebSocket upgrade is the case this exists for.
+// The caller owns the returned conn.
+func (t *PoderTunnel) OpenRaw(ctx context.Context) (net.Conn, error) {
+	if t == nil || t.session == nil {
+		return nil, fmt.Errorf("tunnel closed")
+	}
+	type result struct {
+		c   net.Conn
+		err error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		c, err := t.session.Open()
+		ch <- result{c, err}
+	}()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case r := <-ch:
+		return r.c, r.err
+	}
+}

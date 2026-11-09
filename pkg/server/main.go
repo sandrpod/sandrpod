@@ -5,6 +5,7 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -2537,7 +2538,109 @@ func flushCopy(w http.ResponseWriter, r io.Reader) {
 // timeout) and flushes the response writer after every chunk so SSE events
 // reach the caller in real time. Used for MCP Streamable HTTP, which can
 // upgrade a single POST into a long-lived text/event-stream response.
+
+// isWebSocketUpgrade reports whether the request asks to switch protocols.
+func isWebSocketUpgrade(r *http.Request) bool {
+	if !strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Upgrade")), "websocket")
+}
+
+// proxyWebSocket relays a WebSocket upgrade over the pode tunnel. The tunnel
+// transport is an HTTP client; a websocket needs a raw stream, so we open one,
+// replay the request head, wait for the peer's 101, then become a dumb pipe in
+// both directions. Anything that is not a 101 is forwarded as a normal response
+// so the caller still sees the peer's error.
+func proxyWebSocket(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w http.ResponseWriter) {
+	conn, err := t.OpenRaw(r.Context())
+	if err != nil {
+		http.Error(w, "tunnel unavailable", http.StatusBadGateway)
+		return
+	}
+	defer conn.Close()
+
+	// Request head, as the peer's HTTP server expects it. Target is a full URL,
+	// the transport only needs the path.
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		http.Error(w, "bad tunnel target", http.StatusInternalServerError)
+		return
+	}
+	var head strings.Builder
+	head.WriteString(r.Method + " " + u.RequestURI() + " HTTP/1.1\r\n")
+	head.WriteString("Host: " + u.Host + "\r\n")
+	for k, vals := range r.Header {
+		for _, v := range vals {
+			head.WriteString(k + ": " + v + "\r\n")
+		}
+	}
+	head.WriteString("\r\n")
+	if _, err := io.WriteString(conn, head.String()); err != nil {
+		http.Error(w, "tunnel write failed", http.StatusBadGateway)
+		return
+	}
+
+	// Read the response head only; the body of a 101 is the websocket stream.
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, &http.Request{Method: r.Method})
+	if err != nil {
+		http.Error(w, "tunnel read failed", http.StatusBadGateway)
+		return
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		maps.Copy(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		resp.Body.Close()
+		return
+	}
+
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "proxying websockets requires a hijackable connection", http.StatusInternalServerError)
+		return
+	}
+	clientConn, clientBuf, err := hj.Hijack()
+	if err != nil {
+		http.Error(w, "hijack failed", http.StatusInternalServerError)
+		return
+	}
+	defer clientConn.Close()
+
+	// 101 back to the client, then pipe both ways.
+	var ch strings.Builder
+	ch.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
+	ch.WriteString("Upgrade: websocket\r\n")
+	ch.WriteString("Connection: Upgrade\r\n")
+	if acc := resp.Header.Get("Sec-WebSocket-Accept"); acc != "" {
+		ch.WriteString("Sec-WebSocket-Accept: " + acc + "\r\n")
+	}
+	if proto := resp.Header.Get("Sec-WebSocket-Protocol"); proto != "" {
+		ch.WriteString("Sec-WebSocket-Protocol: " + proto + "\r\n")
+	}
+	ch.WriteString("\r\n")
+	if _, err := clientBuf.WriteString(ch.String()); err != nil {
+		return
+	}
+	if err := clientBuf.Flush(); err != nil {
+		return
+	}
+
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(conn, clientBuf); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(clientConn, br); done <- struct{}{} }()
+	<-done
+}
 func proxyHTTPStreaming(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w http.ResponseWriter) {
+	// A WebSocket upgrade is not an HTTP request/response: client.Do() would see
+	// the 101 and hand back a body it cannot read, leaving the browser's socket
+	// half-open forever ("connecting..." in the KasmVNC viewer). Copy bytes on a
+	// hijacked connection instead.
+	if isWebSocketUpgrade(r) {
+		proxyWebSocket(t, r, targetURL, w)
+		return
+	}
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, targetURL, r.Body)
 	if err != nil {
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
