@@ -5,6 +5,8 @@
 set -x
 export HOME=/root
 export DISPLAY=:1
+# 容器重启后残留的 X 锁会让 KasmVNC 拒绝启动——清掉再起
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null
 
 # toolbox 先在后台跑（execute/files/MCP 端口 8080）。
 /app/toolbox -port 8080 &
