@@ -1,0 +1,49 @@
+# 桌面沙箱镜像：Ubuntu 22.04（jammy）+ XFCE + KasmVNC + 浏览器 + CJK 字体
+# toolbox 从源码构建进镜像（执行/文件/MCP 全能力不变），桌面栈 apt 安装。
+#
+# KasmVNC deb 预先下载到 docker/（arm64 + amd64 各一），构建不依赖运行时网络。
+#
+# 构建（amd64，HK/生产）： docker build -f docker/Dockerfile.desktop -t sandrpod-desktop:v1 .
+# 构建（arm64，Mac）：     docker build --build-arg TARGETARCH=arm64 -f docker/Dockerfile.desktop -t sandrpod-desktop:v1 .
+# 运行： docker run -p 6901:6901 sandrpod-desktop:v1 → 浏览器 https://localhost:6901
+# （沙箱里端口不映射，经 toolbox /proxy/6901 + preview URL 暴露）
+FROM golang:1.27-bookworm AS builder
+WORKDIR /src
+COPY . .
+RUN CGO_ENABLED=0 go build -o /toolbox ./cmd/toolbox
+
+FROM ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+ENV HOME=/root
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      wget ca-certificates curl \
+      xfce4 xfce4-terminal dbus-x11 x11-xserver-utils xdotool scrot \
+      epiphany-browser \
+      fonts-noto-cjk fonts-noto-color-emoji language-pack-zh-hans \
+ && rm -rf /var/lib/apt/lists/*
+
+# KasmVNC：web 端口固定 6901、不强制自签 HTTPS（外层 Caddy 已有 TLS）。
+# 连接口令烘焙在 .kasmpasswd（默认 sandrbox，改法：容器内 vncpasswd -u root -w）。
+RUN mkdir -p /root/.vnc /etc/kasmvnc /workspace \
+ && printf 'network:\n  protocol: http\n  websocket_port: 6901\n  ssl:\n    require_ssl: false\n' > /etc/kasmvnc/kasmvnc.yaml
+
+COPY docker/kasmvncserver_jammy_${TARGETARCH:-amd64}.deb /tmp/kasmvnc.deb
+RUN apt-get install -y /tmp/kasmvnc.deb && rm -f /tmp/kasmvnc.deb
+
+# 密码文件 + 桌面选择标记 + xstartup（烘焙，避免首启交互菜单）
+COPY docker/desktop-kasmpasswd /root/.kasmpasswd
+RUN chmod 600 /root/.kasmpasswd \
+ && touch /root/.vnc/.de-was-selected \
+ && printf '#!/bin/sh\nexport HOME=/root\nexec startxfce4\n' > /root/.vnc/xstartup \
+ && chmod +x /root/.vnc/xstartup
+
+COPY --from=builder /toolbox /app/toolbox
+COPY docker/desktop-start.sh /app/desktop-start.sh
+RUN chmod +x /app/desktop-start.sh
+
+# 桌面端口（容器内）；toolbox 仍在 8080
+EXPOSE 6901 5901 8080
+
+ENTRYPOINT ["/app/desktop-start.sh"]
