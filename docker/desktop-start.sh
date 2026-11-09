@@ -15,7 +15,7 @@ TB=$!
 # 1) Xvnc 直启：绕过 kasmvncserver 包装器的交互菜单，并关闭 websocket 的
 #    basic auth（-DisableBasicAuth 必须带值 1；裸写会被忽略而仍强制认证）。
 #    沙箱本身就是隔离边界，preview URL 是入口，不需要再叠一层 VNC 口令。
-/usr/bin/Xvnc :1 -DisableBasicAuth 1 -websocketPort 6901 \
+/usr/bin/Xvnc :1 -SecurityTypes None -DisableBasicAuth 1 -websocketPort 6901 \
   -httpd /usr/share/kasmvnc/www -interface 0.0.0.0 \
   -geometry 1280x800 -depth 24 >/tmp/xvnc.log 2>&1 &
 # 等 X 真正可用（xdpyinfo 来自 x11-utils）
