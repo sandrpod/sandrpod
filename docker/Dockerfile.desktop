@@ -35,6 +35,11 @@ RUN apt-get update \
       xauth x11-xkb-utils xkb-data procps ssl-cert libunwind8 ffmpeg \
  && rm -rf /var/lib/apt/lists/*
 
+# KasmVNC 用 dlopen("libavformat.so") 打开 ffmpeg：jammy 只装带版本号的 .so.58，
+# 没有无版本号的名字，所以 H.264 一直不可用（日志里 WEBP benchmark 胜出）。
+# 补一组 unversioned 符号链接，H.264 才会真正启用。
+RUN for lib in avformat avcodec avutil swscale swresample; do       f=$(ls /usr/lib/x86_64-linux-gnu/lib${lib}.so.* 2>/dev/null | head -1);       [ -n "$f" ] && ln -sf "$f" /usr/lib/x86_64-linux-gnu/lib${lib}.so;     done; ldconfig
+
 # 浏览器：amd64 装 Google Chrome（官方 deb），arm64 没有官方构建，回退 epiphany。
 # Chrome 以 root 跑必须 --no-sandbox（容器内本就是隔离边界），包一层 wrapper 免得每次带参数。
 RUN if [ "${TARGETARCH:-amd64}" = "amd64" ]; then \
