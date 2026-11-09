@@ -15,7 +15,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -1121,16 +1120,26 @@ func proxyUpgradeTo(w http.ResponseWriter, r *http.Request, targetURL string) {
 	}
 
 	br := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(br, r)
+	respHead, statusLine, err := readResponseHead(br)
 	if err != nil {
 		http.Error(w, "upstream read failed", http.StatusBadGateway)
 		return
 	}
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		maps.Copy(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
-		resp.Body.Close()
+	switching := strings.Contains(statusLine, " 101 ")
+	if !switching {
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			http.Error(w, "proxying upgrades requires a hijackable connection", http.StatusInternalServerError)
+			return
+		}
+		cc, cb, err := hj.Hijack()
+		if err != nil {
+			return
+		}
+		defer cc.Close()
+		_, _ = cb.Write(respHead)
+		_ = cb.Flush()
+		_, _ = io.Copy(cc, br)
 		return
 	}
 
@@ -1145,15 +1154,7 @@ func proxyUpgradeTo(w http.ResponseWriter, r *http.Request, targetURL string) {
 	}
 	defer cc.Close()
 
-	var out strings.Builder
-	out.WriteString("HTTP/1.1 " + resp.Status + "\r\n")
-	for k, vals := range resp.Header {
-		for _, v := range vals {
-			out.WriteString(k + ": " + v + "\r\n")
-		}
-	}
-	out.WriteString("\r\n")
-	if _, err := cb.WriteString(out.String()); err != nil {
+	if _, err := cb.Write(respHead); err != nil {
 		return
 	}
 	if err := cb.Flush(); err != nil {
@@ -1164,4 +1165,27 @@ func proxyUpgradeTo(w http.ResponseWriter, r *http.Request, targetURL string) {
 	go func() { _, _ = io.Copy(conn, cb); done <- struct{}{} }()
 	go func() { _, _ = io.Copy(cc, br); done <- struct{}{} }()
 	<-done
+}
+
+// readResponseHead reads one HTTP response head without touching the bytes that
+// follow it, and returns those bytes for the upgrade to stream. http.ReadResponse
+// wraps a 101's following bytes in a body reader, which loses the websocket
+// framing — the sandbox preview needs that framing untouched.
+func readResponseHead(br *bufio.Reader) (head []byte, statusLine string, err error) {
+	var buf bytes.Buffer
+	first := true
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return nil, "", err
+		}
+		if first {
+			statusLine = strings.TrimSpace(line)
+			first = false
+		}
+		buf.WriteString(line)
+		if line == "\r\n" || line == "\n" {
+			return buf.Bytes(), statusLine, nil
+		}
+	}
 }

@@ -2560,8 +2560,6 @@ func proxyWebSocket(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w 
 	}
 	defer conn.Close()
 
-	// Request head, as the peer's HTTP server expects it. Target is a full URL,
-	// the transport only needs the path.
 	u, err := url.Parse(targetURL)
 	if err != nil {
 		http.Error(w, "bad tunnel target", http.StatusInternalServerError)
@@ -2571,6 +2569,9 @@ func proxyWebSocket(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w 
 	head.WriteString(r.Method + " " + u.RequestURI() + " HTTP/1.1\r\n")
 	head.WriteString("Host: " + u.Host + "\r\n")
 	for k, vals := range r.Header {
+		if strings.EqualFold(k, "Host") {
+			continue
+		}
 		for _, v := range vals {
 			head.WriteString(k + ": " + v + "\r\n")
 		}
@@ -2581,49 +2582,33 @@ func proxyWebSocket(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w 
 		return
 	}
 
-	// Read the response head only; the body of a 101 is the websocket stream.
 	br := bufio.NewReader(conn)
-	resp, err := http.ReadResponse(br, &http.Request{Method: r.Method})
+	respHead, statusLine, err := readResponseHead(br)
 	if err != nil {
 		http.Error(w, "tunnel read failed", http.StatusBadGateway)
 		return
 	}
-	if resp.StatusCode != http.StatusSwitchingProtocols {
-		maps.Copy(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
-		resp.Body.Close()
-		return
-	}
+	switching := strings.Contains(statusLine, " 101 ")
 
 	hj, ok := w.(http.Hijacker)
 	if !ok {
-		http.Error(w, "proxying websockets requires a hijackable connection", http.StatusInternalServerError)
+		http.Error(w, "proxying upgrades requires a hijackable connection", http.StatusInternalServerError)
 		return
 	}
 	clientConn, clientBuf, err := hj.Hijack()
 	if err != nil {
-		http.Error(w, "hijack failed", http.StatusInternalServerError)
 		return
 	}
 	defer clientConn.Close()
 
-	// 101 back to the client, then pipe both ways.
-	var ch strings.Builder
-	ch.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
-	ch.WriteString("Upgrade: websocket\r\n")
-	ch.WriteString("Connection: Upgrade\r\n")
-	if acc := resp.Header.Get("Sec-WebSocket-Accept"); acc != "" {
-		ch.WriteString("Sec-WebSocket-Accept: " + acc + "\r\n")
-	}
-	if proto := resp.Header.Get("Sec-WebSocket-Protocol"); proto != "" {
-		ch.WriteString("Sec-WebSocket-Protocol: " + proto + "\r\n")
-	}
-	ch.WriteString("\r\n")
-	if _, err := clientBuf.WriteString(ch.String()); err != nil {
+	if _, err := clientBuf.Write(respHead); err != nil {
 		return
 	}
 	if err := clientBuf.Flush(); err != nil {
+		return
+	}
+	if !switching {
+		_, _ = io.Copy(clientConn, br)
 		return
 	}
 
@@ -2632,6 +2617,28 @@ func proxyWebSocket(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w 
 	go func() { _, _ = io.Copy(clientConn, br); done <- struct{}{} }()
 	<-done
 }
+
+// readResponseHead reads one HTTP response head without touching the bytes that
+// follow it, so a websocket upgrade can stream the framing untouched.
+func readResponseHead(br *bufio.Reader) (head []byte, statusLine string, err error) {
+	var buf bytes.Buffer
+	first := true
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			return nil, "", err
+		}
+		if first {
+			statusLine = strings.TrimSpace(line)
+			first = false
+		}
+		buf.WriteString(line)
+		if line == "\r\n" || line == "\n" {
+			return buf.Bytes(), statusLine, nil
+		}
+	}
+}
+
 func proxyHTTPStreaming(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w http.ResponseWriter) {
 	// A WebSocket upgrade is not an HTTP request/response: client.Do() would see
 	// the 101 and hand back a body it cannot read, leaving the browser's socket
