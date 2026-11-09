@@ -5,6 +5,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -14,8 +15,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -474,6 +477,13 @@ func main() {
 			}
 		}
 		log.Printf("Proxying to: %s %s", r.Method, toolboxURL)
+		// A WebSocket upgrade is not a request/response: the HTTP client would
+		// return the 101 with a body it cannot stream back, and the browser
+		// hangs. Relay bytes on a hijacked connection instead.
+		if isUpgradeRequest(r) {
+			proxyUpgradeTo(w, r, toolboxURL)
+			return
+		}
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, toolboxURL, r.Body)
 		if err != nil {
 			http.Error(w, "Failed to create request", http.StatusInternalServerError)
@@ -1070,4 +1080,88 @@ func resolvePoderID(explicit string) (string, error) {
 	}
 
 	return id, nil
+}
+
+// isUpgradeRequest reports whether the caller wants a protocol switch (websocket).
+func isUpgradeRequest(r *http.Request) bool {
+	return strings.Contains(strings.ToLower(r.Header.Get("Connection")), "upgrade")
+}
+
+// proxyUpgradeTo relays a protocol upgrade to targetURL on a hijacked client
+// connection. The tunnel path carries WebSockets for sandbox previews: every
+// hop must hand the raw stream through, an HTTP client cannot.
+func proxyUpgradeTo(w http.ResponseWriter, r *http.Request, targetURL string) {
+	u, err := url.Parse(targetURL)
+	if err != nil {
+		http.Error(w, "bad upstream url", http.StatusInternalServerError)
+		return
+	}
+	conn, err := net.DialTimeout("tcp", u.Host, 10*time.Second)
+	if err != nil {
+		http.Error(w, "upstream dial failed", http.StatusBadGateway)
+		return
+	}
+	defer conn.Close()
+
+	var head strings.Builder
+	head.WriteString(r.Method + " " + u.RequestURI() + " HTTP/1.1\r\n")
+	head.WriteString("Host: " + u.Host + "\r\n")
+	for k, vals := range r.Header {
+		if strings.EqualFold(k, "Host") {
+			continue
+		}
+		for _, v := range vals {
+			head.WriteString(k + ": " + v + "\r\n")
+		}
+	}
+	head.WriteString("\r\n")
+	if _, err := io.WriteString(conn, head.String()); err != nil {
+		http.Error(w, "upstream write failed", http.StatusBadGateway)
+		return
+	}
+
+	br := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(br, r)
+	if err != nil {
+		http.Error(w, "upstream read failed", http.StatusBadGateway)
+		return
+	}
+	if resp.StatusCode != http.StatusSwitchingProtocols {
+		maps.Copy(w.Header(), resp.Header)
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		resp.Body.Close()
+		return
+	}
+
+	hj, ok := w.(http.Hijacker)
+	if !ok {
+		http.Error(w, "proxying upgrades requires a hijackable connection", http.StatusInternalServerError)
+		return
+	}
+	cc, cb, err := hj.Hijack()
+	if err != nil {
+		return
+	}
+	defer cc.Close()
+
+	var out strings.Builder
+	out.WriteString("HTTP/1.1 " + resp.Status + "\r\n")
+	for k, vals := range resp.Header {
+		for _, v := range vals {
+			out.WriteString(k + ": " + v + "\r\n")
+		}
+	}
+	out.WriteString("\r\n")
+	if _, err := cb.WriteString(out.String()); err != nil {
+		return
+	}
+	if err := cb.Flush(); err != nil {
+		return
+	}
+
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(conn, cb); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(cc, br); done <- struct{}{} }()
+	<-done
 }
