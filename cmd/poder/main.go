@@ -477,8 +477,8 @@ func main() {
 		}
 		log.Printf("Proxying to: %s %s", r.Method, toolboxURL)
 		// A WebSocket upgrade is not a request/response: the HTTP client would
-		// return the 101 with a body it cannot stream back, and the browser
-		// hangs. Relay bytes on a hijacked connection instead.
+		// return the 101 with a body it cannot stream back and the browser hangs.
+		// Relay raw bytes on a hijacked connection instead.
 		if isUpgradeRequest(r) {
 			proxyUpgradeTo(w, r, toolboxURL)
 			return
