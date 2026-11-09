@@ -24,6 +24,11 @@ RUN apt-get update \
       xfce4 xfce4-terminal dbus-x11 x11-xserver-utils xdotool scrot \
       epiphany-browser \
       fonts-noto-cjk fonts-noto-color-emoji language-pack-zh-hans \
+      libswitch-perl libyaml-tiny-perl libhash-merge-simple-perl \
+      libscalar-list-utils-perl liblist-moreutils-perl libtry-tiny-perl \
+      libdatetime-perl libdatetime-timezone-perl \
+      libgl1 libpixman-1-0 libxfont2 libxcursor1 libxtst6 libxrandr2 \
+      xauth x11-xkb-utils xkb-data procps \
  && rm -rf /var/lib/apt/lists/*
 
 # KasmVNC：web 端口固定 6901、不强制自签 HTTPS（外层 Caddy 已有 TLS）。
