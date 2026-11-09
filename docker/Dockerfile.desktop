@@ -42,7 +42,7 @@ RUN dpkg --force-depends -i /tmp/kasmvnc.deb && rm -f /tmp/kasmvnc.deb
 # 2) 覆盖为沙箱的精简配置：web 端口固定 6901、不强制自签 HTTPS（外层 Caddy 已有 TLS）。
 #    连接口令烘焙在 .kasmpasswd（默认 sandrbox，改法：容器内 vncpasswd -u root -w）。
 RUN mkdir -p /root/.vnc /workspace \
- && printf 'network:\n  protocol: http\n  websocket_port: 6901\n  ssl:\n    require_ssl: false\n' > /etc/kasmvnc/kasmvnc.yaml \
+ && printf 'network:\n  protocol: http\n  websocket_port: 6901\n  ssl:\n    require_ssl: false\nserver:\n  advanced:\n    kasm_password_file: /root/.kasmpasswd\ncommand_line:\n  prompt: false\n' > /etc/kasmvnc/kasmvnc.yaml \
  && printf 'sandrbox' > /root/.kasmpasswd \
  && chmod 600 /root/.kasmpasswd \
  && touch /root/.vnc/.de-was-selected \
