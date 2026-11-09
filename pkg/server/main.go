@@ -2553,6 +2553,7 @@ func isWebSocketUpgrade(r *http.Request) bool {
 // both directions. Anything that is not a 101 is forwarded as a normal response
 // so the caller still sees the peer's error.
 func proxyWebSocket(t *tunnel.PoderTunnel, r *http.Request, targetURL string, w http.ResponseWriter) {
+	log.Printf("ws relay start: %s conn=%q upgrade=%q", targetURL, r.Header.Get("Connection"), r.Header.Get("Upgrade"))
 	conn, err := t.OpenRaw(r.Context())
 	if err != nil {
 		http.Error(w, "tunnel unavailable", http.StatusBadGateway)

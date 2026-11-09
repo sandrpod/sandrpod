@@ -1090,6 +1090,7 @@ func isUpgradeRequest(r *http.Request) bool {
 // connection. The tunnel path carries WebSockets for sandbox previews: every
 // hop must hand the raw stream through, an HTTP client cannot.
 func proxyUpgradeTo(w http.ResponseWriter, r *http.Request, targetURL string) {
+	log.Printf("ws relay start (pode): %s conn=%q upgrade=%q", targetURL, r.Header.Get("Connection"), r.Header.Get("Upgrade"))
 	u, err := url.Parse(targetURL)
 	if err != nil {
 		http.Error(w, "bad upstream url", http.StatusInternalServerError)
