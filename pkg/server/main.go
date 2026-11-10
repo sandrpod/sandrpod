@@ -360,6 +360,11 @@ func startFleetReapers(ctx context.Context, stores podpkg.Stores, tunnelStore *t
 	log.Printf("Fleet reapers: offline after %v, reclaim after %v", offline, reap)
 	go cleanupOfflinePoders(ctx, stores.Poders, tunnelStore, offline)
 	go reapOfflinePoders(ctx, stores.Poders, reap)
+	// Cloud-side reconciliation: a VM can outlive its poder record (deleted by
+	// hand, or the create failed after RunInstances), and nothing in the store
+	// walk above can see it. This sweep asks the providers and releases what
+	// nobody owns. Opt-in: SANDRPOD_CLOUD_SWEEP=alert|delete.
+	startCloudSweeper(ctx, stores.Poders)
 
 	ttl := time.Duration(0)
 	if poderIdleTTL != nil {
