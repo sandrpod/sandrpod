@@ -2037,6 +2037,15 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
 	}))
 
+	// MCP: agents call the sandbox through the protocol instead of an SDK. Each
+	// tool re-dispatches into this same mux, so authorization, validation and
+	// the persistence semantics are the ones the REST API already enforces.
+	mux.Handle("/mcp", authMiddleware(newMCPHandler(func(r *http.Request) *captureWriter {
+		rec := newCaptureWriter()
+		mux.ServeHTTP(rec, r)
+		return rec
+	}).ServeHTTP))
+
 	return mux
 }
 
