@@ -31,6 +31,9 @@ permissions:
 
 jobs:
   images:
+    # This workflow targets GitHub (ghcr.io + actions/*). The Gitea runner cannot
+    # fetch those actions, so skip it there instead of reporting a failure.
+    if: ${{ github.server_url == 'https://github.com' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
