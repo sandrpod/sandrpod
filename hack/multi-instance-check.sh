@@ -148,7 +148,10 @@ VALUES ('job-mi-lost', 'CREATE_SANDBOX', 'PENDING', 'mi-lost-box', '$PODER_ID',
         to_char((now() at time zone 'utc') - interval '3 minutes','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'))" >/dev/null
 pass "planted a PENDING job that was never delivered"
 
-for _ in $(seq 1 40); do
+# The resumer ticks on an interval and the row has to age past ResumeStaleAfter
+# first, so this is a race against the clock rather than a logic check: give it a
+# generous window (2 minutes) instead of failing on a slow runner.
+for _ in $(seq 1 60); do
   status=$(psql_run "select status from jobs where id='job-mi-lost'")
   [ "$status" = "COMPLETED" ] && break
   sleep 2
