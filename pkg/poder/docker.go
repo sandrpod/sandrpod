@@ -201,6 +201,16 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	// reattaches the same data instead of starting from scratch.
 	if req.PersistData {
 		wsVol := WorkspaceVolumeName(req.Name)
+		// A sandbox created from a snapshot inherits the image layers but not the
+		// source's volume (docker commit excludes mounts). Copy it so a "fork"
+		// actually carries the working state it was forked from.
+		if src := p.snapshotSource(ctx, imageName); src != "" {
+			if err := p.copyVolume(ctx, WorkspaceVolumeName(src), wsVol); err != nil {
+				log.Printf("poder: copy snapshot workspace %s -> %s failed (fork starts with an empty /workspace): %v", src, req.Name, err)
+			} else {
+				log.Printf("poder: forked workspace from %s into volume %s", src, wsVol)
+			}
+		}
 		hostConfig.Mounts = append(hostConfig.Mounts, mount.Mount{
 			Type:   mount.TypeVolume,
 			Source: wsVol,
@@ -359,6 +369,57 @@ func (p *DockerPoder) UnpausePod(ctx context.Context, podID string) error {
 	return nil
 }
 
+// snapshotSource returns the sandbox name an image was committed from, if the
+// image carries the snapshot label.
+func (p *DockerPoder) snapshotSource(ctx context.Context, imageName string) string {
+	info, _, err := p.dockerClient.ImageInspectWithRaw(ctx, imageName)
+	if err != nil || info.Config == nil {
+		return ""
+	}
+	return info.Config.Labels["sandrpod.snapshot-of"]
+}
+
+// toolboxImage is the image used for one-shot helper containers (volume copies).
+func (p *DockerPoder) toolboxImage() string {
+	if img := os.Getenv("SANDRPOD_TOOLBOX_IMAGE"); img != "" {
+		return img
+	}
+	return "sandrpod-toolbox:v2"
+}
+
+// copyVolume copies one docker volume into another using a throwaway container
+// from the toolbox image (already present on a worker; no registry round-trip).
+// It is best-effort: a fork with an empty workspace is still a usable sandbox.
+func (p *DockerPoder) copyVolume(ctx context.Context, from, to string) error {
+	cmd := []string{"sh", "-c", "cp -a /from/. /to/ 2>/dev/null || true"}
+	resp, err := p.dockerClient.ContainerCreate(ctx,
+		&container.Config{Image: p.toolboxImage(), Cmd: cmd},
+		&container.HostConfig{Mounts: []mount.Mount{
+			{Type: mount.TypeVolume, Source: from, Target: "/from", ReadOnly: true},
+			{Type: mount.TypeVolume, Source: to, Target: "/to"},
+		}},
+		nil, nil, "")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		_ = p.dockerClient.ContainerRemove(context.Background(), resp.ID, container.RemoveOptions{Force: true})
+	}()
+	if err := p.dockerClient.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		return err
+	}
+	statusCh, errCh := p.dockerClient.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	select {
+	case err := <-errCh:
+		return err
+	case st := <-statusCh:
+		if st.StatusCode != 0 {
+			return fmt.Errorf("volume copy exited %d", st.StatusCode)
+		}
+	}
+	return nil
+}
+
 // WorkspaceVolumeName is the volume a sandbox's /workspace lives in. Derived
 // from the sandbox name so a retried create reattaches the same data, and so
 // DeletePod can remove exactly the right volume.
@@ -379,9 +440,20 @@ func (p *DockerPoder) SnapshotPod(ctx context.Context, podID, imageName string) 
 		return "", fmt.Errorf("invalid snapshot image name %q: %w", imageName, err)
 	}
 	ref = reference.TagNameOnly(ref)
+	// Record which sandbox this image came from: docker commit does not include
+	// mounted volumes, so a fork from this image starts with an EMPTY /workspace
+	// unless the create path copies the source volume across. The label is how
+	// it knows which one to copy.
+	changes := []string{}
+	if info, err := p.dockerClient.ContainerInspect(ctx, podID); err == nil {
+		if src := info.Config.Labels["sandrpod/sandbox-name"]; src != "" {
+			changes = append(changes, "LABEL sandrpod.snapshot-of="+src)
+		}
+	}
 	if _, err := p.dockerClient.ContainerCommit(ctx, podID, container.CommitOptions{
 		Reference: ref.String(),
 		Comment:   "sandrpod snapshot",
+		Changes:   changes,
 	}); err != nil {
 		return "", fmt.Errorf("failed to commit container %s: %w", podID, err)
 	}
