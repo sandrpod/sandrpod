@@ -110,3 +110,19 @@ curl -s "$API/api/v1/sandboxes/execute?sandbox=gpu-job" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"code":"nvidia-smi --query-gpu=name,memory.total --format=csv,noheader","language":"bash"}'
 ```
+
+## Snapshots and where they live
+
+A snapshot is `docker commit` on one worker: the image exists **only there**.
+The platform has no image registry, which has three consequences worth knowing:
+
+- **Fork on the same node.** The console pins the sandbox to the node holding the
+  chosen snapshot; creating it elsewhere fails with `No such image`.
+- **One copy per node.** The same tag on two workers is two images; the console
+  lists one row per tag and deletes every copy.
+- **Names overwrite.** `sandrpod-snapshot/<sandbox>:latest` is the default, so two
+  snapshots of the same sandbox on the same worker replace each other — pass a
+  distinct tag (e.g. a timestamp) when the history matters.
+
+Moving snapshots between nodes needs a registry (`docker push`/`pull`), which is
+a deployment decision, not something the engine does behind your back.
