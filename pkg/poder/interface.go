@@ -62,6 +62,10 @@ type CreatePodRequest struct {
 	// CPUCores and MemoryMB, when > 0, cap the container's resources.
 	CPUCores float64 `json:"cpu_cores,omitempty"`
 	MemoryMB int64   `json:"memory_mb,omitempty"`
+	// GPU is the number of GPUs to expose (0 = none). Implemented with docker's
+	// DeviceRequests; a driver without that support rejects the create instead of
+	// silently running CPU-only.
+	GPU int `json:"gpu,omitempty"`
 	// PersistData mounts a docker volume at /workspace so the sandbox's files
 	// survive the container: an idle sandbox is stopped (not deleted) to release
 	// CPU and memory, and resumed later with its data intact. Drivers that

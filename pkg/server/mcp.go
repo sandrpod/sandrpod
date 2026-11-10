@@ -125,6 +125,7 @@ func builtinMCPTools() []mcpTool {
 					"poder_id":     strArg(a, "node"),
 					"region":       strArg(a, "region"),
 					"persist_data": boolArg(a, "persist", true),
+					"gpu":          int(floatArg(a, "gpu", 0)),
 				}
 				if body["name"] == "" {
 					return "", "", nil, fmt.Errorf("name is required")

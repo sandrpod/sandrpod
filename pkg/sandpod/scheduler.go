@@ -660,10 +660,17 @@ func shellQuoteSingleValue(s string) string {
 // needs. Only per-pod egress lives here today: everything else is enforced
 // inside the toolbox, which every worker has.
 func capabilityRequirement(req *CreateSandboxRequest) []string {
+	require := []string{}
 	if req.Network != nil {
-		return []string{CapabilityEgress}
+		require = append(require, CapabilityEgress)
 	}
-	return nil
+	// A GPU sandbox on a worker without the nvidia runtime would run on the CPU
+	// and fail somewhere deep inside CUDA, so demand the capability up front and
+	// let placement answer "no capable worker" instead.
+	if req.GPU > 0 {
+		require = append(require, CapabilityGPU)
+	}
+	return require
 }
 
 // onlineWithoutCapability counts workers that are online and match the region

@@ -71,6 +71,9 @@ type CreateSandboxRequest struct {
 	// pass straight through the server → poder forwarding.
 	CPUCores float64 `json:"cpu_cores,omitempty"`
 	MemoryMB int64   `json:"memory_mb,omitempty"`
+	// GPU is how many GPUs the sandbox needs (0 = none). Placement requires a
+	// worker advertising the gpu capability; the container gets DeviceRequests.
+	GPU int `json:"gpu,omitempty"`
 	// Workspace is the tenant this sandbox belongs to. It is NOT part of the
 	// wire format: the control plane fills it from the caller's identity and
 	// uses it only to choose a worker. Empty means "no placement scoping".

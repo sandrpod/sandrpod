@@ -89,6 +89,12 @@ func (p *PoderInfo) HasCapability(name string) bool {
 // starts containers with no route policy at all.
 const CapabilityEgress = "egress"
 
+// CapabilityGPU means the worker can hand a container real GPUs (the nvidia
+// container runtime is installed and a device is visible). A sandbox that asks
+// for a GPU is only placed on a worker that advertises this — the alternative is
+// a CUDA job that fails confusingly on a CPU host.
+const CapabilityGPU = "gpu"
+
 // Control-plane capabilities, advertised by GET /api/v1/capabilities. They are
 // separate names from the worker's because they describe different halves of
 // the same feature (the rules the server stores, the decisions it makes).

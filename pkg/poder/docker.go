@@ -229,6 +229,16 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	if req.MemoryMB > 0 {
 		hostConfig.Memory = req.MemoryMB * 1024 * 1024
 	}
+	if req.GPU > 0 {
+		// The nvidia container runtime injects the driver and maps /dev/nvidia*.
+		// Count -1 would mean "all"; we allocate exactly what was asked for so
+		// two GPU sandboxes cannot collide on the same device.
+		hostConfig.DeviceRequests = []container.DeviceRequest{{
+			Driver:       "nvidia",
+			Count:        req.GPU,
+			Capabilities: [][]string{{"gpu"}},
+		}}
+	}
 
 	resp, err := p.dockerClient.ContainerCreate(ctx, containerConfig, hostConfig, nil, nil, podID)
 	if err != nil {
