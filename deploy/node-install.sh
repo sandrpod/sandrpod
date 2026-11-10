@@ -34,6 +34,14 @@ TOOLBOX_IMAGE="${SANDRPOD_TOOLBOX_IMAGE:-ghcr.io/sandrpod/toolbox:latest}"
 EGRESS_IMAGE="${SANDRPOD_EGRESS_IMAGE:-ghcr.io/sandrpod/egress-proxy:latest}"
 PODER_IMAGE="${SANDRPOD_PODER_IMAGE:-ghcr.io/sandrpod/poder:latest}"
 SWAP_GB="${SANDRPOD_SWAP_GB:-4}"
+# Preview URLs and OAuth callbacks need the wildcard domain the control plane
+# serves sandboxes on; without it a desktop/browser sandbox is unreachable.
+E2B_DOMAIN="${SANDRPOD_E2B_DOMAIN:-}"
+# Snapshots are pushed to (and pulled from) this registry. Empty = snapshots stay
+# local to the worker that made them.
+REGISTRY="${SANDRPOD_REGISTRY:-}"
+REGISTRY_USER="${SANDRPOD_REGISTRY_USER:-}"
+REGISTRY_PASSWORD="${SANDRPOD_REGISTRY_PASSWORD:-}"
 ASSUME_YES=0
 DRY_RUN=0
 
@@ -65,6 +73,10 @@ Turn a fresh machine into a SandrPod worker.
   --toolbox-image IMG    sandbox base image
   --poder-image IMG      worker image
   --egress-image IMG     egress proxy image
+  --e2b-domain DOMAIN    sandbox wildcard domain for preview URLs (SANDRPOD_E2B_DOMAIN)
+  --registry HOST        image registry for snapshots (SANDRPOD_REGISTRY)
+  --registry-user USER   registry username
+  --registry-password PW registry password or token
   --yes                  do not ask for confirmation
   --dry-run              print what would happen, change nothing
   -h, --help             this text
@@ -92,6 +104,10 @@ while [ $# -gt 0 ]; do
     --toolbox-image) TOOLBOX_IMAGE="$2"; shift 2 ;;
     --poder-image) PODER_IMAGE="$2"; shift 2 ;;
     --egress-image) EGRESS_IMAGE="$2"; shift 2 ;;
+    --e2b-domain) E2B_DOMAIN="$2"; shift 2 ;;
+    --registry) REGISTRY="$2"; shift 2 ;;
+    --registry-user) REGISTRY_USER="$2"; shift 2 ;;
+    --registry-password) REGISTRY_PASSWORD="$2"; shift 2 ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     --*=*) key="${1%%=*}"; val="${1#*=}"; shift; set -- "$key" "$val" "$@" ;;
     --dry-run) DRY_RUN=1; shift ;;
@@ -119,7 +135,7 @@ confirm() { # confirm <question>, default yes
 
 # ─── 0. preflight ───────────────────────────────────────────────────────────
 step "Checking this machine"
-[ "$(id -u)" = "0" ] || die "run as root (sudo -i, or sudo $0 …)"
+[ "$(id -u)" = "0" ] || [ "$DRY_RUN" = "1" ] || die "run as root (sudo -i, or sudo $0 …)"
 [ "$(uname -s)" = "Linux" ] || die "this script is for Linux. On macOS the worker runs in Docker Desktop instead — see docs.sandrpod.com/workers"
 
 ARCH="$(uname -m)"
@@ -372,11 +388,19 @@ if [ "$DRY_RUN" = "0" ] && command -v docker >/dev/null 2>&1 && docker ps -a --f
   run docker rm -f "$WORKER_NAME"
 fi
 
+WORKER_ENV=( -e SANDRPOD_TOOLBOX_IMAGE="$TOOLBOX_IMAGE" )
+if [ -n "$E2B_DOMAIN" ]; then WORKER_ENV+=( -e SANDRPOD_E2B_DOMAIN="$E2B_DOMAIN" ); fi
+if [ -n "$REGISTRY" ]; then
+  WORKER_ENV+=( -e SANDRPOD_REGISTRY="$REGISTRY" )
+  [ -n "$REGISTRY_USER" ] && WORKER_ENV+=( -e SANDRPOD_REGISTRY_USER="$REGISTRY_USER" )
+  [ -n "$REGISTRY_PASSWORD" ] && WORKER_ENV+=( -e SANDRPOD_REGISTRY_PASSWORD="$REGISTRY_PASSWORD" )
+fi
+
 run docker run -d --name "$WORKER_NAME" --restart=unless-stopped \
   --network host \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v pode-state:/var/lib/sandrpod \
-  -e SANDRPOD_TOOLBOX_IMAGE="$TOOLBOX_IMAGE" \
+  "${WORKER_ENV[@]}" \
   "$PODER_IMAGE" \
   -api-url="$API_URL" -token="$JOIN_TOKEN" -region="$REGION"
 
@@ -389,6 +413,24 @@ if [ "$DRY_RUN" = "0" ]; then
   else
     printf '\n%s! the worker has not connected yet%s\n' "$C_WARN" "$C_OFF"
     printf '    check:  docker logs -f %s\n' "$WORKER_NAME"
+  fi
+fi
+
+# A GPU worker needs the driver AND the nvidia container runtime; the worker
+# detects the runtime through the docker daemon and only then advertises the gpu
+# capability. Say plainly what is missing instead of letting a GPU create fail
+# with "no capable worker".
+if command -v nvidia-smi >/dev/null 2>&1; then
+  step "GPU detected"
+  info "$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+  if docker info 2>/dev/null | grep -qi "Runtimes:.*nvidia"; then
+    info "nvidia container runtime registered — this worker will advertise \"gpu\""
+  else
+    warn "the nvidia container runtime is NOT registered, so GPU sandboxes cannot land here."
+    info "install it, then restart the worker:"
+    info "  apt-get install -y nvidia-container-toolkit && nvidia-ctk runtime configure --runtime=docker && systemctl restart docker"
+    info "  docker restart ${WORKER_NAME}"
+    info "GPU sandboxes also need a glibc image (sandrpod-toolbox:ubuntu) — Alpine cannot run the injected driver binaries."
   fi
 fi
 
