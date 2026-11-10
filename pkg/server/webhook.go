@@ -78,13 +78,16 @@ func notifyEvent(event string, data map[string]any) {
 // resources are what the caller asked for, not a property of the name.
 func sandboxEvent(sb *podpkg.SandboxInfo, extra map[string]any) map[string]any {
 	out := map[string]any{
-		"name":       sb.Name,
-		"provider":   sb.ProviderType,
-		"state":      string(sb.State),
-		"owner":      sb.Owner,
-		"region":     sb.Region,
-		"cpu_cores":  sb.CPUCores,
-		"memory_mb":  sb.MemoryMB,
+		"name":      sb.Name,
+		"provider":  sb.ProviderType,
+		"state":     string(sb.State),
+		"owner":     sb.Owner,
+		"region":    sb.Region,
+		"cpu_cores": sb.CPUCores,
+		"memory_mb": sb.MemoryMB,
+		// gpu rides along for metering: a GPU sandbox costs an order of magnitude
+		// more than the vCPU numbers suggest.
+		"gpu":        sb.GPU,
 		"poder_id":   sb.PoderID,
 		"created_at": sb.CreatedAt.UTC().Format(time.RFC3339),
 	}
