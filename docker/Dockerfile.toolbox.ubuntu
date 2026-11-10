@@ -1,0 +1,77 @@
+# Copyright 2026 SandrPod Contributors
+# Toolbox 镜像 - Go 实现代码执行服务
+
+# 构建阶段跑在 BUILDPLATFORM（原生架构）上做交叉编译，
+# 避免 buildx 多架构时整个 Go 编译落在 QEMU 仿真里（慢一个数量级）。
+# BUILDPLATFORM is only injected by buildx; without it `FROM --platform=` gets an
+# empty string and the build fails with "failed to parse platform". Default it, and
+# pass --build-arg BUILDPLATFORM=linux/arm64 on an arm64 host without buildx.
+ARG BUILDPLATFORM
+FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.27-alpine AS builder
+
+WORKDIR /app
+
+# 安装依赖
+RUN apk add --no-cache git
+
+# 复制源码
+COPY . .
+
+# 构建 toolbox + mcp-gateway（E2B `mcp-gateway` 二进制的 drop-in，供
+# Sandbox.create({mcp}) 在沙箱内 `mcp-gateway --config …` 时调用）
+ARG TARGETOS TARGETARCH
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto go build -ldflags="-s -w" -o /toolbox ./cmd/toolbox
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto go build -ldflags="-s -w" -o /mcp-gateway ./cmd/mcp-gateway
+
+# 最终镜像
+# GPU 变体：NVIDIA 注入的 nvidia-smi/driver 库是 glibc 二进制，alpine(musl) 跑不起来，
+# 所以 GPU 沙箱用这个 ubuntu 基础镜像。其他部分与 alpine 版一致。
+FROM ubuntu:22.04
+
+# Runtime deps. nodejs+npm provide `npx`, which the MCP bridge uses to spawn
+# npx-based MCP servers (and the `mcp-remote` shim for remote HTTP servers).
+# jq lets in-sandbox agents safely read-modify-write mcp.json (see the
+# register-mcp skill). python3/bash/git/curl support code execution.
+# GNU grep, not BusyBox's. Agent frameworks build grep commands with GNU flags
+# — deepagents' default backend runs `grep -rHnFZ`, and BusyBox rejects -Z. The
+# command is wrapped in `2>/dev/null || true`, so the failure is silent: the
+# agent is told the file contains nothing rather than that grep broke.
+# findutils for the same reason (`find -printf`).
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates tzdata python3 python3-numpy python3-matplotlib python3-pandas \
+      nodejs npm bash git curl jq grep findutils procps \
+ && rm -rf /var/lib/apt/lists/*
+
+# Data-science stack for `run_code` (chart output + DataFrames). Installed as
+# three separate layers (numpy → matplotlib → pandas) rather than one, so each
+# image blob stays ~40-60 MB instead of one ~150 MB layer — smaller blobs push
+# and pull far more reliably over flaky links/proxies. Alpine's prebuilt musl
+# packages avoid a slow from-source pip build.
+# numpy/matplotlib/pandas come from the apt line above (glibc wheels).
+
+# uv + uvx: the de-facto launcher for Python MCP servers (e.g. uvx mcp-server-git).
+# Shipped as static binaries from the official image — no Python build deps.
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /usr/local/bin/
+
+WORKDIR /workspace
+
+# MCP bridge config location. Placed under /workspace so an in-sandbox agent
+# can edit it directly; the bridge hot-reloads on change and exposes the new
+# tools at /mcp. The dir is pre-created so the first write needs no mkdir.
+ENV SANDRPOD_MCP_CONFIG=/workspace/.sandrpod/mcp.json
+RUN mkdir -p /workspace/.sandrpod
+
+# 复制二进制
+COPY --from=builder /toolbox /app/toolbox
+# mcp-gateway on PATH so the unmodified E2B SDK's Sandbox.create({mcp}) can run
+# `mcp-gateway --config …` inside the sandbox. It serves E2B-compatible MCP
+# Streamable-HTTP on :50005, reached from outside at 50005-<id>.<domain>/mcp.
+COPY --from=builder /mcp-gateway /usr/local/bin/mcp-gateway
+
+EXPOSE 8080
+
+# MCP bridge is enabled by default (-mcp-enabled); it starts cleanly even when
+# mcp.json is absent and picks it up on create.
+ENTRYPOINT ["/app/toolbox"]
+CMD ["-port=8080"]
