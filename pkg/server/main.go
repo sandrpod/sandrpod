@@ -1220,6 +1220,11 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			SizeBytes int64  `json:"size_bytes"`
 		}
 		out := make([]row, 0)
+		// The same image can live on several workers (it was committed on one,
+		// listed from each). Dedupe by image: a user thinks in snapshots, not in
+		// copies, and a duplicate row invites deleting "one of them" that is
+		// actually the same tag twice.
+		seen := map[string]bool{}
 		for _, pdr := range poderStore.List() {
 			if pdr.State != podpkg.PoderStateOnline {
 				continue
@@ -1247,6 +1252,10 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			resp.Body.Close()
 			cancel()
 			for _, sn := range payload.Snapshots {
+				if seen[sn.Image] {
+					continue
+				}
+				seen[sn.Image] = true
 				out = append(out, row{Image: sn.Image, Source: sn.Source, PoderID: pdr.ID, CreatedAt: sn.CreatedAt, SizeBytes: sn.SizeBytes})
 			}
 		}
