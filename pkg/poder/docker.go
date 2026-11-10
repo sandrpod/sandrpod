@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -24,6 +25,7 @@ import (
 	imagetypes "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
+	registry "github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 )
@@ -143,7 +145,12 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	// 1.8s against a local image, which was the single largest component of a
 	// 4.2s cold start.
 	if _, _, ierr := p.dockerClient.ImageInspectWithRaw(ctx, imageName); ierr != nil {
-		if rc, perr := p.dockerClient.ImagePull(ctx, imageName, imagetypes.PullOptions{}); perr == nil {
+		pullOpts := imagetypes.PullOptions{}
+		if reg := registryFromEnv(); reg.Host != "" && strings.HasPrefix(imageName, reg.Host) {
+			encoded, _ := json.Marshal(reg.auth())
+			pullOpts.RegistryAuth = string(encoded)
+		}
+		if rc, perr := p.dockerClient.ImagePull(ctx, imageName, pullOpts); perr == nil {
 			_, _ = io.Copy(io.Discard, rc)
 			_ = rc.Close()
 		} else {
@@ -454,6 +461,70 @@ func (p *DockerPoder) HasGPU(ctx context.Context) bool {
 	return ok
 }
 
+// registryConfig is the optional image registry snapshots are pushed to. Without
+// it a snapshot is a container-commit on one worker only: usable for a fork on
+// that machine, invisible everywhere else.
+type registryConfig struct {
+	Host     string
+	User     string
+	Password string
+}
+
+func registryFromEnv() registryConfig {
+	return registryConfig{
+		Host:     strings.TrimSpace(os.Getenv("SANDRPOD_REGISTRY")),
+		User:     os.Getenv("SANDRPOD_REGISTRY_USER"),
+		Password: os.Getenv("SANDRPOD_REGISTRY_PASSWORD"),
+	}
+}
+
+// ref builds the repository reference a snapshot image is pushed to.
+func (r registryConfig) ref(sandbox, tag string) string {
+	host := strings.TrimSuffix(r.Host, "/")
+	return host + "/sandrpod-snapshots/" + sandbox + ":" + tag
+}
+
+func (r registryConfig) auth() registry.AuthConfig {
+	return registry.AuthConfig{Username: r.User, Password: r.Password}
+}
+
+// pushSnapshot tags the locally committed image into the registry reference and
+// pushes it, so any worker can create from it.
+func (p *DockerPoder) pushSnapshot(ctx context.Context, localImage, sandbox, tag string) (string, error) {
+	reg := registryFromEnv()
+	if reg.Host == "" {
+		return localImage, nil
+	}
+	ref := reg.ref(sandbox, tag)
+	if err := p.dockerClient.ImageTag(ctx, localImage, ref); err != nil {
+		return localImage, fmt.Errorf("tag %s -> %s: %w", localImage, ref, err)
+	}
+	encoded, _ := json.Marshal(reg.auth())
+	rc, err := p.dockerClient.ImagePush(ctx, ref, imagetypes.PushOptions{RegistryAuth: string(encoded)})
+	if err != nil {
+		return localImage, fmt.Errorf("push %s: %w", ref, err)
+	}
+	defer rc.Close()
+	// The push stream reports failures inside the JSON body, not in the error.
+	var lastErr string
+	dec := json.NewDecoder(rc)
+	for {
+		var msg struct {
+			Error string `json:"error"`
+		}
+		if err := dec.Decode(&msg); err != nil {
+			break
+		}
+		if msg.Error != "" {
+			lastErr = msg.Error
+		}
+	}
+	if lastErr != "" {
+		return localImage, fmt.Errorf("push %s: %s", ref, lastErr)
+	}
+	return ref, nil
+}
+
 // toolboxImage is the image used for one-shot helper containers (volume copies).
 func (p *DockerPoder) toolboxImage() string {
 	if img := os.Getenv("SANDRPOD_TOOLBOX_IMAGE"); img != "" {
@@ -540,6 +611,28 @@ func (p *DockerPoder) SnapshotPod(ctx context.Context, podID, imageName string) 
 		Changes:   changes,
 	}); err != nil {
 		return "", fmt.Errorf("failed to commit container %s: %w", podID, err)
+	}
+	// Push to the registry when one is configured: a commit is local to this
+	// worker, and a snapshot nobody else can pull is a fork that only works on
+	// one machine.
+	sandbox := ""
+	tag := "latest"
+	if i := strings.LastIndex(imageName, ":"); i > 0 && !strings.Contains(imageName[i:], "/") {
+		tag = imageName[i+1:]
+	}
+	if info, err := p.dockerClient.ContainerInspect(ctx, podID); err == nil {
+		sandbox = info.Config.Labels["sandrpod/sandbox-name"]
+	}
+	if sandbox != "" {
+		pushed, perr := p.pushSnapshot(ctx, ref.String(), sandbox, tag)
+		if perr != nil {
+			log.Printf("poder: snapshot %s stays local (push failed): %v", ref.String(), perr)
+			return ref.String(), nil
+		}
+		if pushed != ref.String() {
+			log.Printf("poder: snapshot pushed to %s", pushed)
+			return pushed, nil
+		}
 	}
 	return ref.String(), nil
 }
