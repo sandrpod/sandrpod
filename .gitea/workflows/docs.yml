@@ -1,11 +1,7 @@
-# Build the documentation site on push to main and publish it.
+# Build the documentation site on push to main, and publish it when a deploy key
+# is configured. No `uses:` steps — see registry-images.yml for why.
 #
-# The site is served by Caddy from /var/www/docs on the control-plane host, so a
-# deploy needs a way to reach that host. The step is skipped (with a warning in
-# the log) when DEPLOY_SSH_KEY is absent — a fork without the key still gets the
-# build check, which is the part that catches broken links and bad front matter.
-#
-# Secrets: DEPLOY_SSH_KEY (private key), DEPLOY_HOST (e.g. 1.2.3.4)
+# Secrets: DEPLOY_SSH_KEY (private key), DEPLOY_HOST
 name: docs
 
 on:
@@ -19,25 +15,36 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-
-      - name: Build
-        working-directory: docs-site
+      - name: checkout
+        env:
+          TOKEN: ${{ github.token }}
+          SERVER: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
         run: |
+          set -eu
+          host="${SERVER#https://}"; host="${host#http://}"
+          git -c http.sslVerify=false clone --depth 1 \
+            "https://oauth2:${TOKEN}@${host}/${REPO}.git" src
+
+      - name: build
+        run: |
+          set -eu
+          cd src/docs-site
+          node --version || { echo "node missing on the runner image"; exit 1; }
           npm ci --no-audit --no-fund
           npm run build
           test -f .vitepress/dist/index.html
 
-      - name: Deploy
-        if: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+      - name: deploy
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           HOST: ${{ secrets.DEPLOY_HOST }}
         run: |
-          mkdir -p ~/.ssh && echo "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          set -eu
+          if [ -z "${SSH_KEY:-}" ] || [ -z "${HOST:-}" ]; then
+            echo "DEPLOY_SSH_KEY/DEPLOY_HOST unset — build-only run"
+            exit 0
+          fi
+          mkdir -p ~/.ssh && printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          rsync -az --delete docs-site/.vitepress/dist/ "root@$HOST:/var/www/docs/"
+          rsync -az --delete src/docs-site/.vitepress/dist/ "root@$HOST:/var/www/docs/"

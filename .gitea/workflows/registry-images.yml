@@ -1,15 +1,13 @@
 # Build the runtime images on every push to main and publish them to the
 # platform's own registry.
 #
-# The GitHub workflow publishes to ghcr.io; this one publishes where the workers
-# actually pull from (SANDRPOD_REGISTRY). Without it every node install ends up
-# building its own images, which is the difference between "join a machine in two
-# minutes" and "ssh in and docker build".
+# No `uses:` steps on purpose: this Gitea's runner cannot reach github.com, and a
+# `uses: actions/...@vN` step makes it try to clone the action from the Gitea host,
+# which answers 401 for actions it does not mirror — the whole job dies before the
+# first command. The clone below is the replacement and works on GitHub too.
 #
-# Secrets (Settings → Actions → Secrets):
-#   REGISTRY_HOST      e.g. registry.sandbox.sandrpod.com
-#   REGISTRY_USER      e.g. sandrpod
-#   REGISTRY_PASSWORD  the registry password
+# Secrets (repo → Settings → Actions → Secrets):
+#   REGISTRY_HOST / REGISTRY_USER / REGISTRY_PASSWORD
 name: registry images
 
 on:
@@ -38,17 +36,34 @@ jobs:
             dockerfile: docker/Dockerfile.desktop
             tag: desktop
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Log in to the registry
+      - name: checkout
+        env:
+          TOKEN: ${{ github.token }}
+          SERVER: ${{ github.server_url }}
+          REPO: ${{ github.repository }}
         run: |
-          echo "${{ secrets.REGISTRY_PASSWORD }}" | \
-            docker login "${{ secrets.REGISTRY_HOST }}" -u "${{ secrets.REGISTRY_USER }}" --password-stdin
+          set -eu
+          host="${SERVER#https://}"; host="${host#http://}"
+          git -c http.sslVerify=false clone --depth 1 \
+            "https://oauth2:${TOKEN}@${host}/${REPO}.git" src
+          cd src && git log --oneline -1
 
-      - name: Build ${{ matrix.name }}
+      - name: build and push ${{ matrix.name }}
+        env:
+          REGISTRY_HOST: ${{ secrets.REGISTRY_HOST }}
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-12)
-          IMG="${{ secrets.REGISTRY_HOST }}/sandrpod/${{ matrix.tag }}"
-          docker build -f "${{ matrix.dockerfile }}" -t "$IMG:$SHORT_SHA" -t "$IMG:latest" .
-          docker push "$IMG:$SHORT_SHA"
-          docker push "$IMG:latest"
+          set -eu
+          cd src
+          if [ -z "${REGISTRY_HOST:-}" ]; then
+            echo "REGISTRY_HOST is not set — skipping the publish, build only"
+          fi
+          IMG="${REGISTRY_HOST:-local}/sandrpod/${{ matrix.tag }}"
+          docker build -f "${{ matrix.dockerfile }}" -t "$IMG:latest" .
+          if [ -n "${REGISTRY_HOST:-}" ]; then
+            printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
+            docker tag "$IMG:latest" "$IMG:main-${GITHUB_SHA:-unknown}"
+            docker push "$IMG:main-${GITHUB_SHA:-unknown}"
+            docker push "$IMG:latest"
+          fi
