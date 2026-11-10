@@ -1,0 +1,54 @@
+# Build the runtime images on every push to main and publish them to the
+# platform's own registry.
+#
+# The GitHub workflow publishes to ghcr.io; this one publishes where the workers
+# actually pull from (SANDRPOD_REGISTRY). Without it every node install ends up
+# building its own images, which is the difference between "join a machine in two
+# minutes" and "ssh in and docker build".
+#
+# Secrets (Settings → Actions → Secrets):
+#   REGISTRY_HOST      e.g. registry.sandbox.sandrpod.com
+#   REGISTRY_USER      e.g. sandrpod
+#   REGISTRY_PASSWORD  the registry password
+name: registry images
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "pkg/**"
+      - "cmd/**"
+      - "docker/**"
+      - ".gitea/workflows/registry-images.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: toolbox
+            dockerfile: docker/Dockerfile.toolbox
+            tag: toolbox
+          - name: poder
+            dockerfile: docker/Dockerfile.poder
+            tag: poder
+          - name: desktop
+            dockerfile: docker/Dockerfile.desktop
+            tag: desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to the registry
+        run: |
+          echo "${{ secrets.REGISTRY_PASSWORD }}" | \
+            docker login "${{ secrets.REGISTRY_HOST }}" -u "${{ secrets.REGISTRY_USER }}" --password-stdin
+
+      - name: Build ${{ matrix.name }}
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-12)
+          IMG="${{ secrets.REGISTRY_HOST }}/sandrpod/${{ matrix.tag }}"
+          docker build -f "${{ matrix.dockerfile }}" -t "$IMG:$SHORT_SHA" -t "$IMG:latest" .
+          docker push "$IMG:$SHORT_SHA"
+          docker push "$IMG:latest"

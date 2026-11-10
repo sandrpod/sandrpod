@@ -1,0 +1,43 @@
+# Build the documentation site on push to main and publish it.
+#
+# The site is served by Caddy from /var/www/docs on the control-plane host, so a
+# deploy needs a way to reach that host. The step is skipped (with a warning in
+# the log) when DEPLOY_SSH_KEY is absent — a fork without the key still gets the
+# build check, which is the part that catches broken links and bad front matter.
+#
+# Secrets: DEPLOY_SSH_KEY (private key), DEPLOY_HOST (e.g. 1.2.3.4)
+name: docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docs-site/**"
+      - ".gitea/workflows/docs.yml"
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build
+        working-directory: docs-site
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+          test -f .vitepress/dist/index.html
+
+      - name: Deploy
+        if: ${{ secrets.DEPLOY_SSH_KEY != '' }}
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          mkdir -p ~/.ssh && echo "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          rsync -az --delete docs-site/.vitepress/dist/ "root@$HOST:/var/www/docs/"
