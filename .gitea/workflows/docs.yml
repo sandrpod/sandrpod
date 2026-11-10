@@ -31,13 +31,33 @@ jobs:
             "${proto}://oauth2:${TOKEN}@${host}/${REPO}.git" src
 
       - name: build
+        env:
+          REGISTRY_HOST: ${{ secrets.REGISTRY_HOST }}
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
+          NPM_REGISTRY: https://registry.npmmirror.com
         run: |
           set -eu
-          cd src/docs-site
-          node --version || { echo "node missing on the runner image"; exit 1; }
-          npm ci --no-audit --no-fund
-          npm run build
-          test -f .vitepress/dist/index.html
+          # The runner image carries no node. Rather than depend on what it has,
+          # build inside a node container from our own registry — the same reason
+          # the image builds use sandrpod-base/* (Docker Hub is unreachable here).
+          if command -v node >/dev/null 2>&1; then
+            echo "using the runner's node $(node --version)"
+            cd src/docs-site
+            npm ci --no-audit --no-fund --registry="$NPM_REGISTRY"
+            npm run build
+          else
+            echo "no node on the runner; building in sandrpod-base/node:22-alpine"
+            if [ -n "${REGISTRY_HOST:-}" ]; then
+              printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
+            fi
+            docker run --rm \
+              -v "$PWD/src/docs-site:/w" -w /w \
+              -e npm_config_registry="$NPM_REGISTRY" \
+              "${REGISTRY_HOST:-local}/sandrpod-base/node:22-alpine" \
+              sh -c "npm ci --no-audit --no-fund && npm run build"
+          fi
+          test -f src/docs-site/.vitepress/dist/index.html
 
       - name: deploy
         env:
