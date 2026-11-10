@@ -33,6 +33,7 @@ type SandboxInfo struct {
 	// long gone by the time a sandbox is listed or reaped.
 	CPUCores    float64 `json:"cpu_cores,omitempty"`
 	MemoryMB    int64   `json:"memory_mb,omitempty"`
+	GPU         int     `json:"gpu,omitempty"`
 	PoderID     string  `json:"poder_id,omitempty"`     // owning Poder ID
 	PoderURL    string  `json:"poder_url,omitempty"`    // Poder API URL
 	ContainerID string  `json:"container_id,omitempty"` // actual container ID

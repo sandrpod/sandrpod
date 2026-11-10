@@ -1269,6 +1269,20 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				}
 			}
 
+			// GPU guardrails: a GPU sandbox costs 10-30x a CPU one, so cap how
+			// many one user may hold and clamp its idle TTL. Both are configurable
+			// (SANDRPOD_GPU_MAX_PER_OWNER / SANDRPOD_GPU_MAX_TTL); zero disables.
+			if req.GPU > 0 {
+				q := gpuQuotaFromEnv()
+				if refusal := checkGPUQuota(q, &req, ident.Name, sandboxStore.List()); refusal != "" {
+					http.Error(w, refusal, http.StatusForbidden)
+					return
+				}
+				if clamped, asked, capped := clampGPUTTL(q, &req); clamped {
+					log.Printf("create %s: GPU sandbox asked for ttl %v, clamped to %v", req.Name, asked, capped)
+				}
+			}
+
 			if _, exists := sandboxStore.Get(req.Name); exists {
 				http.Error(w, fmt.Sprintf("sandbox %s already exists", req.Name), http.StatusConflict)
 				return
