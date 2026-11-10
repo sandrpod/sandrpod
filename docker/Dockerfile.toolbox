@@ -3,7 +3,9 @@
 
 # 构建阶段跑在 BUILDPLATFORM（原生架构）上做交叉编译，
 # 避免 buildx 多架构时整个 Go 编译落在 QEMU 仿真里（慢一个数量级）。
-# BUILDPLATFORM is only injected by buildx; without it `FROM --platform=` gets an
+# BUILDPLATFORM is only injected by buildx; without it `# FROM 引用的 ARG 必须是全局作用域（在第一个 FROM 之前声明）
+ARG RUNTIME_IMAGE=alpine:3.24
+FROM --platform=` gets an
 # empty string and the build fails with "failed to parse platform". Default it, and
 # pass --build-arg BUILDPLATFORM=linux/arm64 on an arm64 host without buildx.
 ARG BUILDPLATFORM
@@ -30,7 +32,6 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto go build -l
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto go build -ldflags="-s -w" -o /mcp-gateway ./cmd/mcp-gateway
 
 # 最终镜像
-ARG RUNTIME_IMAGE=alpine:3.24
 FROM ${RUNTIME_IMAGE}
 
 # Runtime deps. nodejs+npm provide `npx`, which the MCP bridge uses to spawn

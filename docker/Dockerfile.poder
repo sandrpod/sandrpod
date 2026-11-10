@@ -5,7 +5,9 @@
 # 避免 buildx 多架构时整个 Go 编译落在 QEMU 仿真里（慢一个数量级）。
 #
 # BUILDPLATFORM 只在 buildx 下自动注入。没有 buildx 的 docker（默认不带）会让它
-# 展开成空串，`FROM --platform=` 直接报 `failed to parse platform`——整条构建失败，
+# 展开成空串，`# FROM 引用的 ARG 必须是全局作用域（在第一个 FROM 之前声明）
+ARG RUNTIME_IMAGE=alpine:3.24
+FROM --platform=` 直接报 `failed to parse platform`——整条构建失败，
 # 和代码无关。给一个默认值即可两边都能用；arm64 机器没有 buildx 时传
 # `--build-arg BUILDPLATFORM=linux/arm64`。
 ARG BUILDPLATFORM
@@ -29,7 +31,6 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto \
     go build -ldflags="-s -w -X main.version=${VERSION}" -o /poder ./cmd/poder
 
 # 最终镜像
-ARG RUNTIME_IMAGE=alpine:3.24
 FROM ${RUNTIME_IMAGE}
 
 RUN apk add --no-cache ca-certificates tzdata

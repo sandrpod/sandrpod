@@ -11,6 +11,8 @@
 # 运行： docker run -p 6901:6901 sandrpod-desktop:v1 → 浏览器 https://localhost:6901
 # （沙箱里端口不映射，经 toolbox /proxy/6901 + preview URL 暴露）
 ARG GO_IMAGE=golang:1.27-bookworm
+# FROM 引用的 ARG 必须是全局作用域（在第一个 FROM 之前声明）
+ARG RUNTIME_IMAGE=ubuntu:22.04
 FROM ${GO_IMAGE} AS builder
 ARG GOPROXY=https://goproxy.cn,direct
 ENV GOPROXY=${GOPROXY} GOSUMDB=off
@@ -18,7 +20,6 @@ WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -o /toolbox ./cmd/toolbox
 
-ARG RUNTIME_IMAGE=ubuntu:22.04
 FROM ${RUNTIME_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/root
