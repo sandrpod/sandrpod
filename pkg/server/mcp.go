@@ -225,7 +225,7 @@ func builtinMCPTools() []mcpTool {
 		},
 		{
 			Name:        "sandbox_preview_url",
-			Description: "Return the URL that exposes a port from inside the sandbox.",
+			Description: "Return the signed URL that exposes a port from inside the sandbox (open it as-is: the token is in the query).",
 			InputSchema: obj(map[string]any{
 				"sandbox": str("sandbox name"),
 				"port":    num("port the service listens on inside the sandbox"),
@@ -236,7 +236,7 @@ func builtinMCPTools() []mcpTool {
 					return "", "", nil, fmt.Errorf("port must be 1..65535")
 				}
 				return http.MethodGet, "/api/v1/sandboxes/" + urlq(strArg(a, "sandbox")) +
-					"/toolbox/proxy/" + strconv.Itoa(p) + "/", nil, nil
+					"/preview/" + strconv.Itoa(p), nil, nil
 			},
 		},
 	}
