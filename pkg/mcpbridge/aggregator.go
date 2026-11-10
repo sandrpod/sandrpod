@@ -11,7 +11,7 @@ import (
 // NewAggregatorServer builds an *mcp-go* MCPServer that fronts the children
 // managed by mgr. Tool registrations are refreshed every time the manager
 // reports a change (children up/down or reload).
-func NewAggregatorServer(mgr *ChildManager) *server.MCPServer {
+func NewAggregatorServer(mgr *ChildManager, natives ...server.ServerTool) *server.MCPServer {
 	s := server.NewMCPServer(
 		"sandrpod-mcp-bridge",
 		"0.1.0",
@@ -33,7 +33,10 @@ func NewAggregatorServer(mgr *ChildManager) *server.MCPServer {
 	sync := func() {
 		// Replace the entire tool set so removed children's tools vanish.
 		current := mgr.AggregatedTools()
-		tools := make([]server.ServerTool, 0, len(current))
+		// Built-ins first: they are the sandbox's own surface (desktop control),
+		// and a name collision with a user MCP server should not shadow them.
+		tools := make([]server.ServerTool, 0, len(current)+len(natives))
+		tools = append(tools, natives...)
 		for _, t := range current {
 			tools = append(tools, server.ServerTool{
 				Tool:    t,

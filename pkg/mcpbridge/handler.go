@@ -22,7 +22,10 @@ import (
 //	mux.Handle("/mcp", bridgeHandler)
 //	mux.Handle("/mcp/", bridgeHandler)
 func NewHTTPHandler(mgr *ChildManager) http.Handler {
-	agg := NewAggregatorServer(mgr)
+	// The desktop tools are always advertised: an agent must be able to ask
+	// whether a screen exists, and a headless sandbox answers with a useful
+	// error rather than an empty tool list.
+	agg := NewAggregatorServer(mgr, DesktopTools()...)
 	streamable := server.NewStreamableHTTPServer(agg)
 
 	mux := http.NewServeMux()
