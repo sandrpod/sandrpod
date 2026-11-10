@@ -37,6 +37,7 @@ jobs:
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           NPM_REGISTRY: https://registry.npmmirror.com
           npm_config_replace_registry_host: always
+          DOCS_NO_GIT: "1"
         run: |
           set -eu
           # The runner image carries no node. Rather than depend on what it has,
@@ -45,7 +46,8 @@ jobs:
           if command -v node >/dev/null 2>&1; then
             echo "using the runner's node $(node --version)"
             cd src/docs-site
-            npm ci --no-audit --no-fund --registry="$NPM_REGISTRY"
+            rm -f package-lock.json
+            npm install --no-audit --no-fund --registry="$NPM_REGISTRY"
             npm run build
           else
             echo "no node on the runner; building in sandrpod-base/node:22-alpine"
@@ -56,8 +58,9 @@ jobs:
               -v "$PWD/src/docs-site:/w" -w /w \
               -e npm_config_registry="$NPM_REGISTRY" \
               -e npm_config_replace_registry_host=always \
+              -e DOCS_NO_GIT=1 \
               "${REGISTRY_HOST:-local}/sandrpod-base/node:22-alpine" \
-              sh -c "npm ci --no-audit --no-fund && npm run build"
+              sh -c "rm -f package-lock.json && npm install --no-audit --no-fund && npm run build"
           fi
           test -f src/docs-site/.vitepress/dist/index.html
 

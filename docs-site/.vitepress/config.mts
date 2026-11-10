@@ -69,7 +69,9 @@ export default defineConfig({
   cleanUrls: true,
   // The site's own README is for the repository, not a page.
   srcExclude: ["README.md"],
-  lastUpdated: true,
+  // VitePress shells out to `git` for the "last updated" line. A CI container may
+  // have no git (and no network to install one); DOCS_NO_GIT=1 builds without it.
+  lastUpdated: !process.env.DOCS_NO_GIT,
   head: [
     ["link", { rel: "icon", href: "/favicon.svg" }],
     ["meta", { name: "theme-color", content: "#0b1020" }],
