@@ -172,6 +172,20 @@ func main() {
 	// console needs a list to offer "create from snapshot"; without it a
 	// snapshot is a one-way door you can only use if you remember its name.
 	mux.HandleFunc("/snapshots", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			image := r.URL.Query().Get("image")
+			if image == "" {
+				http.Error(w, "image is required", http.StatusBadRequest)
+				return
+			}
+			if err := p.RemoveSnapshot(ctx, image); err != nil {
+				http.Error(w, fmt.Sprintf("remove snapshot: %v", err), http.StatusConflict)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"status": "removed", "image": image})
+			return
+		}
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return

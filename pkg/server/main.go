@@ -1155,6 +1155,59 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	// console can offer "create from snapshot" instead of asking the user to
 	// remember image tags.
 	mux.HandleFunc("/api/v1/snapshots", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodDelete {
+			image := r.URL.Query().Get("image")
+			poderID := r.URL.Query().Get("poder_id")
+			if image == "" {
+				http.Error(w, "image is required", http.StatusBadRequest)
+				return
+			}
+			// The image lives on one worker; senza a poder_id, ask every online
+			// worker that holds it (the same image may exist on several).
+			targets := []string{poderID}
+			if poderID == "" {
+				targets = nil
+				for _, pdr := range poderStore.List() {
+					if pdr.State == podpkg.PoderStateOnline {
+						targets = append(targets, pdr.ID)
+					}
+				}
+			}
+			removed := 0
+			var lastErr error
+			for _, id := range targets {
+				t, ok := tunnelStore.Get(id)
+				if !ok {
+					continue
+				}
+				reqCtx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+				req, _ := http.NewRequestWithContext(reqCtx, http.MethodDelete,
+					"http://poder/snapshots?image="+url.QueryEscape(image), nil)
+				resp, err := t.Client.Do(req)
+				cancel()
+				if err != nil {
+					lastErr = err
+					continue
+				}
+				resp.Body.Close()
+				if resp.StatusCode/100 == 2 {
+					removed++
+				} else if lastErr == nil {
+					lastErr = fmt.Errorf("worker %s answered %d", id, resp.StatusCode)
+				}
+			}
+			if removed == 0 {
+				msg := "no worker removed the image"
+				if lastErr != nil {
+					msg += ": " + lastErr.Error()
+				}
+				http.Error(w, msg, http.StatusConflict)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{"removed": removed, "image": image})
+			return
+		}
 		if r.Method != http.MethodGet {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return

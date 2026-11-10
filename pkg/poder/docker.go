@@ -21,7 +21,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
+	imagetypes "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -143,7 +143,7 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	// 1.8s against a local image, which was the single largest component of a
 	// 4.2s cold start.
 	if _, _, ierr := p.dockerClient.ImageInspectWithRaw(ctx, imageName); ierr != nil {
-		if rc, perr := p.dockerClient.ImagePull(ctx, imageName, image.PullOptions{}); perr == nil {
+		if rc, perr := p.dockerClient.ImagePull(ctx, imageName, imagetypes.PullOptions{}); perr == nil {
 			_, _ = io.Copy(io.Discard, rc)
 			_ = rc.Close()
 		} else {
@@ -402,7 +402,7 @@ type SnapshotInfo struct {
 // SnapshotImages lists the images SandrPod committed with SnapshotPod, newest
 // first. The label is what makes them OURS: a host may carry unrelated images.
 func (p *DockerPoder) SnapshotImages(ctx context.Context) ([]SnapshotInfo, error) {
-	list, err := p.dockerClient.ImageList(ctx, image.ListOptions{All: true})
+	list, err := p.dockerClient.ImageList(ctx, imagetypes.ListOptions{All: true})
 	if err != nil {
 		return nil, err
 	}
@@ -424,6 +424,21 @@ func (p *DockerPoder) SnapshotImages(ctx context.Context) ([]SnapshotInfo, error
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
 	return out, nil
+}
+
+// RemoveSnapshot deletes one snapshot image this worker committed. Refuses an
+// image that is not ours or is still in use — docker's own error explains the
+// latter, and the caller surfaces it.
+func (p *DockerPoder) RemoveSnapshot(ctx context.Context, image string) error {
+	info, _, err := p.dockerClient.ImageInspectWithRaw(ctx, image)
+	if err != nil {
+		return fmt.Errorf("image %s not found: %w", image, err)
+	}
+	if info.Config == nil || info.Config.Labels["sandrpod.snapshot-of"] == "" {
+		return fmt.Errorf("%s is not a SandrPod snapshot", image)
+	}
+	_, err = p.dockerClient.ImageRemove(ctx, image, imagetypes.RemoveOptions{Force: false, PruneChildren: true})
+	return err
 }
 
 // HasGPU reports whether this docker daemon can allocate NVIDIA GPUs: the nvidia
