@@ -88,19 +88,25 @@ func DesktopTools() []server.ServerTool {
 				}
 				x, _ := req.RequireFloat("x")
 				y, _ := req.RequireFloat("y")
-				button := req.GetString("button", "left")
+				// xdotool takes a button NUMBER, not a name: "click left" is a
+				// BadValue error at runtime, which surfaced only when the tool was
+				// actually exercised.
+				btn := map[string]string{"left": "1", "middle": "2", "right": "3"}[strings.ToLower(req.GetString("button", "left"))]
+				if btn == "" {
+					btn = "1"
+				}
 				args := []string{"mousemove", fmt.Sprintf("%d", int(x)), fmt.Sprintf("%d", int(y))}
 				if _, err := runX("xdotool", args...); err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
-				click := "click"
+				clickArgs := []string{"click", btn}
 				if req.GetBool("double", false) {
-					click = "click --repeat 2 --delay 80"
+					clickArgs = []string{"click", "--repeat", "2", "--delay", "80", btn}
 				}
-				if _, err := runX("xdotool", strings.Fields(click+" "+button)...); err != nil {
+				if _, err := runX("xdotool", clickArgs...); err != nil {
 					return mcp.NewToolResultError(err.Error()), nil
 				}
-				return mcp.NewToolResultText(fmt.Sprintf("clicked %s at %d,%d", button, int(x), int(y))), nil
+				return mcp.NewToolResultText(fmt.Sprintf("clicked button %s at %d,%d", btn, int(x), int(y))), nil
 			},
 		},
 		{
