@@ -9,7 +9,8 @@
 # 和代码无关。给一个默认值即可两边都能用；arm64 机器没有 buildx 时传
 # `--build-arg BUILDPLATFORM=linux/arm64`。
 ARG BUILDPLATFORM
-FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.27-alpine AS builder
+ARG GO_IMAGE=golang:1.27-alpine
+FROM --platform=${BUILDPLATFORM:-linux/amd64} ${GO_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -26,7 +27,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto \
     go build -ldflags="-s -w -X main.version=${VERSION}" -o /poder ./cmd/poder
 
 # 最终镜像
-FROM alpine:3.24
+ARG RUNTIME_IMAGE=alpine:3.24
+FROM ${RUNTIME_IMAGE}
 
 RUN apk add --no-cache ca-certificates tzdata
 

@@ -29,12 +29,18 @@ jobs:
           - name: toolbox
             dockerfile: docker/Dockerfile.toolbox
             tag: toolbox
+            go_image: golang:1.27-alpine
+            runtime_image: alpine:3.24
           - name: poder
             dockerfile: docker/Dockerfile.poder
             tag: poder
+            go_image: golang:1.27-alpine
+            runtime_image: alpine:3.24
           - name: desktop
             dockerfile: docker/Dockerfile.desktop
             tag: desktop
+            go_image: golang:1.27-bookworm
+            runtime_image: ubuntu:22.04
     steps:
       - name: checkout
         env:
@@ -64,7 +70,14 @@ jobs:
             echo "REGISTRY_HOST is not set — skipping the publish, build only"
           fi
           IMG="${REGISTRY_HOST:-local}/sandrpod/${{ matrix.tag }}"
-          docker build -f "${{ matrix.dockerfile }}" -t "$IMG:latest" .
+          # Base images come from our own registry: the CI host cannot pull from
+          # Docker Hub (a golang:1.27-alpine pull sat for 45 minutes and then died
+          # with "connection reset by peer"). We mirror the four bases we use.
+          BASE="${REGISTRY_HOST:-local}/sandrpod-base"
+          docker build \
+            --build-arg GO_IMAGE="${BASE}/${{ matrix.go_image }}" \
+            --build-arg RUNTIME_IMAGE="${BASE}/${{ matrix.runtime_image }}" \
+            -f "${{ matrix.dockerfile }}" -t "$IMG:latest" .
           if [ -n "${REGISTRY_HOST:-}" ]; then
             printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
             docker tag "$IMG:latest" "$IMG:main-${GITHUB_SHA:-unknown}"

@@ -10,12 +10,14 @@
 # 构建（arm64，Mac）：     docker build --build-arg TARGETARCH=arm64 -f docker/Dockerfile.desktop -t sandrpod-desktop:v1 .
 # 运行： docker run -p 6901:6901 sandrpod-desktop:v1 → 浏览器 https://localhost:6901
 # （沙箱里端口不映射，经 toolbox /proxy/6901 + preview URL 暴露）
-FROM golang:1.27-bookworm AS builder
+ARG GO_IMAGE=golang:1.27-bookworm
+FROM ${GO_IMAGE} AS builder
 WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -o /toolbox ./cmd/toolbox
 
-FROM ubuntu:22.04
+ARG RUNTIME_IMAGE=ubuntu:22.04
+FROM ${RUNTIME_IMAGE}
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/root
 # TARGETARCH 是 BuildKit 预置变量（构建机架构）；必须在使用它的 stage 内重新声明

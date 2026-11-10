@@ -7,7 +7,8 @@
 # empty string and the build fails with "failed to parse platform". Default it, and
 # pass --build-arg BUILDPLATFORM=linux/arm64 on an arm64 host without buildx.
 ARG BUILDPLATFORM
-FROM --platform=${BUILDPLATFORM:-linux/amd64} golang:1.27-alpine AS builder
+ARG GO_IMAGE=golang:1.27-alpine
+FROM --platform=${BUILDPLATFORM:-linux/amd64} ${GO_IMAGE} AS builder
 
 WORKDIR /app
 
@@ -24,7 +25,8 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto go build -l
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto go build -ldflags="-s -w" -o /mcp-gateway ./cmd/mcp-gateway
 
 # 最终镜像
-FROM alpine:3.24
+ARG RUNTIME_IMAGE=alpine:3.24
+FROM ${RUNTIME_IMAGE}
 
 # Runtime deps. nodejs+npm provide `npx`, which the MCP bridge uses to spawn
 # npx-based MCP servers (and the `mcp-remote` shim for remote HTTP servers).
