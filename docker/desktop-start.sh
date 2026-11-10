@@ -5,8 +5,10 @@
 set -x
 export HOME=/root
 export DISPLAY=:1
-# 容器重启后残留的 X 锁会让 KasmVNC 拒绝启动——清掉再起
+# 容器重启时 /tmp 还是上一次的：X 锁、dbus 会话 socket、xfce 会话缓存都会让
+# 新会话立刻退出（表现为「停止后再启动，容器起来就死」）。开机清干净。
 rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null
+rm -rf /tmp/dbus-* /run/dbus/pid /root/.cache/sessions 2>/dev/null
 # 上一次容器里 Chrome 崩溃留下的单例锁会让下次启动变成 "Opening in existing
 # browser session" 而看不到窗口，开机清掉。
 rm -rf /root/.config/google-chrome/Singleton* 2>/dev/null
@@ -44,6 +46,7 @@ GEOM=$(cat /etc/sandrpod-desktop-geometry 2>/dev/null || echo 1280x800)
 /usr/bin/Xvnc :1 -SecurityTypes None -DisableBasicAuth 1 -websocketPort 6901 \
   -httpd /usr/share/kasmvnc/www -interface 0.0.0.0 -FrameRate 30 -videoCodec h264 \
   -geometry "$GEOM" -depth 24 >/tmp/xvnc.log 2>&1 &
+XVNC=$!
 # 等 X 真正可用：检测 socket 而不是调 xdpyinfo（镜像里没有 x11-utils，
 # 那个循环会白等 50 秒并在日志里刷屏）。30 秒还没起来就继续，桌面会话
 # 起不来时下面的 wait 会把容器带下去，重启策略接手。
@@ -54,10 +57,18 @@ while [ $i -lt 30 ] && [ ! -S /tmp/.X11-unix/X1 ]; do
 done
 [ -S /tmp/.X11-unix/X1 ] || echo "warning: /tmp/.X11-unix/X1 not present after ${i}s" >&2
 
-# 2) 桌面会话（XFCE；xstartup 已烘焙，二选一即可）
+# 2) 桌面会话（XFCE）。会话进程偶尔会自己退出（重启后的旧 dbus 状态、XFCE 崩溃），
+#    以前这会让脚本跟着退出、容器直接死掉，沙箱就再也起不来。改成自愈循环：
+#    XFCE 死了重启它，容器只在 Xvnc 死时退出。
 # 关掉窗口合成：VNC 下重绘越少越流畅
 xfconf-query -c xfwm4 -p /general/use_compositing -s false >/dev/null 2>&1 || true
-dbus-launch --exit-with-session startxfce4 &
+(
+  while true; do
+    dbus-launch --exit-with-session startxfce4
+    echo "desktop session exited, restarting in 2s" >&2
+    sleep 2
+  done
+) &
 XFC=$!
 
 # 3) 预开一个 Chrome：CDP（9222）是 browser-use / Playwright MCP 的入口，
@@ -67,5 +78,6 @@ if [ -x /usr/bin/google-chrome ]; then
   DISPLAY=:1 dbus-launch --exit-with-session google-chrome     --no-first-run --no-default-browser-check about:blank >/tmp/chrome.log 2>&1 &
 fi
 
-# 3) 桌面栈挂了就退出容器（重启策略负责拉起）
-wait "$XFC" 2>/dev/null || wait
+# 3) 容器寿命跟 X 服务器绑定：Xvnc 活着容器就活着，桌面会话由循环负责续。
+#    Xvnc 死了说明图形栈本身坏了，退出容器让重启策略接手。
+wait "$XVNC" 2>/dev/null || wait
