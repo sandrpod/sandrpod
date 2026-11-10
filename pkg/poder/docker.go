@@ -391,9 +391,14 @@ func (p *DockerPoder) toolboxImage() string {
 // from the toolbox image (already present on a worker; no registry round-trip).
 // It is best-effort: a fork with an empty workspace is still a usable sandbox.
 func (p *DockerPoder) copyVolume(ctx context.Context, from, to string) error {
-	cmd := []string{"sh", "-c", "cp -a /from/. /to/ 2>/dev/null || true"}
+	// Entrypoint, not Cmd: the toolbox image's entrypoint IS the toolbox binary,
+	// so a Cmd rode along with it and the helper container never exited — the
+	// copy waited forever and the create hung in PENDING.
 	resp, err := p.dockerClient.ContainerCreate(ctx,
-		&container.Config{Image: p.toolboxImage(), Cmd: cmd},
+		&container.Config{
+			Image:      p.toolboxImage(),
+			Entrypoint: []string{"sh", "-c", "cp -a /from/. /to/ 2>/dev/null || true"},
+		},
 		&container.HostConfig{Mounts: []mount.Mount{
 			{Type: mount.TypeVolume, Source: from, Target: "/from", ReadOnly: true},
 			{Type: mount.TypeVolume, Source: to, Target: "/to"},
@@ -408,8 +413,12 @@ func (p *DockerPoder) copyVolume(ctx context.Context, from, to string) error {
 	if err := p.dockerClient.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		return err
 	}
-	statusCh, errCh := p.dockerClient.ContainerWait(ctx, resp.ID, container.WaitConditionNotRunning)
+	copyCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	statusCh, errCh := p.dockerClient.ContainerWait(copyCtx, resp.ID, container.WaitConditionNotRunning)
 	select {
+	case <-copyCtx.Done():
+		return fmt.Errorf("volume copy timed out")
 	case err := <-errCh:
 		return err
 	case st := <-statusCh:
