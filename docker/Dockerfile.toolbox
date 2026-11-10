@@ -3,13 +3,13 @@
 
 # 构建阶段跑在 BUILDPLATFORM（原生架构）上做交叉编译，
 # 避免 buildx 多架构时整个 Go 编译落在 QEMU 仿真里（慢一个数量级）。
-# BUILDPLATFORM is only injected by buildx; without it `# FROM 引用的 ARG 必须是全局作用域（在第一个 FROM 之前声明）
-ARG RUNTIME_IMAGE=alpine:3.24
-FROM --platform=` gets an
+# BUILDPLATFORM is only injected by buildx; without it `FROM --platform=` gets an
 # empty string and the build fails with "failed to parse platform". Default it, and
 # pass --build-arg BUILDPLATFORM=linux/arm64 on an arm64 host without buildx.
 ARG BUILDPLATFORM
+# FROM 引用的 ARG 必须在第一个 FROM 之前（全局作用域），否则展开为空。
 ARG GO_IMAGE=golang:1.27-alpine
+ARG RUNTIME_IMAGE=alpine:3.24
 FROM --platform=${BUILDPLATFORM:-linux/amd64} ${GO_IMAGE} AS builder
 # proxy.golang.org is unreachable from the CI host (and from most CN networks);
 # goproxy.cn mirrors it. Override with --build-arg GOPROXY=https://proxy.golang.org,direct
@@ -43,7 +43,9 @@ FROM ${RUNTIME_IMAGE}
 # command is wrapped in `2>/dev/null || true`, so the failure is silent: the
 # agent is told the file contains nothing rather than that grep broke.
 # findutils for the same reason (`find -printf`).
-RUN apk add --no-cache ca-certificates tzdata python3 nodejs npm bash git curl jq grep findutils
+ARG APK_MIRROR=mirrors.aliyun.com
+RUN sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}|g" /etc/apk/repositories \
+ && apk add --no-cache ca-certificates tzdata python3 nodejs npm bash git curl jq grep findutils
 
 # Data-science stack for `run_code` (chart output + DataFrames). Installed as
 # three separate layers (numpy → matplotlib → pandas) rather than one, so each
