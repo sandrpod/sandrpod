@@ -35,34 +35,31 @@ jobs:
           REGISTRY_HOST: ${{ secrets.REGISTRY_HOST }}
           REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
-          NPM_REGISTRY: https://registry.npmmirror.com
-          npm_config_replace_registry_host: always
-          DOCS_NO_GIT: "1"
         run: |
           set -eu
-          # The runner image carries no node. Rather than depend on what it has,
-          # build inside a node container from our own registry — the same reason
-          # the image builds use sandrpod-base/* (Docker Hub is unreachable here).
-          if command -v node >/dev/null 2>&1; then
-            echo "using the runner's node $(node --version)"
-            cd src/docs-site
-            rm -f package-lock.json
-            npm install --no-audit --no-fund --registry="$NPM_REGISTRY"
-            npm run build
-          else
-            echo "no node on the runner; building in sandrpod-base/node:22-alpine"
-            if [ -n "${REGISTRY_HOST:-}" ]; then
-              printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
-            fi
-            docker run --rm \
-              -v "$PWD/src/docs-site:/w" -w /w \
-              -e npm_config_registry="$NPM_REGISTRY" \
-              -e npm_config_replace_registry_host=always \
-              -e DOCS_NO_GIT=1 \
-              "${REGISTRY_HOST:-local}/sandrpod-base/node:22-alpine" \
-              sh -c "rm -f package-lock.json && npm install --no-audit --no-fund && npm run build"
+          # The runner image carries no node, so the build runs in a container — and
+          # a bind mount of a path inside THIS job container does not exist on the
+          # docker host the socket belongs to (it mounts an empty directory and npm
+          # install fails with nothing to report). Stream the tree in and the result
+          # out instead.
+          if [ -n "${REGISTRY_HOST:-}" ]; then
+            printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
           fi
-          test -f src/docs-site/.vitepress/dist/index.html
+          IMG="${REGISTRY_HOST:-local}/sandrpod-base/node:22-alpine"
+          mkdir -p out
+          tar -C src/docs-site -cf - . \
+            | docker run -i --rm -w /w \
+                -e npm_config_registry=https://registry.npmmirror.com \
+                -e npm_config_replace_registry_host=always \
+                -e DOCS_NO_GIT=1 \
+                "$IMG" \
+                sh -c 'tar -xf - && rm -f package-lock.json \
+                       && npm install --no-audit --no-fund \
+                       && npm run build \
+                       && tar -C .vitepress/dist -cf - .' \
+            > out/dist.tar
+          mkdir -p out/dist && tar -C out/dist -xf out/dist.tar
+          test -f out/dist/index.html
 
       - name: deploy
         env:
@@ -76,4 +73,4 @@ jobs:
           fi
           mkdir -p ~/.ssh && printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          rsync -az --delete src/docs-site/.vitepress/dist/ "root@$HOST:/var/www/docs/"
+          rsync -az --delete out/dist/ "root@$HOST:/var/www/docs/"
