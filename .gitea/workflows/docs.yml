@@ -22,9 +22,13 @@ jobs:
           REPO: ${{ github.repository }}
         run: |
           set -eu
-          host="${SERVER#https://}"; host="${host#http://}"
+          # SERVER is the runner's internal address (http://gitea:3000 on this
+          # Gitea, https://host elsewhere). Keep its scheme: hardcoding https
+          # against the HTTP port fails the TLS handshake.
+          proto="${SERVER%%://*}"
+          host="${SERVER#*://}"; host="${host%/}"
           git -c http.sslVerify=false clone --depth 1 \
-            "https://oauth2:${TOKEN}@${host}/${REPO}.git" src
+            "${proto}://oauth2:${TOKEN}@${host}/${REPO}.git" src
 
       - name: build
         run: |
