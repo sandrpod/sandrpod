@@ -224,6 +224,21 @@ func builtinMCPTools() []mcpTool {
 			},
 		},
 		{
+			Name:        "sandbox_snapshot",
+			Description: "Commit the sandbox's filesystem to an image. Create a new sandbox with sandbox_create(image=<this image>) to fork it.",
+			InputSchema: obj(map[string]any{
+				"sandbox": str("sandbox name"),
+				"image":   str("image reference to write, e.g. sandrpod-snapshot/box:latest"),
+			}, "sandbox"),
+			call: func(a map[string]any) (string, string, any, error) {
+				path := "/api/v1/sandboxes/" + urlq(strArg(a, "sandbox")) + "/snapshot"
+				if img := strArg(a, "image"); img != "" {
+					path += "?image=" + urlq(img)
+				}
+				return http.MethodPost, path, nil, nil
+			},
+		},
+		{
 			Name:        "sandbox_preview_url",
 			Description: "Return the signed URL that exposes a port from inside the sandbox (open it as-is: the token is in the query).",
 			InputSchema: obj(map[string]any{
