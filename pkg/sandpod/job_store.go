@@ -69,8 +69,13 @@ func (s *JobStore) UpdateJob(id string, updateFn func(*Job)) error {
 		return fmt.Errorf("job %s not found", id)
 	}
 
-	updateFn(job)
-	job.UpdatedAt = time.Now()
+	// Copy-on-write: readers (ListJobs/GetJob) hold the old pointer and read its
+	// fields without the lock, so mutating the live object raced with them.
+	// Replacing the map entry leaves the old object frozen for those readers.
+	next := *job
+	updateFn(&next)
+	next.UpdatedAt = time.Now()
+	s.jobs[id] = &next
 	return nil
 }
 

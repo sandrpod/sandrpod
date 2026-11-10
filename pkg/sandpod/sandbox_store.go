@@ -158,7 +158,12 @@ func (s *SandboxStore) Update(name string, updateFn func(*SandboxInfo)) error {
 		return fmt.Errorf("sandbox %s not found", name)
 	}
 
-	updateFn(sb)
+	// Copy-on-write: List/Get hand out pointers that readers inspect without the
+	// lock (status polls, the console), so mutating the live record raced with
+	// them. Replace the entry instead; the old object stays frozen.
+	next := *sb
+	updateFn(&next)
+	s.sandboxes[name] = &next
 	return nil
 }
 
