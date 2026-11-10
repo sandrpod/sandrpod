@@ -2222,6 +2222,11 @@ func Main() {
 		}
 		cfg.Keys = keys
 	}
+	if cfg.PreviewSecret == "" {
+		if v := os.Getenv("SANDRPOD_PREVIEW_SECRET"); v != "" {
+			cfg.PreviewSecret = v
+		}
+	}
 	if cfg.authDisabled() {
 		log.Printf("WARNING: authentication is DISABLED — no token of any kind is configured, so every request runs as an anonymous admin. Set SANDRPOD_TOKEN (or -token / -tokens-file, or issue a key with `sandrpod-cli token create`) before exposing this server beyond localhost.")
 	}
@@ -2235,6 +2240,7 @@ func Main() {
 	//     http (E2B_API_URL + E2B_SANDBOX_URL = http://host:<port>,
 	//     E2B_VALIDATE_API_KEY=false). No DNS/TLS required. See docs/E2B_COMPAT.md.
 	if dom := os.Getenv("SANDRPOD_E2B_DOMAIN"); dom != "" {
+		cfg.E2BDomain = dom
 		handler = e2bHostRouter(dom, NewE2BGateway(dom, cfg, stores, tunnelStore, directStore), handler)
 		log.Printf("E2B-compatible gateway enabled: api.%s (control plane) + <port>-<id>.%s (envd)", dom, dom)
 	}
