@@ -36,6 +36,7 @@ jobs:
           REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
           REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
           NPM_REGISTRY: https://registry.npmmirror.com
+          npm_config_replace_registry_host: always
         run: |
           set -eu
           # The runner image carries no node. Rather than depend on what it has,
@@ -54,6 +55,7 @@ jobs:
             docker run --rm \
               -v "$PWD/src/docs-site:/w" -w /w \
               -e npm_config_registry="$NPM_REGISTRY" \
+              -e npm_config_replace_registry_host=always \
               "${REGISTRY_HOST:-local}/sandrpod-base/node:22-alpine" \
               sh -c "npm ci --no-audit --no-fund && npm run build"
           fi
