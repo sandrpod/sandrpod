@@ -128,3 +128,35 @@ E2B 的 `timeout` 语义是「沙箱存活时间」；本设计下 `ttl_seconds`
 - **多 worker**：卷在创建它的 worker 上；沙箱恢复到**同一 worker**（`poder_id` 已固定），
   跨 worker 迁移需要卷迁移方案（暂不做，记录为已知限制）。
 - **并发**：同一沙箱的 stop/start 需要串行化（状态机已有 RUNNING/STOPPING/STOPPED）。
+
+## 六、浏览器自动化：CDP 端点（已实现）
+
+桌面镜像的 Chrome 以 `--remote-debugging-port=9222 --remote-debugging-address=0.0.0.0
+--remote-allow-origins=*` 启动，桌面起来后自动开一个 about:blank 窗口，因此 CDP 始终可用。
+
+**外部访问**（预览链路是通用的端口代理）：
+
+```
+https://9222-<sandbox>.sandbox.sandrpod.com/json/version     ← 拿 webSocketDebuggerUrl
+wss://9222-<sandbox>.sandbox.sandrpod.com/devtools/browser/<id>
+```
+
+**Playwright MCP**（或 chrome-devtools-mcp）配置示例：
+
+```json
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["@playwright/mcp@latest",
+               "--cdp-endpoint", "wss://9222-<sandbox>.sandbox.sandrpod.com/devtools/browser/<id>"]
+    }
+  }
+}
+```
+
+这样 agent 拿到的是**真实 Chrome**（有界面、可人工接管、Cookie 持久），而不是无头浏览
+器的独立实例。`<id>` 从 `/json/version` 的 `webSocketDebuggerUrl` 读取。
+
+已知限制：CDP 目前**无认证**（预览链路一致如此）；生产对外暴露时应加一层 token 校验
+（见文档末尾的风险清单）。

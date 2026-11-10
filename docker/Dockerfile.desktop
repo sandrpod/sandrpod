@@ -51,7 +51,7 @@ RUN if [ "${TARGETARCH:-amd64}" = "amd64" ]; then \
       && apt-get install -y --no-install-recommends libunwind8 \
       && rm -rf /var/lib/apt/lists/* \
       && mv /usr/bin/google-chrome-stable /usr/bin/google-chrome-real \
-      && printf '#!/bin/sh\nexec /usr/bin/google-chrome-real --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --no-default-browser-check --disable-session-crashed-bubble --user-data-dir=/root/.chrome-profile "$@"\n' > /usr/bin/google-chrome \
+      && printf '#!/bin/sh\nexec /usr/bin/google-chrome-real --no-sandbox --disable-dev-shm-usage --disable-gpu --no-first-run --no-default-browser-check --disable-session-crashed-bubble --user-data-dir=/root/.chrome-profile --remote-debugging-port=9222 --remote-debugging-address=0.0.0.0 --remote-allow-origins=* "$@"\n' > /usr/bin/google-chrome \
       && chmod +x /usr/bin/google-chrome; \
     else \
       apt-get update && apt-get install -y --no-install-recommends epiphany-browser \

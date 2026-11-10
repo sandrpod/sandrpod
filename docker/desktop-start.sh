@@ -40,5 +40,12 @@ xfconf-query -c xfwm4 -p /general/use_compositing -s false >/dev/null 2>&1 || tr
 dbus-launch --exit-with-session startxfce4 &
 XFC=$!
 
+# 3) 预开一个 Chrome：CDP（9222）是 browser-use / Playwright MCP 的入口，
+#    agent 连过来时浏览器必须已经在跑。失败不阻塞桌面。
+if [ -x /usr/bin/google-chrome ]; then
+  sleep 3
+  DISPLAY=:1 dbus-launch --exit-with-session google-chrome     --no-first-run --no-default-browser-check about:blank >/tmp/chrome.log 2>&1 &
+fi
+
 # 3) 桌面栈挂了就退出容器（重启策略负责拉起）
 wait "$XFC" 2>/dev/null || wait
