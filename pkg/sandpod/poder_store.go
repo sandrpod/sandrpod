@@ -195,7 +195,15 @@ func (s *PoderStore) Get(id string) (*PoderInfo, bool) {
 	defer s.mu.RUnlock()
 
 	poder, ok := s.poders[id]
-	return poder, ok
+	if !ok {
+		return nil, false
+	}
+	// Return a copy: the map holds the live record, and callers read these fields
+	// while the reapers mutate them (SetOffline, UpdateHeartbeat). Handing out the
+	// pointer made every such pair a data race under -race.
+	cp := *poder
+	cp.Capabilities = append([]string(nil), poder.Capabilities...)
+	return &cp, true
 }
 
 // List returns all registered Poder nodes.
@@ -205,7 +213,11 @@ func (s *PoderStore) List() []*PoderInfo {
 
 	result := make([]*PoderInfo, 0, len(s.poders))
 	for _, poder := range s.poders {
-		result = append(result, poder)
+		// Copies, for the same reason as Get: a reader iterating this slice must
+		// not see a concurrent SetOffline/UpdateHeartbeat write.
+		cp := *poder
+		cp.Capabilities = append([]string(nil), poder.Capabilities...)
+		result = append(result, &cp)
 	}
 	return result
 }
