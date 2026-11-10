@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -148,7 +149,7 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 		pullOpts := imagetypes.PullOptions{}
 		if reg := registryFromEnv(); reg.Host != "" && strings.HasPrefix(imageName, reg.Host) {
 			encoded, _ := json.Marshal(reg.auth())
-			pullOpts.RegistryAuth = string(encoded)
+			pullOpts.RegistryAuth = base64.URLEncoding.EncodeToString(encoded)
 		}
 		if rc, perr := p.dockerClient.ImagePull(ctx, imageName, pullOpts); perr == nil {
 			_, _ = io.Copy(io.Discard, rc)
@@ -499,8 +500,12 @@ func (p *DockerPoder) pushSnapshot(ctx context.Context, localImage, sandbox, tag
 	if err := p.dockerClient.ImageTag(ctx, localImage, ref); err != nil {
 		return localImage, fmt.Errorf("tag %s -> %s: %w", localImage, ref, err)
 	}
+	// RegistryAuth must be base64url(JSON); handing the raw JSON over is silently
+	// treated as "no credentials" and the push is rejected.
 	encoded, _ := json.Marshal(reg.auth())
-	rc, err := p.dockerClient.ImagePush(ctx, ref, imagetypes.PushOptions{RegistryAuth: string(encoded)})
+	rc, err := p.dockerClient.ImagePush(ctx, ref, imagetypes.PushOptions{
+		RegistryAuth: base64.URLEncoding.EncodeToString(encoded),
+	})
 	if err != nil {
 		return localImage, fmt.Errorf("push %s: %w", ref, err)
 	}
