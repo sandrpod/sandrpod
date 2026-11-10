@@ -572,6 +572,12 @@ func (p *DockerPoder) GetPod(ctx context.Context, podID string) (*PodInfo, error
 		pod.State = PodStateStopped
 	} else if info.State.Running {
 		pod.State = PodStateRunning
+	} else if info.State.ExitCode == 137 || info.State.ExitCode == 143 {
+		// docker stop terminates with SIGKILL(137)/SIGTERM(143) when the
+		// entrypoint has no trap. That is a normal stop, not a crash: treating it
+		// as ERROR made "stop then start" impossible, because the start path only
+		// resumes a STOPPED pod and then waited out its five-minute timeout.
+		pod.State = PodStateStopped
 	} else if info.State.ExitCode != 0 {
 		pod.State = PodStateError
 	} else {

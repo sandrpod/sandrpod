@@ -262,7 +262,10 @@ func main() {
 					http.Error(w, fmt.Sprintf("Sandbox %s not found", sandboxName), http.StatusNotFound)
 					return
 				}
-				if pod.State == poder.PodStateStopped {
+				// Resume whenever it is not running: an ERROR/STOPPED/created pod is
+				// all the same to docker start, and gating on one state meant a
+				// stopped-by-SIGKILL container could never come back.
+				if pod.State != poder.PodStateRunning {
 					if err := p.UnpausePod(ctx, pod.ID); err != nil {
 						http.Error(w, fmt.Sprintf("Failed to start sandbox: %v", err), http.StatusInternalServerError)
 						return
