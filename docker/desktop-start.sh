@@ -18,11 +18,12 @@ TB=$!
 # 1) Xvnc 直启：绕过 kasmvncserver 包装器的交互菜单，并关闭 websocket 的
 #    basic auth（-DisableBasicAuth 必须带值 1；裸写会被忽略而仍强制认证）。
 #    沙箱本身就是隔离边界，preview URL 是入口，不需要再叠一层 VNC 口令。
+GEOM=$(cat /etc/sandrpod-desktop-geometry 2>/dev/null || echo 1280x800)
 # FrameRate 30：60fps 对远程桌面是纯浪费，编码吃满 CPU 还看不清；
 # ffmpeg 在镜像里时 KasmVNC 会用 H.264（比 webp 便宜一个数量级）。
 /usr/bin/Xvnc :1 -SecurityTypes None -DisableBasicAuth 1 -websocketPort 6901 \
   -httpd /usr/share/kasmvnc/www -interface 0.0.0.0 -FrameRate 30 -videoCodec h264 \
-  -geometry 1280x800 -depth 24 >/tmp/xvnc.log 2>&1 &
+  -geometry "$GEOM" -depth 24 >/tmp/xvnc.log 2>&1 &
 # 等 X 真正可用（xdpyinfo 来自 x11-utils）
 i=0
 while [ $i -lt 50 ]; do

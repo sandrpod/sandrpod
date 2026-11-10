@@ -20,6 +20,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/root
 # TARGETARCH 是 BuildKit 预置变量（构建机架构）；必须在使用它的 stage 内重新声明
 ARG TARGETARCH=amd64
+# 桌面分辨率：1280x800 标准、1024x640 省流量（构建时用 --build-arg DESKTOP_GEOMETRY=1024x640）
+ARG DESKTOP_GEOMETRY=1280x800
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
@@ -81,6 +83,9 @@ RUN mkdir -p /root/.vnc /workspace \
 COPY --from=builder /toolbox /app/toolbox
 COPY docker/desktop-start.sh /app/desktop-start.sh
 RUN chmod +x /app/desktop-start.sh
+
+# 桌面分辨率（启动脚本读取；两个镜像变体只有这个值不同）
+RUN printf '%s' "${DESKTOP_GEOMETRY}" > /etc/sandrpod-desktop-geometry
 
 # 桌面端口（容器内）；toolbox 仍在 8080
 EXPOSE 6901 5901 8080
