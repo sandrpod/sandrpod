@@ -372,6 +372,13 @@ func (p *DockerPoder) detachSelfFromNetwork(ctx context.Context, networkID strin
 		return
 	}
 	if err := p.dockerClient.NetworkDisconnect(ctx, networkID, self, true); err != nil {
+		// Two outcomes are normal, not failures: the pod never had an egress
+		// network (so we were never connected) and the network was already
+		// removed. Logging those made every sandbox delete look broken.
+		msg := err.Error()
+		if strings.Contains(msg, "is not connected to") || strings.Contains(msg, "not found") {
+			return
+		}
 		log.Printf("poder: leave pod egress network %s: %v", networkID[:12], err)
 	}
 }
