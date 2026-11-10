@@ -32,6 +32,10 @@ if [ ! -L /root/.chrome-profile ]; then
   fi
   ln -sfn /workspace/.home/chrome-profile /root/.chrome-profile
 fi
+# 持久化的 Chrome profile 里留着上一次容器的 SingletonLock（hostname-pid）。
+# 重启后 hostname 变了，Chrome 判定「被另一台机器占用」并退出，界面看到的就是
+# 「浏览器打不开」。清掉这三个文件让它重新拿锁。
+rm -f /root/.chrome-profile/Singleton* 2>/dev/null
 
 # toolbox 先在后台跑（execute/files/MCP 端口 8080）。
 /app/toolbox -port 8080 &
