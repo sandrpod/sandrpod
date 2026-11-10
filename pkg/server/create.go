@@ -200,6 +200,10 @@ func runSandboxCreate(
 			Region:       req.Region,
 			ProviderType: req.ProviderType,
 			InstanceType: req.InstanceType,
+			// The console needs the image to tell a desktop sandbox from a headless
+			// one (the 桌面 button, the resource defaults); without it every row
+			// looked the same.
+			ImageID:      req.ImageID,
 			Owner:        owner,
 			TTLSeconds:   req.TTLSeconds,
 			CPUCores:     req.CPUCores,
