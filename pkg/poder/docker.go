@@ -12,6 +12,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -387,6 +388,42 @@ func (p *DockerPoder) snapshotSource(ctx context.Context, imageName string) stri
 		return ""
 	}
 	return info.Config.Labels["sandrpod.snapshot-of"]
+}
+
+// SnapshotInfo describes one snapshot image as the console needs it.
+type SnapshotInfo struct {
+	Image     string `json:"image"`
+	Tag       string `json:"tag"`
+	Source    string `json:"source"` // sandbox it was committed from
+	CreatedAt int64  `json:"created_at"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+// SnapshotImages lists the images SandrPod committed with SnapshotPod, newest
+// first. The label is what makes them OURS: a host may carry unrelated images.
+func (p *DockerPoder) SnapshotImages(ctx context.Context) ([]SnapshotInfo, error) {
+	list, err := p.dockerClient.ImageList(ctx, image.ListOptions{All: true})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SnapshotInfo, 0, len(list))
+	for _, img := range list {
+		src := img.Labels["sandrpod.snapshot-of"]
+		if src == "" {
+			continue
+		}
+		for _, tag := range img.RepoTags {
+			if strings.HasPrefix(tag, "<none>") {
+				continue
+			}
+			out = append(out, SnapshotInfo{
+				Image: tag, Tag: tag, Source: src,
+				CreatedAt: img.Created, SizeBytes: img.Size,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt > out[j].CreatedAt })
+	return out, nil
 }
 
 // HasGPU reports whether this docker daemon can allocate NVIDIA GPUs: the nvidia

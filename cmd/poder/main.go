@@ -168,6 +168,23 @@ func main() {
 		})
 	})
 
+	// GET /snapshots — images this worker produced with sandbox_snapshot. The
+	// console needs a list to offer "create from snapshot"; without it a
+	// snapshot is a one-way door you can only use if you remember its name.
+	mux.HandleFunc("/snapshots", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		imgs, err := p.SnapshotImages(ctx)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("list snapshots: %v", err), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"snapshots": imgs})
+	})
+
 	mux.HandleFunc("/sandboxes", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)

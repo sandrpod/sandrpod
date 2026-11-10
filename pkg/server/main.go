@@ -1151,6 +1151,56 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	// refuse to start in a mode the server cannot serve instead of discovering
 	// it per request. 404 on an older server is the signal, which is why the
 	// endpoint exists at all: an absent route is unambiguous.
+	// GET /api/v1/snapshots — every snapshot image on every online worker, so the
+	// console can offer "create from snapshot" instead of asking the user to
+	// remember image tags.
+	mux.HandleFunc("/api/v1/snapshots", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		type row struct {
+			Image     string `json:"image"`
+			Source    string `json:"source"`
+			PoderID   string `json:"poder_id"`
+			CreatedAt int64  `json:"created_at"`
+			SizeBytes int64  `json:"size_bytes"`
+		}
+		out := make([]row, 0)
+		for _, pdr := range poderStore.List() {
+			if pdr.State != podpkg.PoderStateOnline {
+				continue
+			}
+			t, ok := tunnelStore.Get(pdr.ID)
+			if !ok {
+				continue
+			}
+			reqCtx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			req, _ := http.NewRequestWithContext(reqCtx, http.MethodGet, "http://poder/snapshots", nil)
+			resp, err := t.Client.Do(req)
+			if err != nil {
+				cancel()
+				continue
+			}
+			var payload struct {
+				Snapshots []struct {
+					Image     string `json:"image"`
+					Source    string `json:"source"`
+					CreatedAt int64  `json:"created_at"`
+					SizeBytes int64  `json:"size_bytes"`
+				} `json:"snapshots"`
+			}
+			_ = json.NewDecoder(resp.Body).Decode(&payload)
+			resp.Body.Close()
+			cancel()
+			for _, sn := range payload.Snapshots {
+				out = append(out, row{Image: sn.Image, Source: sn.Source, PoderID: pdr.ID, CreatedAt: sn.CreatedAt, SizeBytes: sn.SizeBytes})
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{"snapshots": out})
+	}))
+
 	mux.HandleFunc("/api/v1/capabilities", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if *emulateLegacy {
 			// Exactly what an older server does: the route is not there.
