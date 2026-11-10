@@ -29,6 +29,9 @@ const zhSidebar = [
       { text: "用云主机当底座", link: "/zh/cloud-vms" },
       { text: "隔离与放置", link: "/zh/isolation" },
       { text: "出网策略", link: "/zh/egress" },
+      { text: "桌面沙箱", link: "/zh/desktop" },
+      { text: "GPU 沙箱", link: "/zh/gpu" },
+      { text: "快照与分叉", link: "/zh/snapshots" },
     ],
   },
   {
@@ -188,6 +191,9 @@ export default defineConfig({
           { text: "Cloud VMs as the substrate", link: "/cloud-vms" },
           { text: "Isolation and placement", link: "/isolation" },
           { text: "Egress policy", link: "/egress" },
+          { text: "Desktop sandboxes", link: "/desktop" },
+          { text: "GPU sandboxes", link: "/gpu" },
+          { text: "Snapshots and forks", link: "/snapshots" },
         ],
       },
       {
