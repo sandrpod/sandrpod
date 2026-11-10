@@ -19,7 +19,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -109,28 +108,10 @@ var version = "dev"
 // poderCapabilities is what this build can enforce inside a sandbox pod. It is
 // advertised on the tunnel handshake so the control plane can refuse to put a
 // policy on a worker that would ignore it (an older worker silently did).
-var poderCapabilities = detectCapabilities()
-
-// detectCapabilities is what this worker can actually enforce or expose. The gpu
-// capability is decided at startup: a worker without the nvidia runtime would
-// accept a GPU sandbox and run it on the CPU, which is worse than a refusal.
-func detectCapabilities() []string {
-	caps := []string{podpkg.CapabilityEgress}
-	if gpuUsable() {
-		caps = append(caps, podpkg.CapabilityGPU)
-	}
-	return caps
-}
-
-// gpuUsable reports whether a real GPU is visible to this host. It checks the
-// device node and the driver binary: either alone can be a leftover.
-func gpuUsable() bool {
-	if _, err := os.Stat("/dev/nvidia0"); err != nil {
-		return false
-	}
-	_, err := exec.LookPath("nvidia-smi")
-	return err == nil
-}
+// poderCapabilities is what this worker can enforce or expose, filled once the
+// pod executor exists (GPU support is a property of the docker daemon, which
+// only the executor can ask).
+var poderCapabilities = []string{podpkg.CapabilityEgress}
 
 func main() {
 	flag.Parse()
@@ -149,6 +130,12 @@ func main() {
 	p, err := poder.NewDockerPoder(*region, *networkName)
 	if err != nil {
 		log.Fatalf("Failed to create Docker Poder: %v", err)
+	}
+	// A worker without the nvidia runtime would accept a GPU sandbox and run it
+	// on the CPU, which is worse than refusing placement.
+	if p.HasGPU(ctx) {
+		poderCapabilities = append(poderCapabilities, podpkg.CapabilityGPU)
+		log.Printf("GPU support detected (nvidia container runtime registered)")
 	}
 
 	poderID, err := resolvePoderID(*poderIDFlag)

@@ -389,6 +389,19 @@ func (p *DockerPoder) snapshotSource(ctx context.Context, imageName string) stri
 	return info.Config.Labels["sandrpod.snapshot-of"]
 }
 
+// HasGPU reports whether this docker daemon can allocate NVIDIA GPUs: the nvidia
+// container runtime must be registered. The pode usually runs in a container of
+// its own, so /dev/nvidia0 is not visible from inside it — the daemon's runtime
+// list is the view that actually predicts whether --gpus will work.
+func (p *DockerPoder) HasGPU(ctx context.Context) bool {
+	info, err := p.dockerClient.Info(ctx)
+	if err != nil || info.Runtimes == nil {
+		return false
+	}
+	_, ok := info.Runtimes["nvidia"]
+	return ok
+}
+
 // toolboxImage is the image used for one-shot helper containers (volume copies).
 func (p *DockerPoder) toolboxImage() string {
 	if img := os.Getenv("SANDRPOD_TOOLBOX_IMAGE"); img != "" {
