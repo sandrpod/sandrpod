@@ -11,6 +11,26 @@ rm -f /tmp/.X1-lock /tmp/.X11-unix/X1 2>/dev/null
 # browser session" 而看不到窗口，开机清掉。
 rm -rf /root/.config/google-chrome/Singleton* 2>/dev/null
 
+# 0) 用户数据持久化：桌面沙箱的 /workspace 是卷（sandbox 停止/启动、容器重建都不丢）。
+#    把用户可见的目录 + Chrome profile 落进卷里，做到"关掉再打开，标签页和下载还在"。
+#    只搬用户数据目录：/root/.config 留着镜像里的烘焙配置（主题/壁纸），不被空卷遮住。
+for d in Desktop Downloads Documents; do
+  mkdir -p "/workspace/.home/$d"
+  if [ -d "/root/$d" ] && [ ! -L "/root/$d" ]; then
+    cp -a "/root/$d/." "/workspace/.home/$d/" 2>/dev/null || true
+    rm -rf "/root/$d"
+  fi
+  ln -sfn "/workspace/.home/$d" "/root/$d"
+done
+mkdir -p /workspace/.home/chrome-profile
+if [ ! -L /root/.chrome-profile ]; then
+  if [ -d /root/.chrome-profile ]; then
+    cp -a /root/.chrome-profile/. /workspace/.home/chrome-profile/ 2>/dev/null || true
+    rm -rf /root/.chrome-profile
+  fi
+  ln -sfn /workspace/.home/chrome-profile /root/.chrome-profile
+fi
+
 # toolbox 先在后台跑（execute/files/MCP 端口 8080）。
 /app/toolbox -port 8080 &
 TB=$!

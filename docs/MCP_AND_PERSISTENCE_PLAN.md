@@ -160,3 +160,23 @@ wss://9222-<sandbox>.sandbox.sandrpod.com/devtools/browser/<id>
 
 已知限制：CDP 目前**无认证**（预览链路一致如此）；生产对外暴露时应加一层 token 校验
 （见文档末尾的风险清单）。
+
+## 七、桌面 home 持久化（已实现）
+
+桌面镜像里 `/workspace` 是卷，但桌面应用把状态写在 `$HOME`。启动脚本把用户可见的
+目录和 Chrome profile 指进卷里：
+
+```
+/root/Desktop            → /workspace/.home/Desktop
+/root/Downloads          → /workspace/.home/Downloads
+/root/Documents          → /workspace/.home/Documents
+/root/.chrome-profile    → /workspace/.home/chrome-profile
+```
+
+首次启动会把镜像里的内容拷进卷（空卷不会盖掉预置文件），之后是符号链接。效果：
+
+- 停止再启动（闲置释放）→ 桌面文件、下载、Chrome 登录态和标签页都还在
+- 容器重建（镜像升级）→ 同样保留，因为数据在卷里
+
+`/root/.config` 故意**不**持久化：主题、壁纸、面板布局是镜像烘焙的一部分，持久化后
+镜像升级会被旧配置盖住。
