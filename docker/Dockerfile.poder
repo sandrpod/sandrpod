@@ -11,6 +11,8 @@
 ARG BUILDPLATFORM
 ARG GO_IMAGE=golang:1.27-alpine
 FROM --platform=${BUILDPLATFORM:-linux/amd64} ${GO_IMAGE} AS builder
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY} GOSUMDB=off
 
 WORKDIR /app
 

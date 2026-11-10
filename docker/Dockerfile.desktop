@@ -12,6 +12,8 @@
 # （沙箱里端口不映射，经 toolbox /proxy/6901 + preview URL 暴露）
 ARG GO_IMAGE=golang:1.27-bookworm
 FROM ${GO_IMAGE} AS builder
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY} GOSUMDB=off
 WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -o /toolbox ./cmd/toolbox

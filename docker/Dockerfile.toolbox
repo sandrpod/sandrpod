@@ -9,6 +9,11 @@
 ARG BUILDPLATFORM
 ARG GO_IMAGE=golang:1.27-alpine
 FROM --platform=${BUILDPLATFORM:-linux/amd64} ${GO_IMAGE} AS builder
+# proxy.golang.org is unreachable from the CI host (and from most CN networks);
+# goproxy.cn mirrors it. Override with --build-arg GOPROXY=https://proxy.golang.org,direct
+# in a deployment where the official proxy works.
+ARG GOPROXY=https://goproxy.cn,direct
+ENV GOPROXY=${GOPROXY} GOSUMDB=off
 
 WORKDIR /app
 
