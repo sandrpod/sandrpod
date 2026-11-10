@@ -541,7 +541,7 @@ func TestSchedule_EgressNeedsACapablePoder(t *testing.T) {
 	if err == nil {
 		t.Fatal("an egress policy on an incapable worker must be refused")
 	}
-	if !strings.Contains(err.Error(), "do not support it") {
+	if !strings.Contains(err.Error(), "do not advertise") || !strings.Contains(err.Error(), "egress") {
 		t.Fatalf("the error should name the capability, got: %v", err)
 	}
 

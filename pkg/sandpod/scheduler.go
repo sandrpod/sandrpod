@@ -119,9 +119,10 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 			// plainly: "no available poder" would send someone to
 			// `docker compose ps`, where the worker is online and fine.
 			if n := s.onlineWithoutCapability(providerType, req.Region, require); n > 0 {
-				return nil, fmt.Errorf("%w: this sandbox asks for an egress policy, but %d online %s "+
-					"worker(s) do not support it (upgrade the poder to a build that advertises %q, "+
-					"or drop the policy)", ErrPoderCapability, n, providerType, require[0])
+				return nil, fmt.Errorf("%w: this sandbox needs %s, but %d online %s "+
+					"worker(s) do not advertise %q (upgrade the poder to a build that has it, "+
+					"or drop the requirement)", ErrPoderCapability, capabilityDescription(require), n,
+					providerType, require[0])
 			}
 		}
 		if n := s.atCapacity(providerType, req.Region); n > 0 {
@@ -654,6 +655,29 @@ func shellQuoteSingleValue(s string) string {
 		}
 	}
 	return result
+}
+
+// capabilityDescription names the request in human terms: "a GPU" reads better
+// than "gpu", and a create that asked for both should say both.
+func capabilityDescription(require []string) string {
+	parts := make([]string, 0, len(require))
+	for _, c := range require {
+		switch c {
+		case CapabilityGPU:
+			parts = append(parts, "a GPU")
+		case CapabilityEgress:
+			parts = append(parts, "an egress policy")
+		default:
+			parts = append(parts, c)
+		}
+	}
+	if len(parts) == 0 {
+		return "a capability"
+	}
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
 }
 
 // capabilityRequirement maps a create request to the worker capabilities it
