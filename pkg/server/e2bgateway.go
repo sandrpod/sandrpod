@@ -86,6 +86,17 @@ func (d e2bDeps) forwardE2B(w http.ResponseWriter, r *http.Request, sandbox stri
 // flushes in real time. Cross-node forwarding is handled by the gateway calling
 // forwardE2B first, so by here the tunnel is local. Returns true when handled.
 func (d e2bDeps) portProxy(w http.ResponseWriter, r *http.Request, sandbox string, port int) bool {
+	// A preview exposes a service inside the sandbox to the internet. Without a
+	// credential that is a stranger's desktop (KasmVNC on 6901) or a stranger's
+	// debugger (Chrome CDP on 9222), so refuse before proxying.
+	if !d.previewAuthorized(w, r, sandbox, port) {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprintf(w, "preview requires a signed URL token.\n\n"+
+			"Open it from the console (沙箱详情 → 打开桌面), call GET /api/v1/sandboxes/%s/preview/%d\n"+
+			"with your API key, or pass Authorization: Bearer <key>.\n", sandbox, port)
+		return true
+	}
 	subpath := "proxy/" + strconv.Itoa(port) + r.URL.Path
 	t, target, err := d.toolboxTarget(sandbox, subpath)
 	if err != nil {

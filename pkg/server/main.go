@@ -238,6 +238,14 @@ type Config struct {
 	// multi-instance mode so a token issued on a peer instance (absent from this
 	// instance's in-memory Keys index) still authenticates.
 	TokenStore podpkg.APITokenRepository
+	// PreviewSecret signs sandbox preview URLs (desktop, CDP, any exposed port).
+	// Empty falls back to the platform token; with neither, previews are refused
+	// when auth is on (an exposed sandbox nobody can authenticate to is not a
+	// usable preview anyway).
+	PreviewSecret string
+	// E2BDomain is the wildcard host previews are exposed on (sandbox.example.com).
+	// Only needed to build absolute preview URLs.
+	E2BDomain string
 	// MaxSandboxesPerOwner caps how many sandboxes a user-role token may hold
 	// at once (0 = unlimited; admins are exempt).
 	MaxSandboxesPerOwner int
@@ -1391,6 +1399,13 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		path := r.URL.Path[len("/api/v1/sandboxes/"):]
 		if path == "" {
 			http.NotFound(w, r)
+			return
+		}
+
+		// GET /api/v1/sandboxes/{name}/preview/{port} — the signed URL a browser
+		// or agent should open against the wildcard host.
+		if strings.Contains(path, "/preview/") {
+			handlePreviewURL(w, r, cfg, sandboxStore)
 			return
 		}
 
