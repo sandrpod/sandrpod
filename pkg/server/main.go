@@ -61,9 +61,13 @@ var (
 	reapTimeout     = ptr(10 * time.Minute)
 	dbDSN           = ptr("")
 	sandboxIdleTTL  = ptr(envDuration("SANDRPOD_SANDBOX_IDLE_TIMEOUT"))
-	poderIdleTTL    = ptr(envDuration("SANDRPOD_PODER_IDLE_TIMEOUT"))
-	publicURL       = ptr(os.Getenv("SANDRPOD_PUBLIC_URL"))
-	nodeURL         = ptr(os.Getenv("SANDRPOD_NODE_URL"))
+	// sandboxRetain is how long a STOPPED sandbox keeps its workspace volume
+	// before the reaper deletes it. An idle sandbox is stopped, not deleted, so
+	// the window between "released resources" and "data gone" is this.
+	sandboxRetain = ptr(envDurationOr("SANDRPOD_SANDBOX_RETAIN", 7*24*time.Hour))
+	poderIdleTTL  = ptr(envDuration("SANDRPOD_PODER_IDLE_TIMEOUT"))
+	publicURL     = ptr(os.Getenv("SANDRPOD_PUBLIC_URL"))
+	nodeURL       = ptr(os.Getenv("SANDRPOD_NODE_URL"))
 	// -emulate-legacy hides the capability route so the nightly can prove the
 	// agent refuses an old control plane without keeping an old binary around.
 	// It only *removes* what this build advertises; it cannot widen anything.
@@ -112,7 +116,8 @@ func registerFlags(fs *flag.FlagSet) {
 		"How long to wait for a local/docker poder to register before failing a create (env: SANDRPOD_LOCAL_PODER_GRACE)")
 	fs.DurationVar(reapTimeout, "reap-timeout", *reapTimeout, "OFFLINE poder reclamation timeout (terminates cloud VM and deletes record)")
 	fs.StringVar(dbDSN, "db", *dbDSN, `persistence backend: empty=in-memory (default); sqlite:<path> (e.g. sqlite:./data/sandrpod.db); postgres://user:pass@host:5432/db?sslmode=require (production)`)
-	fs.DurationVar(sandboxIdleTTL, "sandbox-idle-timeout", *sandboxIdleTTL, "Reap sandboxes idle longer than this, e.g. 2h (0 = disabled; env: SANDRPOD_SANDBOX_IDLE_TIMEOUT)")
+	fs.DurationVar(sandboxIdleTTL, "sandbox-idle-timeout", *sandboxIdleTTL, "Stop sandboxes idle longer than this, e.g. 2h (0 = disabled; env: SANDRPOD_SANDBOX_IDLE_TIMEOUT)")
+	fs.DurationVar(sandboxRetain, "sandbox-retain", *sandboxRetain, "Delete a stopped sandbox after this long (default 7d; env: SANDRPOD_SANDBOX_RETAIN)")
 	fs.DurationVar(poderIdleTTL, "poder-idle-timeout", *poderIdleTTL, "Reclaim cloud poders with no sandboxes after this, terminating the VM, e.g. 30m (0 = disabled; env: SANDRPOD_PODER_IDLE_TIMEOUT)")
 	fs.StringVar(publicURL, "public-url", *publicURL, "Public URL of this API server, used when bootstrapping cloud VMs (e.g. https://api.example.com). Defaults to http://localhost:<port> if not set (env: SANDRPOD_PUBLIC_URL)")
 	fs.StringVar(nodeURL, "node-url", *nodeURL, "Internal URL of THIS instance that peer instances reach it at (e.g. http://10.0.1.5:8080). Set on every instance in a load-balanced, PostgreSQL-backed multi-instance deployment so requests can be forwarded to the node holding a poder's tunnel. Empty = single-instance (no forwarding). (env: SANDRPOD_NODE_URL)")
@@ -2273,7 +2278,7 @@ func Main() {
 	if *sandboxIdleTTL > 0 {
 		log.Printf("Idle-sandbox reaper enabled: default ttl=%v", *sandboxIdleTTL)
 	}
-	go reapIdleSandboxes(rootCtx, *sandboxIdleTTL, stores.Sandboxes, stores.Poders, tunnelStore)
+	go reapIdleSandboxes(rootCtx, *sandboxIdleTTL, *sandboxRetain, stores.Sandboxes, stores.Poders, tunnelStore)
 
 	if cfg.Registry != nil && *tokensFile != "" {
 		go watchTokensFile(rootCtx, *tokensFile, cfg.Registry)

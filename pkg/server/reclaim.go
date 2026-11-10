@@ -25,7 +25,7 @@ import (
 // start/stop) via sandboxTunnel. Direct-agent sandboxes (a user's own machine,
 // no cloud cost) are never reaped. Records created before the upgrade have a
 // zero LastActivity — CreatedAt is used as the fallback baseline.
-func reapIdleSandboxes(ctx context.Context, ttl time.Duration, ss podpkg.SandboxRepository, ps podpkg.PoderRepository, ts *tunnel.TunnelStore) {
+func reapIdleSandboxes(ctx context.Context, ttl, retain time.Duration, ss podpkg.SandboxRepository, ps podpkg.PoderRepository, ts *tunnel.TunnelStore) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
@@ -36,16 +36,23 @@ func reapIdleSandboxes(ctx context.Context, ttl time.Duration, ss podpkg.Sandbox
 		}
 		now := time.Now()
 		for _, sb := range ss.List() {
+			// A stopped sandbox past its retention window is finally removed.
+			// Its workspace volume goes with an explicit delete; the data is
+			// meant to outlive the container, not the sandbox.
+			if sb.State == podpkg.StateStopped && stoppedTooLong(sb, now, retain) {
+				log.Printf("idle reaper: deleting sandbox %s (stopped %v > retention %v)", sb.Name, now.Sub(sb.LastActivity).Round(time.Minute), retain)
+				notifyEvent("sandbox.reaped", sandboxEvent(sb, map[string]any{"reason": "retention_expired"}))
+				teardownSandbox(ctx, sb, ss, ps, ts)
+				continue
+			}
 			if !shouldReapSandbox(sb, now, ttl) {
 				continue
 			}
-			// Log the *effective* TTL (a per-sandbox TTLSeconds overrides the
-			// global default) so the reason a sandbox was reaped is legible —
-			// e.g. an E2B sandbox created with a short `timeout` expires on that,
-			// not the 12h default.
-			log.Printf("idle reaper: deleting sandbox %s (idle, ttl %v)", sb.Name, effectiveSandboxTTL(sb, ttl))
-			notifyEvent("sandbox.reaped", sandboxEvent(sb, map[string]any{"reason": "ttl_idle"}))
-			teardownSandbox(ctx, sb, ss, ps, ts)
+			// Idle: release the container's CPU and memory but keep the sandbox
+			// and its data. `start` resumes it (docker start, volume intact).
+			log.Printf("idle reaper: stopping sandbox %s (idle, ttl %v)", sb.Name, effectiveSandboxTTL(sb, ttl))
+			notifyEvent("sandbox.reaped", sandboxEvent(sb, map[string]any{"reason": "ttl_idle_stop"}))
+			stopSandbox(ctx, sb, ss, ts)
 		}
 	}
 }
@@ -84,6 +91,46 @@ func effectiveSandboxTTL(sb *podpkg.SandboxInfo, ttl time.Duration) time.Duratio
 		return time.Duration(sb.TTLSeconds) * time.Second
 	}
 	return ttl
+}
+
+// stopSandbox releases the container's resources without destroying anything:
+// the pode stops the container (docker stop), the workspace volume stays, and
+// the record moves to STOPPED so `start` can resume it.
+func stopSandbox(ctx context.Context, sb *podpkg.SandboxInfo, ss podpkg.SandboxRepository, ts *tunnel.TunnelStore) {
+	t, ok := ts.Get(sb.PoderID)
+	if !ok {
+		log.Printf("idle reaper: sandbox %s has no tunnel, cannot stop it now", sb.Name)
+		return
+	}
+	reqCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(reqCtx, http.MethodPost, "http://poder/sandboxes/"+sb.Name+"/stop", nil)
+	resp, err := t.Client.Do(req)
+	if err != nil {
+		log.Printf("idle reaper: stop %s failed: %v", sb.Name, err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		log.Printf("idle reaper: stop %s failed: HTTP %d", sb.Name, resp.StatusCode)
+		return
+	}
+	_ = ss.Update(sb.Name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopped })
+	log.Printf("idle reaper: sandbox %s stopped, data kept in its workspace volume", sb.Name)
+}
+
+// stoppedTooLong reports whether a STOPPED sandbox has outlived the retention
+// window. LastActivity is refreshed on every use, so a resumed sandbox starts a
+// new clock.
+func stoppedTooLong(sb *podpkg.SandboxInfo, now time.Time, retain time.Duration) bool {
+	if retain <= 0 {
+		return false
+	}
+	last := sb.LastActivity
+	if last.IsZero() {
+		last = sb.CreatedAt
+	}
+	return now.Sub(last) > retain
 }
 
 // teardownSandbox removes a sandbox record, decrements its poder's usage, and

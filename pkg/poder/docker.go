@@ -21,6 +21,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
@@ -194,6 +195,19 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	}
 
 	hostConfig := &container.HostConfig{}
+	// A named volume rather than a bind mount: it survives container removal
+	// (image upgrades, create retries) and Docker keeps it out of the host
+	// namespace. The name is derived from the sandbox so a retried create
+	// reattaches the same data instead of starting from scratch.
+	if req.PersistData {
+		wsVol := WorkspaceVolumeName(req.Name)
+		hostConfig.Mounts = append(hostConfig.Mounts, mount.Mount{
+			Type:   mount.TypeVolume,
+			Source: wsVol,
+			Target: "/workspace",
+		})
+		log.Printf("poder: sandbox %s persists /workspace in volume %s", req.Name, wsVol)
+	}
 	if containerNetwork != "" {
 		hostConfig.NetworkMode = container.NetworkMode(containerNetwork)
 	}
@@ -290,6 +304,13 @@ func (p *DockerPoder) DeletePod(ctx context.Context, podID string) error {
 		egressKey = strings.TrimPrefix(info.Name, "/")
 	}
 
+	// The workspace volume is named after the sandbox, and the sandbox name
+	// lives on the container label — resolve it before the container is gone.
+	wsVol := ""
+	if info, err := p.dockerClient.ContainerInspect(ctx, podID); err == nil {
+		wsVol = WorkspaceVolumeName(info.Config.Labels["sandrpod/sandbox-name"])
+	}
+
 	// Stop the container gracefully
 	_ = p.dockerClient.ContainerStop(ctx, podID, container.StopOptions{Timeout: ptr(10)})
 
@@ -303,18 +324,47 @@ func (p *DockerPoder) DeletePod(ctx context.Context, podID string) error {
 	}
 
 	p.teardownEgress(ctx, egressKey)
+	// An explicit delete removes the data too: a kept volume with no sandbox is
+	// exactly the leak the cloud sweep exists to prevent, one layer down.
+	if wsVol != "" && wsVol != WorkspaceVolumeName("") {
+		if err := p.dockerClient.VolumeRemove(ctx, wsVol, true); err != nil {
+			if !os.IsNotExist(err) {
+				log.Printf("poder: remove workspace volume %s: %v", wsVol, err)
+			}
+		} else {
+			log.Printf("poder: removed workspace volume %s", wsVol)
+		}
+	}
 	p.UnregisterPod(podID)
 	return nil
 }
 
-// PausePod pauses the container, preserving its state.
+// PausePod releases the container's CPU and memory by stopping it. It used to
+// call ContainerPause, which freezes the processes but keeps every byte of
+// memory resident — the opposite of what "stop an idle sandbox" is for. The
+// container and its /workspace volume stay, so UnpausePod resumes in place with
+// the data intact.
 func (p *DockerPoder) PausePod(ctx context.Context, podID string) error {
-	return p.dockerClient.ContainerPause(ctx, podID)
+	if err := p.dockerClient.ContainerStop(ctx, podID, container.StopOptions{Timeout: ptr(10)}); err != nil {
+		return fmt.Errorf("failed to stop container: %w", err)
+	}
+	return nil
 }
 
-// UnpausePod resumes a paused pod.
+// UnpausePod resumes a stopped pod (docker start), reattaching its volume.
 func (p *DockerPoder) UnpausePod(ctx context.Context, podID string) error {
-	return p.dockerClient.ContainerUnpause(ctx, podID)
+	if err := p.dockerClient.ContainerStart(ctx, podID, container.StartOptions{}); err != nil {
+		return fmt.Errorf("failed to start container: %w", err)
+	}
+	return nil
+}
+
+// WorkspaceVolumeName is the volume a sandbox's /workspace lives in. Derived
+// from the sandbox name so a retried create reattaches the same data, and so
+// DeletePod can remove exactly the right volume.
+func WorkspaceVolumeName(sandboxName string) string {
+	repl := strings.NewReplacer("/", "-", " ", "-", ":", "-")
+	return "sandrpod-ws-" + repl.Replace(sandboxName)
 }
 
 // SnapshotPod commits the pod's container to a new image (docker commit) and

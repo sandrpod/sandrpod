@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"regexp"
 	"time"
 
@@ -104,6 +105,14 @@ func runSandboxCreate(
 	// never reaches the wire — the poder does not need to know.
 	if requester.Tenant != "" {
 		req.Workspace = requester.Tenant
+	}
+
+	// Data persistence is the default: an idle sandbox gets stopped rather than
+	// deleted (see the idle reaper), and that is only useful if /workspace
+	// outlives the container. SANDRPOD_SANDBOX_PERSIST=false opts out for
+	// deployments where sandboxes are meant to be disposable.
+	if os.Getenv("SANDRPOD_SANDBOX_PERSIST") != "false" {
+		req.PersistData = true
 	}
 
 	// A cloud provider needs a region it recognises. `local` is this control

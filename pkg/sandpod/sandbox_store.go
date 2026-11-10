@@ -85,6 +85,10 @@ type CreateSandboxRequest struct {
 	// the worker exists, is online, and accepts this tenant (its own, or an
 	// unscoped platform node). Empty = automatic placement.
 	PoderID string `json:"poder_id,omitempty"`
+	// PersistData mounts a volume at /workspace so the sandbox's files survive
+	// the container. Defaults to true for container workers: an idle sandbox is
+	// stopped to release CPU/memory and resumed later with its data intact.
+	PersistData bool `json:"persist_data,omitempty"`
 	// Network is the egress allow-list for this sandbox. Validated at create
 	// time (a policy that does not parse is a 400, not a sandbox that starts
 	// and then denies everything), stored with the record, and handed to the

@@ -62,6 +62,11 @@ type CreatePodRequest struct {
 	// CPUCores and MemoryMB, when > 0, cap the container's resources.
 	CPUCores float64 `json:"cpu_cores,omitempty"`
 	MemoryMB int64   `json:"memory_mb,omitempty"`
+	// PersistData mounts a docker volume at /workspace so the sandbox's files
+	// survive the container: an idle sandbox is stopped (not deleted) to release
+	// CPU and memory, and resumed later with its data intact. Drivers that
+	// cannot offer a volume refuse or ignore it explicitly.
+	PersistData bool `json:"persist_data,omitempty"`
 	// Bootstrap configuration
 	APIURL       string `json:"api_url,omitempty"`       // Toolbox API URL
 	PoderVersion string `json:"poder_version,omitempty"` // Poder version
