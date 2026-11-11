@@ -88,3 +88,35 @@ built from it, and a wrong value fails at the worst moment (when a customer clic
 
 A reference deployment with every command and its output is in
 [PRODUCTION_DEPLOYMENT.md](https://github.com/sandrpod/sandrpod/blob/main/docs/PRODUCTION_DEPLOYMENT.md).
+
+## What the open-source build gives you
+
+The engine is the product: everything that schedules, runs, isolates and observes
+a sandbox is here. What is not here is the commercial wrapper.
+
+| Capability | Open source | Hosted SaaS |
+|---|---|---|
+| Sandbox lifecycle (create/start/stop/delete) | ✅ | ✅ |
+| Exec, files, PTY, streaming | ✅ | ✅ |
+| Code interpreter (stateful kernel, chart capture) | ✅ | ✅ |
+| MCP: platform entry (18 tools) and sandbox entry | ✅ | ✅ |
+| Desktop sandboxes (viewer, CDP, desktop tools) | ✅ | ✅ |
+| GPU sandboxes and the per-owner guards | ✅ | ✅ |
+| Snapshots and forks (registry push/pull) | ✅ | ✅ |
+| Data persistence (`/workspace` volume, idle release) | ✅ | ✅ |
+| Preview URLs | needs a domain | ✅ |
+| E2B-compatible surface | needs a domain | ✅ |
+| Multi-tenant isolation | ✅ | ✅ |
+| Worker enrolment, join tokens, worker keys | ✅ | ✅ |
+| **Accounts, wallet, metering, billing** | — | ✅ |
+| **Console (web UI), audit log, usage page** | — | ✅ |
+| **Managed registry and image builds** | — | ✅ |
+
+Two lines need a domain (`SANDRPOD_E2B_DOMAIN` plus wildcard DNS): the public
+preview host and the E2B surface, which routes `api.<domain>` and
+`<port>-<id>.<domain>`. Without one, the tunnel proxy
+(`/api/v1/sandboxes/<name>/toolbox/proxy/<port>`) still reaches a service inside a
+sandbox — that is what `sandrpod-cli preview` uses.
+
+So a self-hosted install is a complete execution platform with no quotas, no
+accounts and no phone-home. The SaaS adds the counting and the shopfront around it.

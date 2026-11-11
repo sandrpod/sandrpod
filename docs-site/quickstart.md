@@ -66,6 +66,37 @@ curl -s -X POST "localhost:8080/api/v1/sandboxes/execute?sandbox=demo" \
 - A deployment that hands out per-workspace credentials issues them separately
   (an `sk_` key, or an `e2b_` key for the E2B surface). See [API keys](/api#authentication).
 
+## If you run the containers by hand
+
+`docker compose` wires this for you; a manual `docker run` has to say it too. The
+worker tells the Docker daemon which network sandbox containers are created on:
+
+```bash
+docker run -d --name sandrpod-poder \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -e API_URL=http://<server-host>:8080 \
+  -e SANDRPOD_NETWORK=sandrpod \
+  ghcr.io/sandrpod/poder:latest
+```
+
+Without `SANDRPOD_NETWORK` the sandboxes land on Docker's default bridge, the
+worker cannot reach them, and `execute` fails with *"Failed to execute code"* —
+the sandbox looks healthy in `list`, which is what makes it confusing.
+
+## No domain? Preview is still available
+
+A signed preview URL (`https://<port>-<sandbox>.<domain>/`) needs
+`SANDRPOD_E2B_DOMAIN` and wildcard DNS. On a laptop with neither, the tunnel proxy
+works without them:
+
+```bash
+sandrpod-cli preview demo 8080          # GET /api/v1/sandboxes/demo/toolbox/proxy/8080/
+curl -s localhost:8080/api/v1/sandboxes/demo/toolbox/proxy/8080/
+```
+
+That is the same route with the API credential in front of it, so it is the one to
+use until a domain exists.
+
 ## Next
 
 - [Your first sandbox](/first-sandbox) — the same steps with the moving parts explained.
