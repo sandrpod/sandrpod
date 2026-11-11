@@ -156,3 +156,35 @@ bridge 每 5 秒 watch 一次配置文件。确认路径：`sandrpod-cli mcp ls`
 
 **凭证存在哪？怎么删？**
 `/workspace/.sandrpod/oauth/`（0600）。删沙箱即删除；或去提供方页面撤销授权。
+
+## 工具清单
+
+平台入口提供的全部工具与默认参数。所有 `sandbox_*` 都带沙箱**名字**；`desktop_*` 和
+`sandbox_run_code` 还会指明操作的是哪块屏幕或哪个内核。
+
+| 工具 | 参数 | 作用 |
+|---|---|---|
+| `sandbox_create` | `name`、`image`、`cpu`、`memory`、`ttl`、`node`、`region`、`gpu`、`persist` | 建记录；用 `sandbox_list` 轮询到 RUNNING。要桌面就传 `sandrpod-desktop:v6`，要 GPU 就传 `sandrpod-toolbox:ubuntu` |
+| `sandbox_list` | — | 状态、节点、镜像、资源 |
+| `sandbox_exec` | `sandbox`、`code`、`language`、`timeout` | 一次性 shell，状态不保留 |
+| `sandbox_run_code` | `sandbox`、`code`、`context`、`timeout` | **有状态** Python 内核；图表以图片返回 |
+| `sandbox_contexts` | `sandbox`、`action`、`context` | `list` / `create` / `restart` / `remove` 内核 |
+| `sandbox_read_file` | `sandbox`、`path` | 读文本 |
+| `sandbox_write_file` | `sandbox`、`path`、`content` | 自动建父目录 |
+| `sandbox_list_files` | `sandbox`、`path` | 默认 `/workspace` |
+| `sandbox_start` | `sandbox` | 启动已停止的沙箱，数据完好 |
+| `sandbox_stop` | `sandbox` | 释放 CPU/内存/GPU，保留 `/workspace` |
+| `sandbox_delete` | `sandbox` | 删除沙箱**及其**工作区 |
+| `sandbox_snapshot` | `sandbox`、`image` | 把文件系统提交为镜像（配了 registry 时会推送） |
+| `sandbox_preview_url` | `sandbox`、`port` | 该端口的签名 URL（2 小时） |
+| `desktop_screenshot` | `sandbox` | 该屏幕的 PNG 图片块 |
+| `desktop_click` | `sandbox`、`x`、`y`、`button` | `left`（默认）/ `middle` / `right` |
+| `desktop_type` | `sandbox`、`text` | 输入到当前焦点窗口 |
+| `desktop_key` | `sandbox`、`key` | `Return`、`ctrl+c`、`Alt+Tab` |
+| `desktop_scroll` | `sandbox`、`x`、`y`、`amount` | 负值向上 |
+
+**沙箱入口**提供这 5 个 `desktop_*`（不带 `sandbox` 参数，它就是那个沙箱），外加该沙箱
+`mcp.json` 里的所有 server——那些工具按 server 自己声明的名字出现（例如
+`github_create_issue`）。
+
+运行时没有任何隐式推断：不在这张表里的工具就不存在，两个入口的 `tools/list` 永远是权威。

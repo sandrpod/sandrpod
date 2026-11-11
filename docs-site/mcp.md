@@ -209,4 +209,36 @@ Ensure the worker runs with `SANDRPOD_E2B_DOMAIN` (the preview URL needs it).
 `/workspace/.sandrpod/oauth/` (0600). Deleting the sandbox removes them; or
 revoke the grant at the provider.
 
+## Tool reference
 
+Everything the platform entry serves, defaults included. Every `sandbox_*` tool takes
+the sandbox **name**; `desktop_*` and `sandbox_run_code` also accept the kernel or
+screen they act on.
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `sandbox_create` | `name`, `image`, `cpu`, `memory`, `ttl`, `node`, `region`, `gpu`, `persist` | Creates the record; poll `sandbox_list` for RUNNING. `image` is how you get a desktop (`sandrpod-desktop:v6`) or a GPU-ready base (`sandrpod-toolbox:ubuntu`) |
+| `sandbox_list` | — | State, node, image, resources |
+| `sandbox_exec` | `sandbox`, `code`, `language`, `timeout` | One-shot shell; nothing survives |
+| `sandbox_run_code` | `sandbox`, `code`, `context`, `timeout` | **Stateful** Python kernel; figures come back as images |
+| `sandbox_contexts` | `sandbox`, `action`, `context` | `list` / `create` / `restart` / `remove` a kernel |
+| `sandbox_read_file` | `sandbox`, `path` | Text |
+| `sandbox_write_file` | `sandbox`, `path`, `content` | Creates parent directories |
+| `sandbox_list_files` | `sandbox`, `path` | Defaults to `/workspace` |
+| `sandbox_start` | `sandbox` | Resumes a stopped sandbox, data intact |
+| `sandbox_stop` | `sandbox` | Releases CPU/memory/GPU, keeps `/workspace` |
+| `sandbox_delete` | `sandbox` | Deletes the sandbox **and** its workspace |
+| `sandbox_snapshot` | `sandbox`, `image` | Commits the filesystem to an image (and pushes it when a registry is configured) |
+| `sandbox_preview_url` | `sandbox`, `port` | Signed URL (2 h) for a port inside the sandbox |
+| `desktop_screenshot` | `sandbox` | PNG image block of that screen |
+| `desktop_click` | `sandbox`, `x`, `y`, `button` | `left` (default), `middle`, `right` |
+| `desktop_type` | `sandbox`, `text` | Types into the focused window |
+| `desktop_key` | `sandbox`, `key` | `Return`, `ctrl+c`, `Alt+Tab` |
+| `desktop_scroll` | `sandbox`, `x`, `y`, `amount` | Negative scrolls up |
+
+The **sandbox entry** serves the five `desktop_*` tools without the `sandbox`
+argument (it is that sandbox), plus every server in the sandbox's `mcp.json` — those
+appear under whatever names the server declares (e.g. `github_create_issue`).
+
+Nothing is inferred at runtime: a tool that is not in this table does not exist, and
+`tools/list` on either entry is always the authority.
