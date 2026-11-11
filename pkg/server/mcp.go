@@ -53,7 +53,11 @@ type mcpTool struct {
 	// forward marks a tool whose work happens in a sandbox's own MCP bridge. The
 	// call is proxied as JSON-RPC (two steps: initialize for a session id, then
 	// tools/call) instead of being re-dispatched as a REST request.
-	forward     bool
+	forward bool
+	// render turns the dispatched endpoint's JSON into MCP content blocks. Without
+	// it the body is one text block — right for a JSON answer, wrong for a chart: a
+	// base64 PNG belongs in an image block so the client draws it.
+	render      func(body []byte) []map[string]any
 	Name        string
 	Description string
 	InputSchema map[string]any
@@ -314,7 +318,105 @@ func builtinMCPTools() []mcpTool {
 			}, "sandbox", "x", "y"),
 		},
 	)
+	// The code interpreter: a stateful kernel, and charts come back as images. This
+	// is the data-analysis surface — an agent computes in one cell, plots in the
+	// next, and its context survives between calls.
+	tools = append(tools,
+		mcpTool{
+			Name:        "sandbox_run_code",
+			Description: "Run Python in a stateful kernel and return stdout plus any figures as images. The same context (default: the sandbox's) keeps variables between calls.",
+			InputSchema: obj(map[string]any{
+				"sandbox": str("sandbox name"),
+				"code":    str("code to run"),
+				"context": str("optional kernel id; omit for the sandbox's default one"),
+				"timeout": num("seconds (default 120)"),
+			}, "sandbox", "code"),
+			call: func(a map[string]any) (string, string, any, error) {
+				body := map[string]any{"code": strArg(a, "code")}
+				if ctx := strArg(a, "context"); ctx != "" {
+					body["context_id"] = ctx
+				}
+				if t := floatArg(a, "timeout", 0); t > 0 {
+					body["timeout"] = t
+				}
+				return http.MethodPost, "/api/v1/sandboxes/" + urlq(strArg(a, "sandbox")) +
+					"/toolbox/code-interpreter/execute", body, nil
+			},
+			render: renderCodeResult,
+		},
+		mcpTool{
+			Name:        "sandbox_contexts",
+			Description: "List, create, restart or remove a sandbox's code-interpreter kernels (a kernel is a namespace: variables, imports, loaded data).",
+			InputSchema: obj(map[string]any{
+				"sandbox": str("sandbox name"),
+				"action":  str("list (default) | create | restart | remove"),
+				"context": str("kernel id (required for restart/remove)"),
+			}, "sandbox"),
+			call: func(a map[string]any) (string, string, any, error) {
+				sb := urlq(strArg(a, "sandbox"))
+				action := strArg(a, "action")
+				if action == "" {
+					action = "list"
+				}
+				id := urlq(strArg(a, "context"))
+				switch action {
+				case "list":
+					return http.MethodGet, "/api/v1/sandboxes/" + sb + "/toolbox/code-interpreter/contexts", nil, nil
+				case "create":
+					return http.MethodPost, "/api/v1/sandboxes/" + sb + "/toolbox/code-interpreter/contexts",
+						map[string]any{"language": "python"}, nil
+				case "restart":
+					if id == "" {
+						return "", "", nil, fmt.Errorf("restart needs the kernel id as `context`")
+					}
+					return http.MethodPost, "/api/v1/sandboxes/" + sb + "/toolbox/code-interpreter/contexts/" + id + "/restart", nil, nil
+				case "remove":
+					if id == "" {
+						return "", "", nil, fmt.Errorf("remove needs the kernel id as `context`")
+					}
+					return http.MethodDelete, "/api/v1/sandboxes/" + sb + "/toolbox/code-interpreter/contexts/" + id, nil, nil
+				}
+				return "", "", nil, fmt.Errorf("action must be list, create, restart or remove")
+			},
+		},
+	)
 	return tools
+}
+
+// renderCodeResult turns the toolbox's CodeResult into MCP content: the text the
+// user asked for, and every PNG as an image block so a chart arrives as a chart.
+func renderCodeResult(body []byte) []map[string]any {
+	var r struct {
+		Stdout string   `json:"stdout"`
+		Stderr string   `json:"stderr"`
+		Text   string   `json:"text"`
+		Error  string   `json:"error"`
+		Images []string `json:"images"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return []map[string]any{{"type": "text", "text": string(body)}}
+	}
+	var out []map[string]any
+	add := func(s string) {
+		if strings.TrimSpace(s) != "" {
+			out = append(out, map[string]any{"type": "text", "text": strings.TrimRight(s, "\n")})
+		}
+	}
+	add(r.Stdout)
+	add(r.Text)
+	add(r.Stderr)
+	if r.Error != "" {
+		add("Traceback:\n" + r.Error)
+	}
+	for _, b64 := range r.Images {
+		if b64 != "" {
+			out = append(out, map[string]any{"type": "image", "data": b64, "mimeType": "image/png"})
+		}
+	}
+	if len(out) == 0 {
+		out = append(out, map[string]any{"type": "text", "text": "(no output)"})
+	}
+	return out
 }
 
 // ServeHTTP implements the MCP Streamable HTTP transport (JSON responses).
@@ -431,8 +533,14 @@ func (h *mcpHandler) callTool(w http.ResponseWriter, r *http.Request, req mcpReq
 		}})
 		return
 	}
+	content := []map[string]any{{"type": "text", "text": text}}
+	if tool.render != nil {
+		if shaped := tool.render(resp.body.Bytes()); len(shaped) > 0 {
+			content = shaped
+		}
+	}
 	writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
-		"content": []map[string]any{{"type": "text", "text": text}},
+		"content": content,
 		"isError": false,
 	}})
 }
