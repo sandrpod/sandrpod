@@ -1,0 +1,11 @@
+# A deploy helper: the CI runner image is an actions image, not a build box, and it
+# may carry neither ssh nor rsync. This has both, so the publish step does not
+# depend on what the runner happens to ship.
+FROM alpine:3.24
+
+ARG APK_MIRROR=mirrors.aliyun.com
+RUN sed -i "s|dl-cdn.alpinelinux.org|${APK_MIRROR}|g" /etc/apk/repositories \
+ && apk add --no-cache openssh-client rsync tar \
+ && mkdir -p /root/.ssh && chmod 700 /root/.ssh
+
+ENTRYPOINT ["/bin/sh"]

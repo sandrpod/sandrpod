@@ -81,19 +81,28 @@ jobs:
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           HOST: ${{ secrets.DEPLOY_HOST }}
+          REGISTRY_HOST: ${{ secrets.REGISTRY_HOST }}
+          REGISTRY_USER: ${{ secrets.REGISTRY_USER }}
+          REGISTRY_PASSWORD: ${{ secrets.REGISTRY_PASSWORD }}
         run: |
           set -eu
           if [ -z "${SSH_KEY:-}" ] || [ -z "${HOST:-}" ]; then
             echo "DEPLOY_SSH_KEY/DEPLOY_HOST unset — build-only run"
             exit 0
           fi
-          mkdir -p ~/.ssh && printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          # The runner image may carry neither rsync nor a working ssh; tar over ssh
-          # needs only ssh and tar, and says so plainly when ssh itself fails.
-          if command -v rsync >/dev/null 2>&1; then
-            rsync -az --delete out/dist/ "root@$HOST:/var/www/docs/"
-          else
-            echo "no rsync on the runner; streaming the site with tar over ssh"
-            tar -C out/dist -cf - . | ssh "root@$HOST" 'rm -rf /var/www/docs.tmp && mkdir -p /var/www/docs.tmp && tar -C /var/www/docs.tmp -xf - && rm -rf /var/www/docs && mv /var/www/docs.tmp /var/www/docs'
+          if [ -n "${REGISTRY_HOST:-}" ]; then
+            printf '%s' "$REGISTRY_PASSWORD" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin
           fi
+          # Publish from a container that certainly has ssh and tar: the runner
+          # image may have neither, and a deploy that silently does nothing is
+          # worse than one that fails loudly.
+          tar -C out/dist -cf - . \
+            | docker run -i --rm \
+                -e KEY="$SSH_KEY" -e HOST="$HOST" \
+                "${REGISTRY_HOST:-local}/sandrpod-base/publisher:latest" \
+                -c 'set -e
+                    printf "%s\n" "$KEY" > /root/.ssh/id_ed25519
+                    chmod 600 /root/.ssh/id_ed25519
+                    ssh-keyscan -H "$HOST" >> /root/.ssh/known_hosts 2>/dev/null
+                    ssh -o StrictHostKeyChecking=accept-new "root@$HOST" \
+                      "rm -rf /var/www/docs.tmp && mkdir -p /var/www/docs.tmp && tar -C /var/www/docs.tmp -xf - && rm -rf /var/www/docs && mv /var/www/docs.tmp /var/www/docs"'
