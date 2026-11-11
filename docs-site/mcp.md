@@ -193,6 +193,4 @@ Ensure the worker runs with `SANDRPOD_E2B_DOMAIN` (the preview URL needs it).
 `/workspace/.sandrpod/oauth/` (0600). Deleting the sandbox removes them; or
 revoke the grant at the provider.
 
-<!-- ci-deploy-probe: 1344 -->
 
-<!-- ci-deploy-probe: 1353 -->
