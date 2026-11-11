@@ -69,3 +69,42 @@ func TestSandboxPoderTunnel_AllowsStopped(t *testing.T) {
 			rec.Code, rec.Body.String())
 	}
 }
+
+// A sandbox belongs to a tenant, and every sandbox-scoped proxy resolves through
+// sandboxTunnel/sandboxPoderTunnel: toolbox (which carries the sandbox MCP
+// bridge, and through it every third-party MCP tool the tenant configured),
+// files, pty, session. None of them checked the owner — any valid API key could
+// reach any sandbox it could name.
+func TestSandboxTunnel_RefusesAnotherTenantsSandbox(t *testing.T) {
+	ss := store.NewMemoryStores().Sandboxes
+	_ = ss.Add(&podpkg.SandboxInfo{Name: "alices-box", Owner: "workspace:alice", PoderID: "P", State: podpkg.StateRunning})
+	ts := tunnel.NewTunnelStore()
+	ts.Set("P", nil)
+
+	req := func(as string) *http.Request {
+		r := httptest.NewRequest("POST", "/api/v1/sandboxes/alices-box/toolbox/mcp", nil)
+		return WithIdentity(r, Identity{Name: as, Role: RoleUser})
+	}
+
+	rec := httptest.NewRecorder()
+	if _, _, ok := sandboxTunnel("alices-box", req("bob"), ss, ts,
+		tunnel.NewDirectTunnelStore(), stubOwners{}, "", rec); ok {
+		t.Fatal("bob reached alice's sandbox")
+	}
+	// 404, not 403: a stranger must not learn the name exists.
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("answered %d, want 404 (the header would leak existence)", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	if _, _, ok := sandboxTunnel("alices-box", req("workspace:alice"), ss, ts,
+		tunnel.NewDirectTunnelStore(), stubOwners{}, "", rec); !ok {
+		t.Fatalf("the owner was refused her own sandbox: %d %s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	if _, _, ok := sandboxTunnel("alices-box", req("admin"), ss, ts,
+		tunnel.NewDirectTunnelStore(), stubOwners{}, "", rec); ok && rec.Code == http.StatusNotFound {
+		t.Fatal("an admin was refused")
+	}
+}

@@ -2550,6 +2550,18 @@ func sandboxPoderTunnel(name string, r *http.Request, ss podpkg.SandboxRepositor
 		http.Error(w, "sandbox not found", http.StatusNotFound)
 		return nil, nil, false
 	}
+	// Tenant isolation lives here, not in each route: every sandbox-scoped proxy
+	// (toolbox, files, pty, session, exec) resolves through this function, so one
+	// check covers the ones that exist and the ones somebody adds next. Answering
+	// 404 rather than 403 is deliberate — the caller must not learn that a sandbox
+	// it cannot touch exists.
+	//
+	// r == nil marks an internal call (the caller already authorized); a request
+	// with no identity is denied, matching IdentityFrom's contract.
+	if r != nil && !canAccessSandbox(IdentityFrom(r), sb) {
+		http.Error(w, "sandbox not found", http.StatusNotFound)
+		return nil, nil, false
+	}
 	// Throttle the activity write: at 10k+ rps a DB write per request would
 	// swamp the store, so persist at most once per sandbox per interval.
 	if now := time.Now(); shouldPersistActivity(name, now) {
