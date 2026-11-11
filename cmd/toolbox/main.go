@@ -111,6 +111,19 @@ func installMCPBridge(ctx context.Context, server *toolbox.Server) *mcpbridge.Ch
 		path = mcpbridge.DefaultConfigPath()
 	}
 
+	// Keep ~/.sandrpod (mcp.json + the OAuth tokens) on the workspace volume, so
+	// recreating the container — an image upgrade — does not silently revoke every
+	// third-party authorization the user granted. No-op on a host agent, which has
+	// no volume. Runs for every image, so a headless sandbox gets it too.
+	if home, herr := os.UserHomeDir(); herr == nil {
+		if moved, perr := toolbox.PersistHome(home, "/workspace"); perr != nil {
+			log.Printf("MCP bridge: could not persist %s into the volume: %v", filepath.Join(home, ".sandrpod"), perr)
+		} else if moved {
+			log.Printf("MCP bridge: ~/.sandrpod moved onto the workspace volume (survives a container rebuild)")
+			path = mcpbridge.DefaultConfigPath() // re-resolve through the new link
+		}
+	}
+
 	// Permission/Audit are agent (employee-PC) concerns and are intentionally
 	// nil here: a server-side container has no interactive user, and the
 	// container itself is the security boundary. The bridge substitutes an
