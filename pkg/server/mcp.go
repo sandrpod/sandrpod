@@ -50,6 +50,10 @@ type mcpError struct {
 
 // mcpTool is one callable tool: a JSON schema plus the REST call it maps to.
 type mcpTool struct {
+	// forward marks a tool whose work happens in a sandbox's own MCP bridge. The
+	// call is proxied as JSON-RPC (two steps: initialize for a session id, then
+	// tools/call) instead of being re-dispatched as a REST request.
+	forward     bool
 	Name        string
 	Description string
 	InputSchema map[string]any
@@ -100,7 +104,7 @@ func builtinMCPTools() []mcpTool {
 	obj := func(props map[string]any, required ...string) map[string]any {
 		return map[string]any{"type": "object", "properties": props, "required": required}
 	}
-	return []mcpTool{
+	tools := []mcpTool{
 		{
 			Name:        "sandbox_create",
 			Description: "Create a sandbox. Returns once the record exists (state may still be STARTING); poll sandbox_list for RUNNING.",
@@ -256,6 +260,61 @@ func builtinMCPTools() []mcpTool {
 			},
 		},
 	}
+
+	// The desktop tools, forwarded to the sandbox that owns the screen. Declared
+	// here as well as on the sandbox bridge so a client with one static server can
+	// create a desktop sandbox and then drive it; `sandbox` is the only argument
+	// the sandbox entry's version does not have.
+	sbArg := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+	tools = append(tools,
+		mcpTool{
+			forward:     true,
+			Name:        "desktop_screenshot",
+			Description: "Screenshot of a desktop sandbox's screen (returns a PNG image block).",
+			InputSchema: obj(map[string]any{"sandbox": sbArg("desktop sandbox name")}, "sandbox"),
+		},
+		mcpTool{
+			forward:     true,
+			Name:        "desktop_click",
+			Description: "Click at (x,y) in a desktop sandbox. button: left (default), middle, right.",
+			InputSchema: obj(map[string]any{
+				"sandbox": sbArg("desktop sandbox name"),
+				"x":       num("pixel x"),
+				"y":       num("pixel y"),
+				"button":  str("left (default) | middle | right"),
+			}, "sandbox", "x", "y"),
+		},
+		mcpTool{
+			forward:     true,
+			Name:        "desktop_type",
+			Description: "Type text into the focused window of a desktop sandbox.",
+			InputSchema: obj(map[string]any{
+				"sandbox": sbArg("desktop sandbox name"),
+				"text":    str("text to type"),
+			}, "sandbox", "text"),
+		},
+		mcpTool{
+			forward:     true,
+			Name:        "desktop_key",
+			Description: "Press a key or chord (e.g. Return, ctrl+c, Alt+Tab) in a desktop sandbox.",
+			InputSchema: obj(map[string]any{
+				"sandbox": sbArg("desktop sandbox name"),
+				"key":     str("key or chord"),
+			}, "sandbox", "key"),
+		},
+		mcpTool{
+			forward:     true,
+			Name:        "desktop_scroll",
+			Description: "Scroll at (x,y): negative = up, positive = down.",
+			InputSchema: obj(map[string]any{
+				"sandbox": sbArg("desktop sandbox name"),
+				"x":       num("pixel x"),
+				"y":       num("pixel y"),
+				"amount":  num("wheel clicks, negative up"),
+			}, "sandbox", "x", "y"),
+		},
+	)
+	return tools
 }
 
 // ServeHTTP implements the MCP Streamable HTTP transport (JSON responses).
@@ -326,6 +385,17 @@ func (h *mcpHandler) callTool(w http.ResponseWriter, r *http.Request, req mcpReq
 			Error: &mcpError{Code: rpcMethodNotFound, Message: "unknown tool " + params.Name}})
 		return
 	}
+	// The desktop tools are forwarded, not re-dispatched like the REST-shaped ones:
+	// their answer is MCP content (an image block for a screenshot), and wrapping
+	// that inside another text block would hand the client a base64 blob in a
+	// string. Forward = run the same JSON-RPC call against the sandbox's own
+	// bridge, through the mux, so tenant checks apply exactly as they do for a
+	// direct connection.
+	if tool.forward {
+		h.callForwarded(w, r, req, params.Name, params.Arguments)
+		return
+	}
+
 	method, path, body, err := tool.call(params.Arguments)
 	if err != nil {
 		writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Error: &mcpError{Code: rpcInvalidParams, Message: err.Error()}})
@@ -401,4 +471,104 @@ func boolArg(a map[string]any, k string, def bool) bool {
 		return v == "true" || v == "1"
 	}
 	return def
+}
+
+// desktopToolNames are the five tools the sandbox bridge exposes for driving the
+// screen. They are declared on the platform entry too (with a `sandbox` argument)
+// so a client that keeps one static MCP server — Claude Desktop, Cursor — can
+// create a desktop sandbox and then look at it without editing its config.
+var desktopToolNames = []string{
+	"desktop_screenshot", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll",
+}
+
+// callForwarded runs one of the sandbox-bridge tools against a named sandbox.
+//
+// Two round-trips on purpose: the bridge issues a session id on initialize, and a
+// tools/call without one is refused ("Invalid session ID"). The platform keeps no
+// session state between calls, so each forwarded call does its own handshake.
+func (h *mcpHandler) callForwarded(w http.ResponseWriter, r *http.Request, req mcpRequest, toolName string, args map[string]any) {
+	sandbox := strArg(args, "sandbox")
+	if sandbox == "" {
+		writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
+			"content": []map[string]any{{"type": "text", "text": "sandbox is required (which desktop should this act on?)"}},
+			"isError": true,
+		}})
+		return
+	}
+	delete(args, "sandbox")
+	path := "/api/v1/sandboxes/" + urlq(sandbox) + "/toolbox/mcp"
+
+	post := func(payload map[string]any, session string) *captureWriter {
+		encoded, _ := json.Marshal(payload)
+		inner := r.Clone(r.Context())
+		inner.Method = http.MethodPost
+		inner.URL.Path = path
+		inner.URL.RawQuery = ""
+		inner.RequestURI = path
+		inner.Body = io.NopCloser(bytes.NewReader(encoded))
+		inner.ContentLength = int64(len(encoded))
+		inner.Header.Set("Content-Type", "application/json")
+		inner.Header.Set("Accept", "application/json")
+		if session != "" {
+			inner.Header.Set("Mcp-Session-Id", session)
+		}
+		return h.dispatch(inner)
+	}
+
+	init := post(map[string]any{
+		"jsonrpc": "2.0", "id": 1, "method": "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2025-06-18",
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "sandrpod-platform", "version": "1"},
+		},
+	}, "")
+	if init.code >= 400 {
+		h.forwardError(w, req, init)
+		return
+	}
+	session := init.header.Get("Mcp-Session-Id")
+
+	resp := post(map[string]any{
+		"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+		"params": map[string]any{"name": toolName, "arguments": args},
+	}, session)
+	if resp.code >= 400 {
+		h.forwardError(w, req, resp)
+		return
+	}
+	// The bridge answered with a JSON-RPC envelope; hand its result straight to the
+	// client so an image block stays an image block.
+	var envelope struct {
+		Result map[string]any `json:"result"`
+		Error  *mcpError      `json:"error"`
+	}
+	if err := json.Unmarshal(resp.body.Bytes(), &envelope); err != nil {
+		writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
+			"content": []map[string]any{{"type": "text", "text": "unreadable answer from the sandbox: " + err.Error()}},
+			"isError": true,
+		}})
+		return
+	}
+	if envelope.Error != nil {
+		writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
+			"content": []map[string]any{{"type": "text", "text": envelope.Error.Message}},
+			"isError": true,
+		}})
+		return
+	}
+	writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: envelope.Result})
+}
+
+func (h *mcpHandler) forwardError(w http.ResponseWriter, req mcpRequest, resp *captureWriter) {
+	text := strings.TrimSpace(resp.body.String())
+	// A 404 here is the tenant check answering — say so in the words the client can
+	// act on instead of echoing an HTTP status.
+	if resp.code == http.StatusNotFound {
+		text = "no such sandbox (or it does not belong to this credential)"
+	}
+	writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
+		"content": []map[string]any{{"type": "text", "text": text}},
+		"isError": true,
+	}})
 }
