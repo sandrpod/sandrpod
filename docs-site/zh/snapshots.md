@@ -1,9 +1,8 @@
-# Snapshots and forks
+# 快照与分叉
 
-> A snapshot freezes a sandbox — its `/workspace` data and its image layers — and a
-> fork starts a new sandbox from it.
+> 快照把一个沙箱定格——它的 `/workspace` 数据和镜像层——分叉则从它启动一个新沙箱。
 
-## Create one
+## 做一个
 
 ```bash
 curl -s -X POST "$API/api/v1/sandboxes/box/snapshot?image=sandrpod-snapshot/box:v1" \
@@ -11,33 +10,28 @@ curl -s -X POST "$API/api/v1/sandboxes/box/snapshot?image=sandrpod-snapshot/box:
 # → {"image":"registry.example.com/sandrpod-snapshots/box:v1","sandbox":"box"}
 ```
 
-In the console: the row's ⋯ menu → **快照成镜像**. List them with the **快照** button,
-fork with **从快照创建** in the create drawer.
+控制台里：行的 ⋯ 菜单 → **快照成镜像**；用 **快照** 按钮查看列表；在创建抽屉里用
+**从快照创建** 分叉。
 
-## What a snapshot contains
+## 快照里有什么
 
-- the **image layers** (what `docker commit` captures: installed packages, files
-  outside `/workspace`)
-- the **`/workspace` volume**, which `docker commit` does *not* capture — the engine
-  copies it when the fork is created
+- **镜像层**（`docker commit` 捕获的东西：装过的包、`/workspace` 之外的文件）
+- **`/workspace` 卷**，`docker commit` *不* 捕获它——引擎在创建分叉时复制过来
 
-## Where it lives
+## 存在哪里
 
-With `SANDRPOD_REGISTRY` set on the workers, a snapshot is tagged
-`<registry>/sandrpod-snapshots/<sandbox>:<tag>` and **pushed**, so any worker can fork
-from it. Without a registry it stays on the worker that committed it and a fork only
-works there — the console pins the node in that case.
+worker 上配置了 `SANDRPOD_REGISTRY` 时，快照会被打上
+`<registry>/sandrpod-snapshots/<沙箱>:<tag>` 并**推送上去**，任何 worker 都能从它分叉。
+没有 registry 时它只留在做快照的那台机器上，分叉也只能在那里进行——那控制台会把节点锁定。
 
-The platform's own deployment runs a small `registry:2` behind Caddy at
-`registry.sandbox.sandrpod.com`; see [deploy](deploy.md) for the wiring.
+平台自身的部署在 Caddy 后面跑一个小的 `registry:2`；接线方式见[部署](deploy.md)。
 
-## Names
+## 命名
 
-The default tag is `latest`, so two snapshots of the same sandbox on the same worker
-replace each other. Pass a distinct tag (a timestamp, a label) when the history
-matters.
+默认 tag 是 `latest`，所以同一沙箱在同一 worker 上做两次快照会互相覆盖。
+需要保留历史时传一个不同的 tag（时间戳、标签）。
 
-## Deleting
+## 删除
 
 ```bash
 curl -s -X DELETE "$API/api/v1/snapshots?image=sandrpod-snapshot/box:v1" \
@@ -45,5 +39,5 @@ curl -s -X DELETE "$API/api/v1/snapshots?image=sandrpod-snapshot/box:v1" \
 # → {"removed":1}
 ```
 
-Deletes every worker's copy of that tag. The worker refuses an image it did not
-commit, and docker refuses one still in use.
+会删掉该 tag 在所有 worker 上的副本。worker 会拒绝删除不是自己提交的镜像，docker 会拒绝
+删除正在使用的镜像。

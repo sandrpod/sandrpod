@@ -1,8 +1,7 @@
-# GPU sandboxes
+# GPU 沙箱
 
-> `gpu: N` on a create gives the sandbox real devices from a worker with the NVIDIA
-> container runtime. Everything else — lifecycle, exec, files, persistence, MCP —
-> behaves exactly as on a CPU sandbox.
+> 创建时给 `gpu: N`，沙箱就能拿到有 NVIDIA 容器运行时的 worker 上的真实设备。
+> 其余部分——生命周期、执行、文件、持久化、MCP——与 CPU 沙箱完全一致。
 
 ```bash
 curl -s $API/api/v1/sandboxes -H "Authorization: Bearer $TOKEN" \
@@ -10,71 +9,68 @@ curl -s $API/api/v1/sandboxes -H "Authorization: Bearer $TOKEN" \
   -d '{"name":"train","gpu":1,"image_id":"sandrpod-toolbox:ubuntu","ttl_seconds":3600}'
 ```
 
-## The worker must be able to give it
+## worker 必须能给得出来
 
-1. A driver and a visible GPU on the host.
-2. `nvidia-container-toolkit` installed and registered with docker
-   (`nvidia-ctk runtime configure --runtime=docker`, then restart docker).
+1. 宿主机上有驱动和可见的 GPU。
+2. `nvidia-container-toolkit` 已安装并注册给 docker
+   （`nvidia-ctk runtime configure --runtime=docker`，然后重启 docker）。
 
-The worker checks this **through the docker daemon** (`docker info` → `Runtimes`
-contains `nvidia`), not by looking for `/dev/nvidia0` — the worker itself runs in a
-container, where the device node is invisible. Only then does it advertise the `gpu`
-capability, and only then will a GPU sandbox be placed on it:
+worker 是**通过 docker 守护进程**检查这件事的（`docker info` 的 `Runtimes` 里有 `nvidia`），
+而不是去找 `/dev/nvidia0`——worker 自己就跑在容器里，那里看不到设备节点。只有检查通过它才
+声明 `gpu` 能力位，也只有那时 GPU 沙箱才会被放上去：
 
 ```
 $ docker logs sandrpod-worker | grep -i gpu
 GPU support detected (nvidia container runtime registered)
 ```
 
-Placement refuses clearly when nothing can take it:
+放不上去时会明确拒绝：
 
 ```
 worker capability unavailable: this sandbox needs a GPU, but 2 online local
 worker(s) do not advertise "gpu"
 ```
 
-## The image must be glibc
+## 镜像必须是 glibc
 
-NVIDIA injects **glibc** binaries (`nvidia-smi` and the driver libraries). The
-default `sandrpod-toolbox` image is Alpine (musl): the device arrives and every
-NVIDIA binary fails with `required file not found`. Use
-`sandrpod-toolbox:ubuntu` (or any Ubuntu/Debian image, including the desktop ones).
+NVIDIA 注入的是 **glibc** 二进制（`nvidia-smi` 和驱动库）。默认的 `sandrpod-toolbox`
+是 Alpine（musl）：设备能进去，但每个 NVIDIA 二进制都报 `required file not found`。
+请用 `sandrpod-toolbox:ubuntu`（或任何 Ubuntu/Debian 镜像，包括桌面镜像）。
 
-## Allocation
+## 设备怎么分配
 
 ```
 HostConfig.DeviceRequests: [{"Driver":"nvidia","Count":1,"Capabilities":[["gpu"]]}]
 ```
 
-`Count` is exactly what was asked for, never `-1` (all devices), so two GPU sandboxes
-cannot share a card by accident.
+`Count` 就是要的数量，绝不用 `-1`（全部设备），所以两个 GPU 沙箱不会意外共用同一张卡。
 
-## Cost guardrails
+## 成本护栏
 
-| Variable | Default | Effect |
+| 变量 | 默认 | 作用 |
 |---|---|---|
-| `SANDRPOD_GPU_MAX_PER_OWNER` | `1` | Live GPU sandboxes per identity; the refusal tells the user to stop or delete one |
-| `SANDRPOD_GPU_MAX_TTL` | `2h` | An idle GPU sandbox's TTL is **clamped** (not refused): an agent asking for a day gets two hours and a log line |
+| `SANDRPOD_GPU_MAX_PER_OWNER` | `1` | 每个身份同时存活的 GPU 沙箱数；拒绝信息会告诉用户去停止或删除 |
+| `SANDRPOD_GPU_MAX_TTL` | `2h` | 闲置 GPU 沙箱的 TTL 被**裁剪**（不是拒绝）：agent 要一天也只给两小时，并留一条日志 |
 
-`0` disables either half. Terminated and errored records do not hold a slot.
+设为 `0` 可分别关闭。已终止和出错的记录不占名额。
 
-Billing adds `CentPerGPUHour` on top of the vCPU and memory the sandbox reserves, so
-a GPU sandbox is priced as what it is rather than as a cheap CPU one.
+计费在沙箱仍然占用的 vCPU 与内存之上加 `CentPerGPUHour`，所以 GPU 沙箱按它真正的成本计价，
+而不是当成便宜的 CPU 沙箱。
 
-Idle release **stops** the container (`docker stop`, not `pause`), which returns the
-device for billing — that is why the reaper uses stop.
+闲置释放是 **stop** 容器（`docker stop`，不是 `pause`），这样设备会还给驱动用于计费——
+reaper 用 stop 的原因就在这里。
 
-## Verify a new GPU worker end to end
+## 端到端验证一台新 GPU worker
 
 ```bash
-# 1. host: does the toolkit work at all?
+# 1. 宿主机：toolkit 本身能用吗？
 docker run --rm --gpus 1 ubuntu:22.04 nvidia-smi
 
-# 2. platform: did the engine allocate the device?
-docker inspect <sandbox-container> --format '{{json .HostConfig.DeviceRequests}}'
+# 2. 平台层：引擎分配了设备吗？
+docker inspect <沙箱容器> --format '{{json .HostConfig.DeviceRequests}}'
 # → [{"Driver":"nvidia","Count":1,"Capabilities":[["gpu"]]}]
 
-# 3. in-sandbox: can the workload see it?
+# 3. 沙箱内：负载能看到它吗？
 curl -s "$API/api/v1/sandboxes/execute?sandbox=train" \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"code":"nvidia-smi --query-gpu=name,memory.total --format=csv,noheader","language":"bash"}'

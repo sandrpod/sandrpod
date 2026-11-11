@@ -1,122 +1,113 @@
 ---
-title: Self-host in production
-description: The deployment shape to copy when SandrPod is in front of real traffic.
+title: 生产部署
+description: 真实流量压上来时要照抄的部署形态。
 ---
 
-# Self-host in production
+# 生产部署
 
-One control plane, PostgreSQL, a real hostname, TLS, backups and alerts. Everything
-below was run start to finish; the measurements are from a live deployment.
+一个控制面、PostgreSQL、一个真实域名、TLS、备份、告警。下面每一条都实际跑过，数字
+来自真实部署。
 
-## What you need
+## 需要什么
 
-| Piece | Sizing that works |
+| 部件 | 够用的规格 |
 |---|---|
-| control plane | 2 vCPU / 4 GB — the process idles at ~60 MB |
-| database | PostgreSQL 14+, TLS on; managed is worth it for backups and PITR |
-| worker(s) | 4 vCPU / 8 GB / 100 GB per host; sandboxes are the load, not the control plane |
-| TLS | a reverse proxy that can obtain certificates (Caddy does it automatically) |
-| DNS | one name for the API/console, optionally a wildcard for the E2B surface |
+| 控制面 | 2 vCPU / 4 GB —— 进程空转约 60 MB |
+| 数据库 | PostgreSQL 14+，开启 TLS；托管版值得，因为备份和 PITR 不用自己写 |
+| worker | 每台 4 vCPU / 8 GB / 100 GB；吃负载的是沙箱，不是控制面 |
+| TLS | 能自动签发证书的反向代理（Caddy 直接能做） |
+| DNS | 一个给 API/控制台的名字，可选一个泛解析给 E2B 面 |
 
-## Shape
+## 形态
 
 ```
                 ┌──────────────┐
-   internet ───►│  TLS proxy   │  Caddy / nginx / cloud LB
+   互联网 ─────►│  TLS 代理     │  Caddy / nginx / 云负载均衡
                 └──────┬───────┘
                        ▼ 127.0.0.1:8090
                 ┌──────────────┐
-                │control plane │
+                │   控制面      │
                 └──────┬───────┘
-                       ▼ PostgreSQL (TLS)
+                       ▼ PostgreSQL（TLS）
                 ┌──────────────┐        ┌──────────────┐
                 │   worker     │  …     │   worker     │
                 └──────────────┘        └──────────────┘
 ```
 
-Bind the control plane to loopback and let the proxy own the public port. Nothing
-else needs to be reachable.
+把控制面绑在回环地址上，让代理独占公网端口。其它什么都不需要可达。
 
-## Environment that matters
+## 必须配对的环境变量
 
 ```bash
-SANDRPOD_TOKEN=…                  # operator credential, 32 hex chars
+SANDRPOD_TOKEN=…                  # 运维凭据，32 位 hex
 SANDRPOD_PUBLIC_URL=https://cloud.example.com
 CLOUD_DB=postgres://user:pass@host:5432/db?sslmode=require
-CLOUD_REGISTRATION=open           # or invite / closed
+CLOUD_REGISTRATION=open           # 或 invite / closed
 CLOUD_BOOTSTRAP_ADMIN=admin@example.com
-CLOUD_BOOTSTRAP_PASSWORD=…        # applied only while no account exists
-CLOUD_SMTP_HOST=…                 # without it, mail prints to the log
+CLOUD_BOOTSTRAP_PASSWORD=…        # 只在还没有任何账号时生效
+CLOUD_SMTP_HOST=…                 # 不填则邮件打到日志
 ```
 
-`SANDRPOD_PUBLIC_URL` is not cosmetic: mail links and payment return URLs are
-built from it, and a wrong value fails at the worst moment (when a customer clicks
-"reset password").
+`SANDRPOD_PUBLIC_URL` 不是装饰：邮件链接和支付回跳地址都从它拼出来，填错会在最糟的
+时刻失败（客户点"重置密码"的时候）。
 
-## Three things to prove before the first customer
+## 第一个客户之前要证明的三件事
 
-1. **A backup restores.** A backup nobody restored is a hypothesis.
+1. **备份能恢复。** 没恢复过的备份只是假设。
    ```bash
    pg_dump "$DSN" -Fc -f /backup/drill.dump
    psql "$DSN" -c "CREATE DATABASE drill"
    pg_restore -d "${DSN%/*}/drill" --no-owner /backup/drill.dump
-   # start a second instance against it, sign in with a production password,
-   # compare the wallet/audit numbers, then drop the database
+   # 用备份起第二个实例，用生产密码登录，比对钱包/审计数字，然后删掉那个库
    ```
-2. **The alerts fire.** Stop the service on purpose and confirm a mail arrives —
-   the log line saying it was sent is not the same fact.
-3. **`/healthz` says ok** with a worker online:
+2. **告警真的会响。** 故意把服务停掉，确认邮件到了 —— 日志里写着"已发送"不是同一个
+   事实。
+3. **`/healthz` 说 ok**，并且有 worker 在线：
    ```bash
    curl -s https://cloud.example.com/healthz | jq
    ```
 
-## Maintenance that is not optional
+## 不能省掉的维护
 
-| Task | Cadence |
+| 任务 | 频率 |
 |---|---|
-| database dump + verify | nightly (`pg_dump -Fc`, then `pg_restore -l`) |
-| restore drill | quarterly, and after any schema change |
-| image and container prune on workers | weekly — disk is the resource that fills first |
-| dependency and base-image updates | monthly |
-| certificate renewal | automatic with Caddy or ACME; check it once a quarter |
+| 数据库导出并校验 | 每晚（`pg_dump -Fc`，然后 `pg_restore -l`） |
+| 恢复演练 | 每季度，以及任何 schema 变更之后 |
+| 清理 worker 上的镜像和容器 | 每周 —— 磁盘是最先被吃满的资源 |
+| 依赖与基础镜像更新 | 每月 |
+| 证书续期 | Caddy 或 ACME 自动；每季度检查一次 |
 
-## Where this connects
+## 相关的下一页
 
-- [More than one instance](/multi-instance) — when one control plane is not enough.
-- [Upgrading](/upgrading) — the order, and why rollback is a tag change.
-- [Troubleshooting](/troubleshooting) — the failures this shape actually produces.
+- [多实例](/zh/multi-instance) —— 当一个控制面不够用。
+- [升级](/zh/upgrading) —— 顺序，以及为什么回滚只是改 tag。
+- [故障排查](/zh/troubleshooting) —— 这个形态实际会产生的故障。
 
-A reference deployment with every command and its output is in
-[PRODUCTION_DEPLOYMENT.md](https://github.com/sandrpod/sandrpod/blob/main/docs/PRODUCTION_DEPLOYMENT.md).
+带每条命令和输出的参考部署在
+[PRODUCTION_DEPLOYMENT.md](https://github.com/sandrpod/sandrpod/blob/main/docs/PRODUCTION_DEPLOYMENT.md)。
 
-## What the open-source build gives you
+## 开源版给你什么
 
-The engine is the product: everything that schedules, runs, isolates and observes
-a sandbox is here. What is not here is the commercial wrapper.
+引擎本身就是产品：调度、运行、隔离、观测沙箱的全部代码都在这里。不在的是商业包装。
 
-| Capability | Open source | Hosted SaaS |
+| 能力 | 开源 | SaaS |
 |---|---|---|
-| Sandbox lifecycle (create/start/stop/delete) | ✅ | ✅ |
-| Exec, files, PTY, streaming | ✅ | ✅ |
-| Code interpreter (stateful kernel, chart capture) | ✅ | ✅ |
-| MCP: platform entry (18 tools) and sandbox entry | ✅ | ✅ |
-| Desktop sandboxes (viewer, CDP, desktop tools) | ✅ | ✅ |
-| GPU sandboxes and the per-owner guards | ✅ | ✅ |
-| Snapshots and forks (registry push/pull) | ✅ | ✅ |
-| Data persistence (`/workspace` volume, idle release) | ✅ | ✅ |
-| Preview URLs | needs a domain | ✅ |
-| E2B-compatible surface | needs a domain | ✅ |
-| Multi-tenant isolation | ✅ | ✅ |
-| Worker enrolment, join tokens, worker keys | ✅ | ✅ |
-| **Accounts, wallet, metering, billing** | — | ✅ |
-| **Console (web UI), audit log, usage page** | — | ✅ |
-| **Managed registry and image builds** | — | ✅ |
+| 沙箱生命周期（创建/启动/停止/删除） | ✅ | ✅ |
+| 执行、文件、PTY、流式输出 | ✅ | ✅ |
+| 代码解释器（有状态内核、图表捕获） | ✅ | ✅ |
+| MCP：平台入口（18 个工具）与沙箱入口 | ✅ | ✅ |
+| 桌面沙箱（观看端、CDP、桌面工具） | ✅ | ✅ |
+| GPU 沙箱与按用户护栏 | ✅ | ✅ |
+| 快照与分叉（推拉 registry） | ✅ | ✅ |
+| 数据持久化（`/workspace` 卷、闲置释放） | ✅ | ✅ |
+| 预览 URL | 需要域名 | ✅ |
+| E2B 兼容面 | 需要域名 | ✅ |
+| 多租户隔离 | ✅ | ✅ |
+| worker 注册、加入令牌、worker key | ✅ | ✅ |
+| **账户、钱包、计量、计费** | — | ✅ |
+| **控制台（Web UI）、审计日志、用量页** | — | ✅ |
+| **托管 registry 与镜像构建** | — | ✅ |
 
-Two lines need a domain (`SANDRPOD_E2B_DOMAIN` plus wildcard DNS): the public
-preview host and the E2B surface, which routes `api.<domain>` and
-`<port>-<id>.<domain>`. Without one, the tunnel proxy
-(`/api/v1/sandboxes/<name>/toolbox/proxy/<port>`) still reaches a service inside a
-sandbox — that is what `sandrpod-cli preview` uses.
+有两行需要域名（`SANDRPOD_E2B_DOMAIN` 加通配 DNS）：公开预览主机和 E2B 面（它路由 `api.<域名>` 与 `<端口>-<id>.<域名>`）。没有域名时，隧道代理（`/api/v1/sandboxes/<名>/toolbox/proxy/<端口>`）依然能访问沙箱内的服务——`sandrpod-cli preview` 用的就是它。
 
-So a self-hosted install is a complete execution platform with no quotas, no
-accounts and no phone-home. The SaaS adds the counting and the shopfront around it.
+所以自托管是一套完整的执行平台：没有配额、没有账号、不回连。SaaS 在它外面加了计数和店面。
