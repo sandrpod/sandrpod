@@ -151,10 +151,21 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 			encoded, _ := json.Marshal(reg.auth())
 			pullOpts.RegistryAuth = base64.URLEncoding.EncodeToString(encoded)
 		}
-		if rc, perr := p.dockerClient.ImagePull(ctx, imageName, pullOpts); perr == nil {
-			_, _ = io.Copy(io.Discard, rc)
+		// The pull stream must be bounded: without its own deadline a registry that
+		// accepts the connection and then stalls leaves io.Copy blocked forever, and
+		// the create hangs with no log line and no error — observed as a sandbox
+		// stuck in PENDING for 20 minutes while the pode's goroutine sat in
+		// CreatePod. A big image over a slow link needs minutes, not forever.
+		pullCtx, cancel := context.WithTimeout(ctx, pullTimeout)
+		if rc, perr := p.dockerClient.ImagePull(pullCtx, imageName, pullOpts); perr == nil {
+			_, cerr := io.Copy(io.Discard, rc)
 			_ = rc.Close()
+			cancel()
+			if cerr != nil {
+				log.Printf("poder: pull image %q interrupted after %v (%v); continuing, it may exist locally", imageName, pullTimeout, cerr)
+			}
 		} else {
+			cancel()
 			log.Printf("poder: pull image %q failed (continuing, may exist locally): %v", imageName, perr)
 		}
 	}
@@ -529,6 +540,10 @@ func (p *DockerPoder) pushSnapshot(ctx context.Context, localImage, sandbox, tag
 	}
 	return ref, nil
 }
+
+// pullTimeout bounds an image pull. Generous enough for a 2 GB desktop image on a
+// slow link, short enough that a stalled registry cannot wedge a create.
+const pullTimeout = 10 * time.Minute
 
 // toolboxImage is the image used for one-shot helper containers (volume copies).
 func (p *DockerPoder) toolboxImage() string {
