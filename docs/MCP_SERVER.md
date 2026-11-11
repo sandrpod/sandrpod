@@ -67,6 +67,8 @@ tools the endpoint currently serves (read live, so it never goes stale).
 | `sandbox_delete` | `sandbox` | Deletes the sandbox *and* its workspace |
 | `sandbox_snapshot` | `sandbox`, `image?` | Commits the filesystem to an image |
 | `sandbox_preview_url` | `sandbox`, `port` | A **signed** URL (2h) that opens the port |
+| `sandbox_run_code` | `sandbox`, `code`, `context?`, `timeout?` | A **stateful** kernel: variables survive between calls; matplotlib figures come back as image blocks |
+| `sandbox_contexts` | `sandbox`, `action`, `context?` | `list` / `create` / `restart` / `remove` a kernel |
 | `desktop_screenshot` | `sandbox` | A PNG image block of that sandbox's screen |
 | `desktop_click` | `sandbox`, `x`, `y`, `button?` | left / middle / right |
 | `desktop_type` | `sandbox`, `text` | Into the focused window |
@@ -75,6 +77,28 @@ tools the endpoint currently serves (read live, so it never goes stale).
 
 A fork is `sandbox_snapshot` followed by `sandbox_create` with
 `image=<snapshot>`: the image layers *and* the workspace volume come across.
+
+## Data analysis: the code interpreter
+
+`sandbox_exec` runs a shell command in a fresh shell — nothing survives. For an
+analysis loop that is the wrong tool: load a CSV once, inspect it, plot it, refine
+the plot. `sandbox_run_code` runs in a **kernel** (the same one the E2B code
+interpreter uses), so variables, imports and loaded data persist:
+
+```text
+sandbox_run_code{sandbox:"box", code:"df = pd.read_csv('/workspace/sales.csv')"}
+sandbox_run_code{sandbox:"box", code:"df.describe()"}        # same df
+sandbox_run_code{sandbox:"box", code:"df.plot(); plt"}       # returns a PNG
+```
+
+The result carries whatever the cell produced: stdout, the value of the last
+expression, a traceback, and **every figure as an image block** — the client draws
+the chart instead of printing base64. `sandbox_contexts` manages the namespaces
+when one is not enough (a clean kernel per experiment, a restart without deleting
+the sandbox).
+
+The kernel is the same object the E2B gateway drives, so the two surfaces cannot
+disagree about behaviour.
 
 ## How the desktop tools are forwarded
 

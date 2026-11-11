@@ -28,6 +28,22 @@ Both entries authenticate with the same platform API key and are tenant-scoped: 
 credential reaches only its own sandboxes, and a stranger's name answers `404`, not
 `403`.
 
+## Data analysis, not just commands
+
+`sandbox_exec` runs a command in a fresh shell — nothing survives. Data work is a
+loop: load once, inspect, plot, refine the plot. `sandbox_run_code` runs in a
+**kernel**, the same one the E2B code interpreter drives, so state persists:
+
+```text
+sandbox_run_code{sandbox:"box", code:"df = pd.read_csv('/workspace/sales.csv')"}
+sandbox_run_code{sandbox:"box", code:"df.describe()"}      # same df, no reload
+sandbox_run_code{sandbox:"box", code:"df.plot(); plt"}     # a PNG image block
+```
+
+A figure comes back as an **image block**, not as base64 text, so the client draws
+it. `sandbox_contexts` gives each experiment its own namespace (`list` / `create` /
+`restart` / `remove`).
+
 ## The problem it solves
 
 Personal agents (Muse, Claude, your own agent) need to operate on *your*
@@ -192,3 +208,5 @@ Ensure the worker runs with `SANDRPOD_E2B_DOMAIN` (the preview URL needs it).
 **Where are the credentials; how do I delete them?**
 `/workspace/.sandrpod/oauth/` (0600). Deleting the sandbox removes them; or
 revoke the grant at the provider.
+
+
