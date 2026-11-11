@@ -31,16 +31,28 @@ jobs:
             tag: toolbox
             go_image: golang:1.27-alpine
             runtime_image: alpine:3.24
+            build_args: ""
           - name: poder
             dockerfile: docker/Dockerfile.poder
             tag: poder
             go_image: golang:1.27-alpine
             runtime_image: alpine:3.24
+            build_args: ""
           - name: desktop
             dockerfile: docker/Dockerfile.desktop
             tag: desktop
             go_image: golang:1.27-bookworm
             runtime_image: ubuntu:22.04
+            build_args: ""
+          # Same image at 1024x640 for a capped uplink (~40% fewer pixels). Built
+          # here so the "light" tier the console offers is a published image, not
+          # something only the maintainer's machine had.
+          - name: desktop-small
+            dockerfile: docker/Dockerfile.desktop
+            tag: desktop-small
+            go_image: golang:1.27-bookworm
+            runtime_image: ubuntu:22.04
+            build_args: "--build-arg DESKTOP_GEOMETRY=1024x640"
     steps:
       - name: checkout
         env:
@@ -80,6 +92,7 @@ jobs:
           docker build \
             --build-arg GO_IMAGE="${BASE}/${{ matrix.go_image }}" \
             --build-arg RUNTIME_IMAGE="${BASE}/${{ matrix.runtime_image }}" \
+            ${{ matrix.build_args }} \
             -f "${{ matrix.dockerfile }}" -t "$IMG:latest" .
           if [ -n "${REGISTRY_HOST:-}" ]; then
             docker tag "$IMG:latest" "$IMG:main-${GITHUB_SHA:-unknown}"
