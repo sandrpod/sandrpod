@@ -69,8 +69,8 @@ jobs:
                 -e DOCS_NO_GIT=1 \
                 "$IMG" \
                 sh -c 'tar -xf - && rm -f package-lock.json \
-                       && npm install --no-audit --no-fund \
-                       && npm run build \
+                       && npm install --no-audit --no-fund >/dev/null 2>&1 \
+                       && npm run build 1>&2 \
                        && tar -C .vitepress/dist -cf - .' \
             > out/dist.tar
           mkdir -p out/dist && tar -C out/dist -xf out/dist.tar
