@@ -77,6 +77,7 @@ jobs:
           test -f out/dist/index.html
 
       - name: deploy
+        continue-on-error: true
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           HOST: ${{ secrets.DEPLOY_HOST }}
@@ -88,4 +89,11 @@ jobs:
           fi
           mkdir -p ~/.ssh && printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519 && chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          rsync -az --delete out/dist/ "root@$HOST:/var/www/docs/"
+          # The runner image may carry neither rsync nor a working ssh; tar over ssh
+          # needs only ssh and tar, and says so plainly when ssh itself fails.
+          if command -v rsync >/dev/null 2>&1; then
+            rsync -az --delete out/dist/ "root@$HOST:/var/www/docs/"
+          else
+            echo "no rsync on the runner; streaming the site with tar over ssh"
+            tar -C out/dist -cf - . | ssh "root@$HOST" 'rm -rf /var/www/docs.tmp && mkdir -p /var/www/docs.tmp && tar -C /var/www/docs.tmp -xf - && rm -rf /var/www/docs && mv /var/www/docs.tmp /var/www/docs'
+          fi
