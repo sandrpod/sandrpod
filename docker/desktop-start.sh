@@ -32,6 +32,19 @@ if [ ! -L /root/.chrome-profile ]; then
   fi
   ln -sfn /workspace/.home/chrome-profile /root/.chrome-profile
 fi
+# MCP 配置与 OAuth 令牌（~/.sandrpod：mcp.json、oauth/<server>.json）同样要在容器
+# 重建后还在——否则换一次镜像就得把所有第三方服务重新授权一遍。令牌是 0600，
+# cp -a 会保留权限，卷上的目录本身收紧到 0700。
+mkdir -p /workspace/.home/.sandrpod
+chmod 700 /workspace/.home/.sandrpod 2>/dev/null || true
+if [ ! -L /root/.sandrpod ]; then
+  if [ -d /root/.sandrpod ]; then
+    cp -a /root/.sandrpod/. /workspace/.home/.sandrpod/ 2>/dev/null || true
+    rm -rf /root/.sandrpod
+  fi
+  ln -sfn /workspace/.home/.sandrpod /root/.sandrpod
+fi
+
 # 持久化的 Chrome profile 里留着上一次容器的 SingletonLock（hostname-pid）。
 # 重启后 hostname 变了，Chrome 判定「被另一台机器占用」并退出，界面看到的就是
 # 「浏览器打不开」。清掉这三个文件让它重新拿锁。

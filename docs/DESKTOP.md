@@ -86,6 +86,7 @@ User data lives on the `/workspace` volume:
 /root/Downloads        → /workspace/.home/Downloads
 /root/Documents        → /workspace/.home/Documents
 /root/.chrome-profile  → /workspace/.home/chrome-profile
+/root/.sandrpod        → /workspace/.home/.sandrpod   (mcp.json + OAuth 令牌)
 ```
 
 so files, downloads, Chrome tabs and logins survive a stop — and an image

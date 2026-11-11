@@ -53,6 +53,7 @@ Stopping a desktop sandbox **releases CPU, memory and GPUs** but keeps the data:
 /root/Downloads        → /workspace/.home/Downloads
 /root/Documents        → /workspace/.home/Documents
 /root/.chrome-profile  → /workspace/.home/chrome-profile
+/root/.sandrpod        → /workspace/.home/.sandrpod   (mcp.json + OAuth tokens)
 ```
 
 So files, downloads, Chrome tabs and logins survive a stop **and** an image upgrade.
