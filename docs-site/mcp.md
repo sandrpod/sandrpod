@@ -5,6 +5,29 @@
 > single Streamable-HTTP endpoint. Any MCP client can use them — and your
 > credentials **stay inside the sandbox**.
 
+## Two endpoints, and why
+
+SandrPod answers MCP in two places. They are not duplicates — pick by whether your
+client can add a server at runtime.
+
+| | **Platform entry** `/mcp` | **Sandbox entry** `/api/v1/sandboxes/<name>/toolbox/mcp` |
+|---|---|---|
+| URL | one, fixed | contains the sandbox name |
+| Tools | 16: create/list/stop/delete, exec, files, snapshot, preview, **5 desktop tools** (each takes `sandbox`) | 5 desktop tools for that sandbox + every server in its `mcp.json` |
+| Create a sandbox | ✅ | — |
+| Drive a desktop | ✅ `desktop_screenshot{sandbox:…}` | ✅ |
+| Your GitHub/Notion tokens | ❌ not forwarded | ✅ never leave the sandbox |
+| Best for | Claude Desktop, Cursor, Cline (static config) | a harness that adds servers at runtime; credentials that must not transit the platform |
+
+The usual setup is the platform entry alone: one URL, create a desktop sandbox, then
+screenshot or click it over the same connection. Add the sandbox entry when a
+third-party server is involved — that is the only thing it can do that the platform
+entry cannot, and it exists to keep those credentials out of the platform's path.
+
+Both entries authenticate with the same platform API key and are tenant-scoped: a
+credential reaches only its own sandboxes, and a stranger's name answers `404`, not
+`403`.
+
 ## The problem it solves
 
 Personal agents (Muse, Claude, your own agent) need to operate on *your*
