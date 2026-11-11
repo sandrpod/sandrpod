@@ -34,6 +34,17 @@ jobs:
           git -c http.sslVerify=false clone --depth 1 \
             "${proto}://oauth2:${TOKEN}@${host}/${REPO}.git" src
 
+      - name: diagnose
+        run: |
+          set -x
+          uname -a || true
+          for tool in node npm tar gzip docker git rsync; do
+            printf '%s: ' "$tool"; command -v "$tool" || echo "MISSING"
+          done
+          docker version --format '{{.Server.Version}}' 2>&1 | head -2 || true
+          docker ps --format '{{.Names}}' 2>&1 | head -3 || true
+          ls -la src/docs-site | head -5 || true
+
       - name: build
         env:
           REGISTRY_HOST: ${{ secrets.REGISTRY_HOST }}
