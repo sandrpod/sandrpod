@@ -74,6 +74,17 @@ while [ $i -lt 30 ] && [ ! -S /tmp/.X11-unix/X1 ]; do
 done
 [ -S /tmp/.X11-unix/X1 ] || echo "warning: /tmp/.X11-unix/X1 not present after ${i}s" >&2
 
+# 1.5) mac 风 dock：底部、居中、无窗口列表。镜像里放了 /etc/sandrpod-desktop-dock
+#      时生效（构建参数 DESKTOP_THEME=dock），普通镜像不受影响。
+if [ -f /etc/sandrpod-desktop-dock ]; then
+  xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=8" 2>/dev/null || true
+  xfconf-query -c xfce4-panel -p /panels/panel-1/size -s 44 2>/dev/null || true
+  xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust -s false 2>/dev/null || true
+  xfconf-query -c xfce4-panel -p /panels/panel-1/length -s 32 2>/dev/null || true
+  xfconf-query -c xfce4-panel -p /panels/panel-1/position-locked -s true 2>/dev/null || true
+  xfconf-query -c xfwm4 -p /general/button_layout -s "CMH" 2>/dev/null || true
+fi
+
 # 2) 桌面会话（XFCE）。会话进程偶尔会自己退出（重启后的旧 dbus 状态、XFCE 崩溃），
 #    以前这会让脚本跟着退出、容器直接死掉，沙箱就再也起不来。改成自愈循环：
 #    XFCE 死了重启它，容器只在 Xvnc 死时退出。
