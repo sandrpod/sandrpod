@@ -74,28 +74,9 @@ while [ $i -lt 30 ] && [ ! -S /tmp/.X11-unix/X1 ]; do
 done
 [ -S /tmp/.X11-unix/X1 ] || echo "warning: /tmp/.X11-unix/X1 not present after ${i}s" >&2
 
-# 2) 一个 dbus 会话，dock 设置和桌面会话共用它。
-#    之前这里直接用 xfconf-query 却不开 dbus，命令静默失败（xfconf 没有会话可写），
-#    所以底部 dock 从来没生效过。现在先起 bus、把它写进配置、再让 XFCE 读这份配置。
-eval "$(dbus-launch --sh-syntax --exit-with-session)"
-export DBUS_SESSION_BUS_ADDRESS
-
-# mac 风 dock：镜像里放了 /etc/sandrpod-desktop-dock 时生效（DESKTOP_THEME=dock）。
-if [ -f /etc/sandrpod-desktop-dock ]; then
-  q() { xfconf-query -c "$1" -p "$2" -s "$3" 2>/dev/null || xfconf-query -c "$1" -p "$2" -n -t string -s "$3" 2>/dev/null || true; }
-  # 面板：贴底、只占中间一段、图标大一点、锁住位置
-  q xfce4-panel /panels/panel-1/position "p=8"
-  q xfce4-panel /panels/panel-1/size "44"
-  q xfce4-panel /panels/panel-1/length-adjust "false"
-  q xfce4-panel /panels/panel-1/length "30"
-  q xfce4-panel /panels/panel-1/position-locked "true"
-  q xfce4-panel /panels/panel-1/autohide-behavior "0"
-  q xfce4-panel /panels/panel-1/background-style "0"
-  # 窗口按钮放左边（红黄绿的位置），mac 习惯
-  q xfwm4 /general/button_layout "CMH|"
-  # Dock 要圆角、无边框的观感：让面板用深色 alpha 底色
-  q xfce4-panel /panels/panel-1/background-rgba "0.10,0.10,0.12,0.85" 2>/dev/null || true
-fi
+# Dock 布局不再在运行时改 xfconf：容器里没有会话总线，xfconf-query 静默失败，
+# 这也是之前"改了没效果"的原因。布局现在烘焙在镜像的 xfce4-panel.xml 里，
+# XFCE 启动时直接读它。
 
 # 关掉窗口合成：VNC 下重绘越少越流畅
 xfconf-query -c xfwm4 -p /general/use_compositing -s false >/dev/null 2>&1 || true
