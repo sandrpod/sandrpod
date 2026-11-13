@@ -89,7 +89,8 @@ RUN mkdir -p /root/.vnc /workspace \
  && printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfwm4" version="1.0">\n  <property name="general" type="empty">\n    <property name="theme" type="string" value="${THEME_NAME}"/>\n  </property>\n</channel>\n' > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml \
  && printf '[Desktop Entry]\nType=Application\nName=Google Chrome\nExec=/usr/bin/google-chrome\nIcon=google-chrome\nTerminal=false\n' > /root/Desktop/google-chrome.desktop \
  && chmod +x /root/Desktop/google-chrome.desktop \
- && printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-desktop" version="1.0">\n  <property name="backdrop" type="empty">\n    <property name="screen0" type="empty">\n      <property name="monitor0" type="empty">\n        <property name="workspace0" type="empty">\n          <property name="image-path" type="string" value="${WALLPAPER}"/>\n          <property name="image-style" type="int" value="5"/>\n        </property>\n      </property>\n    </property>\n  </property>\n</channel>\n' > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml \
+ && printf '<?xml version="1.0" encoding="UTF-8"?>\n<channel name="xfce4-desktop" version="1.0">\n  <property name="backdrop" type="empty">\n    <property name="screen0" type="empty">\n      <property name="monitor0" type="empty">\n        <property name="workspace0" type="empty">\n          <property name="last-image" type="string" value="${WALLPAPER}"/>
+          <property name="image-path" type="string" value="${WALLPAPER}"/>\n          <property name="image-style" type="int" value="5"/>\n        </property>\n      </property>\n    </property>\n  </property>\n</channel>\n' > /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-desktop.xml \
  && touch /root/.vnc/.de-was-selected \
  && printf '#!/bin/sh\nexport HOME=/root\nexec startxfce4\n' > /root/.vnc/xstartup \
  && chmod +x /root/.vnc/xstartup
