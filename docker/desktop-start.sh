@@ -74,37 +74,31 @@ while [ $i -lt 30 ] && [ ! -S /tmp/.X11-unix/X1 ]; do
 done
 [ -S /tmp/.X11-unix/X1 ] || echo "warning: /tmp/.X11-unix/X1 not present after ${i}s" >&2
 
-# 1.5) mac 风 dock：底部、居中、无窗口列表。镜像里放了 /etc/sandrpod-desktop-dock
-#      时生效（构建参数 DESKTOP_THEME=dock），普通镜像不受影响。
+# 2) 一个 dbus 会话，dock 设置和桌面会话共用它。
+#    之前这里直接用 xfconf-query 却不开 dbus，命令静默失败（xfconf 没有会话可写），
+#    所以底部 dock 从来没生效过。现在先起 bus、把它写进配置、再让 XFCE 读这份配置。
+eval "$(dbus-launch --sh-syntax --exit-with-session)"
+export DBUS_SESSION_BUS_ADDRESS
+
+# mac 风 dock：镜像里放了 /etc/sandrpod-desktop-dock 时生效（DESKTOP_THEME=dock）。
 if [ -f /etc/sandrpod-desktop-dock ]; then
-  xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=8" 2>/dev/null || true
-  xfconf-query -c xfce4-panel -p /panels/panel-1/size -s 44 2>/dev/null || true
-  xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust -s false 2>/dev/null || true
-  xfconf-query -c xfce4-panel -p /panels/panel-1/length -s 32 2>/dev/null || true
-  xfconf-query -c xfce4-panel -p /panels/panel-1/position-locked -s true 2>/dev/null || true
-  xfconf-query -c xfwm4 -p /general/button_layout -s "CMH" 2>/dev/null || true
+  q() { xfconf-query -c "$1" -p "$2" -s "$3" 2>/dev/null || xfconf-query -c "$1" -p "$2" -n -t string -s "$3" 2>/dev/null || true; }
+  # 面板：贴底、只占中间一段、图标大一点、锁住位置
+  q xfce4-panel /panels/panel-1/position "p=8"
+  q xfce4-panel /panels/panel-1/size "44"
+  q xfce4-panel /panels/panel-1/length-adjust "false"
+  q xfce4-panel /panels/panel-1/length "30"
+  q xfce4-panel /panels/panel-1/position-locked "true"
+  q xfce4-panel /panels/panel-1/autohide-behavior "0"
+  q xfce4-panel /panels/panel-1/background-style "0"
+  # 窗口按钮放左边（红黄绿的位置），mac 习惯
+  q xfwm4 /general/button_layout "CMH|"
+  # Dock 要圆角、无边框的观感：让面板用深色 alpha 底色
+  q xfce4-panel /panels/panel-1/background-rgba "0.10,0.10,0.12,0.85" 2>/dev/null || true
 fi
 
-# 2) 桌面会话（XFCE）。会话进程偶尔会自己退出（重启后的旧 dbus 状态、XFCE 崩溃），
-#    以前这会让脚本跟着退出、容器直接死掉，沙箱就再也起不来。改成自愈循环：
-#    XFCE 死了重启它，容器只在 Xvnc 死时退出。
 # 关掉窗口合成：VNC 下重绘越少越流畅
 xfconf-query -c xfwm4 -p /general/use_compositing -s false >/dev/null 2>&1 || true
-(
-  while true; do
-    dbus-launch --exit-with-session startxfce4
-    echo "desktop session exited, restarting in 2s" >&2
-    sleep 2
-  done
-) &
-XFC=$!
-
-# 3) 预开一个 Chrome：CDP（9222）是 browser-use / Playwright MCP 的入口，
-#    agent 连过来时浏览器必须已经在跑。失败不阻塞桌面。
-if [ -x /usr/bin/google-chrome ]; then
-  sleep 3
-  DISPLAY=:1 dbus-launch --exit-with-session google-chrome     --no-first-run --no-default-browser-check about:blank >/tmp/chrome.log 2>&1 &
-fi
 
 # 3) 容器寿命跟 X 服务器绑定：Xvnc 活着容器就活着，桌面会话由循环负责续。
 #    Xvnc 死了说明图形栈本身坏了，退出容器让重启策略接手。
