@@ -74,12 +74,26 @@ while [ $i -lt 30 ] && [ ! -S /tmp/.X11-unix/X1 ]; do
 done
 [ -S /tmp/.X11-unix/X1 ] || echo "warning: /tmp/.X11-unix/X1 not present after ${i}s" >&2
 
-# Dock 布局不再在运行时改 xfconf：容器里没有会话总线，xfconf-query 静默失败，
-# 这也是之前"改了没效果"的原因。布局现在烘焙在镜像的 xfce4-panel.xml 里，
-# XFCE 启动时直接读它。
-
+# 2) 桌面会话（XFCE）。会话进程偶尔会自己退出（重启后的旧 dbus 状态、XFCE 崩溃），
+#    以前这会让脚本跟着退出、容器直接死掉，沙箱就再也起不来。改成自愈循环：
+#    XFCE 死了重启它，容器只在 Xvnc 死时退出。
 # 关掉窗口合成：VNC 下重绘越少越流畅
 xfconf-query -c xfwm4 -p /general/use_compositing -s false >/dev/null 2>&1 || true
+(
+  while true; do
+    dbus-launch --exit-with-session startxfce4
+    echo "desktop session exited, restarting in 2s" >&2
+    sleep 2
+  done
+) &
+XFC=$!
+
+# 3) 预开一个 Chrome：CDP（9222）是 browser-use / Playwright MCP 的入口，
+#    agent 连过来时浏览器必须已经在跑。失败不阻塞桌面。
+if [ -x /usr/bin/google-chrome ]; then
+  sleep 3
+  DISPLAY=:1 dbus-launch --exit-with-session google-chrome     --no-first-run --no-default-browser-check about:blank >/tmp/chrome.log 2>&1 &
+fi
 
 # 3) 容器寿命跟 X 服务器绑定：Xvnc 活着容器就活着，桌面会话由循环负责续。
 #    Xvnc 死了说明图形栈本身坏了，退出容器让重启策略接手。
