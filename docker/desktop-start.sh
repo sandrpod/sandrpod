@@ -108,6 +108,21 @@ apply_dock_layout() {
   read -r CX CY <<EOF_RD
 $(panel_center)
 EOF_RD
+  # KasmVNC 会把虚拟屏幕改成浏览器窗口大小，启动时算的中心随后就不对了。
+  # 每 5 秒看一次分辨率，变了就把dock重新居中（只在变化时写，避免抖动）。
+  panel_recenter_loop() {
+    LAST=""
+    while true; do
+      sleep 5
+      [ -f /etc/sandrpod-desktop-dock ] || continue
+      CUR=$(panel_center)
+      [ "$CUR" = "$LAST" ] && continue
+      LAST="$CUR"
+      set -- $CUR
+      xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=0;x=$1;y=$2" 2>/dev/null || true
+    done
+  }
+  panel_recenter_loop &
   xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=0;x=$CX;y=$CY" 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/size -s 48 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust -s false 2>/dev/null || true
