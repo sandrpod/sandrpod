@@ -89,15 +89,26 @@ apply_dock_layout() {
     if xfconf-query -c xfce4-panel -l 2>/dev/null | grep -q panels; then break; fi
     i=$((i+1)); sleep 1
   done
-  WALL=$(cat /etc/sandrpod-desktop-wallpaper 2>/dev/null)
-  xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=0;x=499;y=752" 2>/dev/null || true
+  # 位置按实际分辨率算：面板占 22% 宽，居中放置。写死坐标在 1024/1920 上都不居中。
+  GEOM=$(cat /etc/sandrpod-desktop-geometry 2>/dev/null || echo 1280x800)
+  W=${GEOM%x*}
+  LEN=$((W * 22 / 100))
+  X=$(( (W - LEN) / 2 ))
+  H=$(cat /etc/sandrpod-desktop-geometry 2>/dev/null | cut -dx -f2)
+  Y=$(( H - 48 ))
+  xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=0;x=$X;y=$Y" 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/size -s 48 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust -s false 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/length -s 22 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/position-locked -s true 2>/dev/null || true
   xfconf-query -c xfwm4 -p /general/button_layout -s "CMH|" 2>/dev/null || true
+  # 壁纸：属性名按显示器型号命名（monitor0 / Virtual-1 / default），逐个设；
+  # 光写一份 XML 在名称不匹配时会被忽略——这就是"壁纸一直是老鼠"的原因。
+  WALL=$(cat /etc/sandrpod-desktop-wallpaper 2>/dev/null)
   if [ -n "$WALL" ] && [ -f "$WALL" ]; then
-    xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitor0/workspace0/last-image -s "$WALL" 2>/dev/null || true
+    for prop in $(xfconf-query -c xfce4-desktop -l 2>/dev/null | grep -E 'last-image|image-path'); do
+      xfconf-query -c xfce4-desktop -p "$prop" -s "$WALL" 2>/dev/null || true
+    done
     xfdesktop --reload >/dev/null 2>&1 || true
   fi
   xfce4-panel -r >/dev/null 2>&1 || true
