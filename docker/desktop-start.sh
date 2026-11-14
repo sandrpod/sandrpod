@@ -96,7 +96,19 @@ apply_dock_layout() {
   X=$(( (W - LEN) / 2 ))
   H=$(cat /etc/sandrpod-desktop-geometry 2>/dev/null | cut -dx -f2)
   Y=$(( H - 48 ))
-  xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=0;x=$X;y=$Y" 2>/dev/null || true
+  # x 是面板中心的坐标，不是左边缘；KasmVNC 会把虚拟屏幕改成浏览器窗口大小，
+  # 所以按当前宽度算中心，而不是写死。
+  panel_center() {
+    W=$(DISPLAY=:1 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1/p' | head -1)
+    [ -n "$W" ] || W=$(echo "${GEOM%x*}")
+    H=$(DISPLAY=:1 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\2/p' | head -1)
+    [ -n "$H" ] || H=$(echo "${GEOM#*x}")
+    echo "$((W / 2)) $((H - 48))"
+  }
+  read -r CX CY <<EOF_RD
+$(panel_center)
+EOF_RD
+  xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=0;x=$CX;y=$CY" 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/size -s 48 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust -s false 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/length -s 22 2>/dev/null || true
