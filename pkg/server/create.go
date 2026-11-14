@@ -187,6 +187,14 @@ func runSandboxCreate(
 			s.TTLSeconds = req.TTLSeconds
 			s.CPUCores = req.CPUCores
 			s.MemoryMB = req.MemoryMB
+			// Same-name recreate: the record must describe the image it will run,
+			// or the console loses the desktop button on a sandbox it just made.
+			if req.ImageID != "" {
+				s.ImageID = req.ImageID
+			}
+			if req.Desktop || looksLikeDesktopImage(req.ImageID) {
+				s.Desktop = true
+			}
 			// A create request may carry a new policy (same sandbox name,
 			// recreated); keep the record in step with the request.
 			if req.Network != nil {

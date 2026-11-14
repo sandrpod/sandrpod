@@ -128,6 +128,7 @@ var columnMigrations = []string{
 	`ALTER TABLE sandboxes ADD COLUMN ttl_seconds INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE sandboxes ADD COLUMN egress_policy TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE sandboxes ADD COLUMN cpu_cores REAL NOT NULL DEFAULT 0`,
+	`ALTER TABLE sandboxes ADD COLUMN desktop INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE sandboxes ADD COLUMN memory_mb INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE poders ADD COLUMN capabilities TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE poders ADD COLUMN workspace TEXT NOT NULL DEFAULT ''`,

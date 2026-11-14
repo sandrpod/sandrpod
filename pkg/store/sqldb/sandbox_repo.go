@@ -28,11 +28,11 @@ func (r *sandboxRepo) Add(sb *sandpod.SandboxInfo) error {
 	}
 	_, err = r.db.Exec(`
 		INSERT INTO sandboxes
-		  (name, id, region, provider_type, instance_type, image_id, state,
+		  (name, id, region, provider_type, instance_type, image_id, desktop, state,
 		   ip, poder_id, poder_url, container_id, proxy_url, api_url,
 		   arch, os, os_version, labels, egress_policy, owner, ttl_seconds, cpu_cores, memory_mb, created_at, last_activity)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		sb.Name, sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID,
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		sb.Name, sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID, boolInt(sb.Desktop),
 		string(sb.State), sb.IP, sb.PoderID, sb.PoderURL, sb.ContainerID,
 		sb.ProxyURL, sb.APIURL, sb.Arch, sb.OS, sb.OSVersion,
 		string(labels), network, sb.Owner, sb.TTLSeconds, sb.CPUCores, sb.MemoryMB,
@@ -108,7 +108,7 @@ func (r *sandboxRepo) Delete(name string) error {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-const sandboxColumns = `name, id, region, provider_type, instance_type, image_id, state,
+const sandboxColumns = `name, id, region, provider_type, instance_type, image_id, desktop, state,
     ip, poder_id, poder_url, container_id, proxy_url, api_url,
     arch, os, os_version, labels, egress_policy, owner, ttl_seconds, cpu_cores, memory_mb, created_at, last_activity`
 
@@ -133,10 +133,10 @@ func (r *sandboxRepo) upsertTx(tx *Tx, sb *sandpod.SandboxInfo) error {
 	}
 	_, err = tx.Exec(`
 		INSERT INTO sandboxes
-		  (name, id, region, provider_type, instance_type, image_id, state,
+		  (name, id, region, provider_type, instance_type, image_id, desktop, state,
 		   ip, poder_id, poder_url, container_id, proxy_url, api_url,
 		   arch, os, os_version, labels, egress_policy, owner, ttl_seconds, cpu_cores, memory_mb, created_at, last_activity)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(name) DO UPDATE SET
 		  id=excluded.id, region=excluded.region, provider_type=excluded.provider_type,
 		  instance_type=excluded.instance_type, image_id=excluded.image_id,
@@ -146,7 +146,7 @@ func (r *sandboxRepo) upsertTx(tx *Tx, sb *sandpod.SandboxInfo) error {
 		  arch=excluded.arch, os=excluded.os, os_version=excluded.os_version,
 		  labels=excluded.labels, egress_policy=excluded.egress_policy,
 		  owner=excluded.owner, ttl_seconds=excluded.ttl_seconds, last_activity=excluded.last_activity`,
-		sb.Name, sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID,
+		sb.Name, sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID, boolInt(sb.Desktop),
 		string(sb.State), sb.IP, sb.PoderID, sb.PoderURL, sb.ContainerID,
 		sb.ProxyURL, sb.APIURL, sb.Arch, sb.OS, sb.OSVersion,
 		string(labels), network, sb.Owner, sb.TTLSeconds, sb.CPUCores, sb.MemoryMB,
@@ -166,8 +166,9 @@ func scanSandbox(row *sql.Row) (*sandpod.SandboxInfo, bool, error) {
 		createdStr  string
 		activityStr string
 	)
+	desktopInt := 0
 	err := row.Scan(
-		&sb.Name, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID,
+		&sb.Name, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID, &desktopInt,
 		&state, &sb.IP, &sb.PoderID, &sb.PoderURL, &sb.ContainerID,
 		&sb.ProxyURL, &sb.APIURL, &sb.Arch, &sb.OS, &sb.OSVersion,
 		&labelsJSON, &networkJSON, &sb.Owner, &sb.TTLSeconds, &sb.CPUCores, &sb.MemoryMB, &createdStr, &activityStr,
@@ -198,8 +199,9 @@ func scanSandboxes(rows *sql.Rows) []*sandpod.SandboxInfo {
 			createdStr  string
 			activityStr string
 		)
+		desktopInt := 0
 		if err := rows.Scan(
-			&sb.Name, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID,
+			&sb.Name, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID, &desktopInt,
 			&state, &sb.IP, &sb.PoderID, &sb.PoderURL, &sb.ContainerID,
 			&sb.ProxyURL, &sb.APIURL, &sb.Arch, &sb.OS, &sb.OSVersion,
 			&labelsJSON, &networkJSON, &sb.Owner, &sb.TTLSeconds, &sb.CPUCores, &sb.MemoryMB, &createdStr, &activityStr,
@@ -242,4 +244,12 @@ func unmarshalNetwork(raw string) *egress.Policy {
 		return nil
 	}
 	return &p
+}
+
+// boolInt is how a boolean rides in a SQLite/PostgreSQL INTEGER column.
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
