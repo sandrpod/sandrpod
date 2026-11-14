@@ -19,6 +19,10 @@ type SandboxInfo struct {
 	ProviderType string `json:"provider_type,omitempty"` // provider type: local, aws, aliyun, azure, gcp
 	InstanceType string `json:"instance_type"`
 	ImageID      string `json:"image_id,omitempty"`
+	// Desktop marks a sandbox whose screen can be watched/driven (KasmVNC on 6901).
+	// The console used to infer this from the image name, which broke the moment an
+	// image was not called "...desktop". Set at create time, it is a fact.
+	Desktop      bool   `json:"desktop,omitempty"`
 	State        State  `json:"state"`
 	IP           string `json:"ip,omitempty"`
 	// Owner is the auth-token name that created the sandbox. Empty on records
@@ -63,6 +67,7 @@ type CreateSandboxRequest struct {
 	ProviderType string `json:"provider_type"` // provider type: local, aws, aliyun, azure, gcp
 	InstanceType string `json:"instance_type"`
 	ImageID      string `json:"image_id,omitempty"`
+	Desktop      bool   `json:"desktop,omitempty"`
 	// TTLSeconds, when > 0, overrides the server's idle timeout for this
 	// sandbox: it is reaped after this many seconds without activity, even if
 	// the global idle reaper is otherwise disabled.

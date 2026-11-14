@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/egress"
@@ -204,6 +205,7 @@ func runSandboxCreate(
 			// one (the 桌面 button, the resource defaults); without it every row
 			// looked the same.
 			ImageID:      req.ImageID,
+			Desktop:      req.Desktop || looksLikeDesktopImage(req.ImageID),
 			Owner:        owner,
 			TTLSeconds:   req.TTLSeconds,
 			CPUCores:     req.CPUCores,
@@ -465,4 +467,10 @@ func nonEmpty(v, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+// looksLikeDesktopImage keeps older clients working: they set no Desktop flag, so
+// the image name is the only hint. New clients set the flag and this is ignored.
+func looksLikeDesktopImage(image string) bool {
+	return strings.Contains(strings.ToLower(image), "desktop")
 }

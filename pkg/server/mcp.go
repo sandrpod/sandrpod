@@ -121,6 +121,7 @@ func builtinMCPTools() []mcpTool {
 				"node":    str("optional worker (poder) id to pin the sandbox to"),
 				"region":  str("optional region"),
 				"persist": map[string]any{"type": "boolean", "description": "keep /workspace across stop/start (default true)"},
+				"desktop": map[string]any{"type": "boolean", "description": "this image runs a desktop on port 6901 (so the screen can be watched/driven)"},
 			}, "name"),
 			call: func(a map[string]any) (string, string, any, error) {
 				body := map[string]any{
@@ -133,6 +134,7 @@ func builtinMCPTools() []mcpTool {
 					"poder_id":     strArg(a, "node"),
 					"region":       strArg(a, "region"),
 					"persist_data": boolArg(a, "persist", true),
+					"desktop":      boolArg(a, "desktop", false),
 					"gpu":          int(floatArg(a, "gpu", 0)),
 				}
 				if body["name"] == "" {
