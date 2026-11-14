@@ -96,34 +96,24 @@ apply_dock_layout() {
   X=$(( (W - LEN) / 2 ))
   H=$(cat /etc/sandrpod-desktop-geometry 2>/dev/null | cut -dx -f2)
   Y=$(( H - 48 ))
-  # x 是面板中心的坐标，不是左边缘；KasmVNC 会把虚拟屏幕改成浏览器窗口大小，
-  # 所以按当前宽度算中心，而不是写死。
-  panel_center() {
-    W=$(DISPLAY=:1 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\1/p' | head -1)
-    [ -n "$W" ] || W=$(echo "${GEOM%x*}")
-    H=$(DISPLAY=:1 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9]*\) x \([0-9]*\).*/\2/p' | head -1)
-    [ -n "$H" ] || H=$(echo "${GEOM#*x}")
-    echo "$((W / 2)) $((H - 48))"
+  # x 是面板中心的坐标，不是左边缘。KasmVNC 会把虚拟屏幕改成浏览器窗口大小，
+  # 所以每次都按当前分辨率算（而不是启动时算一次就不管了）。
+  set_panel_center() {
+    W=$(DISPLAY=:1 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9]*\) x [0-9]*.*/\1/p' | head -1)
+    H=$(DISPLAY=:1 xrandr --current 2>/dev/null | sed -n 's/.*current [0-9]* x \([0-9]*\).*/\1/p' | head -1)
+    [ -n "$W" ] || W=${GEOM%x*}
+    [ -n "$H" ] || H=${GEOM#*x}
+    xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=0;x=$((W / 2));y=$((H - 48))" 2>/dev/null || true
   }
-  read -r CX CY <<EOF_RD
-$(panel_center)
-EOF_RD
-  # KasmVNC 会把虚拟屏幕改成浏览器窗口大小，启动时算的中心随后就不对了。
-  # 每 5 秒看一次分辨率，变了就把dock重新居中（只在变化时写，避免抖动）。
-  panel_recenter_loop() {
-    LAST=""
-    while true; do
-      sleep 5
-      [ -f /etc/sandrpod-desktop-dock ] || continue
-      CUR=$(panel_center)
-      [ "$CUR" = "$LAST" ] && continue
-      LAST="$CUR"
-      set -- $CUR
-      xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=0;x=$1;y=$2" 2>/dev/null || true
+  set_panel_center
+  # 分辨率变了就重新居中（窗口拉伸/换设备时 KasmVNC 会改它）
+  (
+    LAST=$(DISPLAY=:1 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9]*\) x [0-9]*.*/\1/p' | head -1)
+    while sleep 5; do
+      CUR=$(DISPLAY=:1 xrandr --current 2>/dev/null | sed -n 's/.*current \([0-9]*\) x [0-9]*.*/\1/p' | head -1)
+      [ -n "$CUR" ] && [ "$CUR" != "$LAST" ] && { LAST=$CUR; set_panel_center; }
     done
-  }
-  panel_recenter_loop &
-  xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=0;x=$CX;y=$CY" 2>/dev/null || true
+  ) &
   xfconf-query -c xfce4-panel -p /panels/panel-1/size -s 48 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust -s false 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/length -s 22 2>/dev/null || true
