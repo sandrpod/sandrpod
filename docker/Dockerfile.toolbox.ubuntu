@@ -26,7 +26,7 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH GOTOOLCHAIN=auto go build -l
 # 最终镜像
 # GPU 变体：NVIDIA 注入的 nvidia-smi/driver 库是 glibc 二进制，alpine(musl) 跑不起来，
 # 所以 GPU 沙箱用这个 ubuntu 基础镜像。其他部分与 alpine 版一致。
-FROM ubuntu:22.04
+FROM ubuntu:25.10
 
 # Runtime deps. nodejs+npm provide `npx`, which the MCP bridge uses to spawn
 # npx-based MCP servers (and the `mcp-remote` shim for remote HTTP servers).

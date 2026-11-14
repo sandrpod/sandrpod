@@ -16,7 +16,7 @@ COPY . .
 ENV GOPROXY=https://goproxy.cn,direct
 RUN CGO_ENABLED=0 GOFLAGS=-mod=mod go build -o /toolbox ./cmd/toolbox
 
-FROM ubuntu:22.04
+FROM ubuntu:25.10
 ENV DEBIAN_FRONTEND=noninteractive
 ENV HOME=/root
 # TARGETARCH 是 BuildKit 预置变量（构建机架构）；必须在使用它的 stage 内重新声明
