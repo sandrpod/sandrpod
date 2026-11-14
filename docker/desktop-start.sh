@@ -90,7 +90,7 @@ apply_dock_layout() {
     i=$((i+1)); sleep 1
   done
   WALL=$(cat /etc/sandrpod-desktop-wallpaper 2>/dev/null)
-  xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=10" 2>/dev/null || true
+  xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=0;x=499;y=752" 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/size -s 48 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust -s false 2>/dev/null || true
   xfconf-query -c xfce4-panel -p /panels/panel-1/length -s 22 2>/dev/null || true
