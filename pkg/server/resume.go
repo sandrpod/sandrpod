@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"log"
+	"strings"
 	"time"
 
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
@@ -133,7 +134,22 @@ func resumeOnce(d resumeDeps) int {
 		//   terminal    ERROR/STOPPED/TERMINATED: retrying cannot fix it
 		sb, exists := d.sandboxes.Get(job.SandboxName)
 		if !exists {
-			sb = &podpkg.SandboxInfo{Name: job.SandboxName}
+			// A record that the create path never wrote (its delivery timed out
+			// while a 2 GB image was still pulling). The job payload is the only
+			// description left, so take the fields a client reads back from it —
+			// without them the console cannot tell it is a desktop sandbox and its
+			// row shows no image at all.
+			sb = &podpkg.SandboxInfo{Name: job.SandboxName, State: podpkg.StatePending}
+			var req podpkg.CreateSandboxRequest
+			if len(job.Request) > 0 && json.Unmarshal(job.Request, &req) == nil {
+				sb.ImageID = req.ImageID
+				sb.Desktop = req.Desktop || strings.Contains(strings.ToLower(req.ImageID), "desktop")
+				sb.CPUCores = req.CPUCores
+				sb.MemoryMB = req.MemoryMB
+				sb.TTLSeconds = req.TTLSeconds
+				sb.Region = req.Region
+				sb.ProviderType = req.ProviderType
+			}
 			exists = true
 		}
 		switch sb.State {
