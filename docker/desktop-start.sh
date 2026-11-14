@@ -79,9 +79,37 @@ done
 #    XFCE 死了重启它，容器只在 Xvnc 死时退出。
 # 关掉窗口合成：VNC 下重绘越少越流畅
 xfconf-query -c xfwm4 -p /general/use_compositing -s false >/dev/null 2>&1 || true
+# Dock 布局必须在"面板已经存在"之后施加：手写 xfce4-panel.xml 会被面板启动时的
+# 首次保存覆盖（实测面板仍在顶部），而在会话外跑 xfconf-query 没有会话总线可用
+# （XFCONF 静默失败）。所以：起会话 → 等面板起来 → 用同一个总线改设置 → 重启面板。
+apply_dock_layout() {
+  [ -f /etc/sandrpod-desktop-dock ] || return 0
+  i=0
+  while [ $i -lt 20 ]; do
+    if xfconf-query -c xfce4-panel -l 2>/dev/null | grep -q panels; then break; fi
+    i=$((i+1)); sleep 1
+  done
+  WALL=$(cat /etc/sandrpod-desktop-wallpaper 2>/dev/null)
+  xfconf-query -c xfce4-panel -p /panels/panel-1/position -s "p=10" 2>/dev/null || true
+  xfconf-query -c xfce4-panel -p /panels/panel-1/size -s 48 2>/dev/null || true
+  xfconf-query -c xfce4-panel -p /panels/panel-1/length-adjust -s false 2>/dev/null || true
+  xfconf-query -c xfce4-panel -p /panels/panel-1/length -s 22 2>/dev/null || true
+  xfconf-query -c xfce4-panel -p /panels/panel-1/position-locked -s true 2>/dev/null || true
+  xfconf-query -c xfwm4 -p /general/button_layout -s "CMH|" 2>/dev/null || true
+  if [ -n "$WALL" ] && [ -f "$WALL" ]; then
+    xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitor0/workspace0/last-image -s "$WALL" 2>/dev/null || true
+    xfdesktop --reload >/dev/null 2>&1 || true
+  fi
+  xfce4-panel -r >/dev/null 2>&1 || true
+}
 (
   while true; do
-    dbus-launch --exit-with-session startxfce4
+    eval "$(dbus-launch --sh-syntax --exit-with-session)"
+    export DBUS_SESSION_BUS_ADDRESS
+    startxfce4 &
+    XFCE_PID=$!
+    apply_dock_layout
+    wait "$XFCE_PID"
     echo "desktop session exited, restarting in 2s" >&2
     sleep 2
   done

@@ -114,4 +114,5 @@ ENTRYPOINT ["/app/desktop-start.sh"]
 COPY docker/desktop-panel.xml /tmp/desktop-panel.xml
 RUN if [ "$DESKTOP_THEME" = "dock" ]; then \
       mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml \
-      && cp /tmp/desktop-panel.xml /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml; fi
+      && cp /tmp/desktop-panel.xml /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml \
+      && echo "/usr/share/backgrounds/Jammy-Jellyfish_WP_4096x2304_Grey.png" > /etc/sandrpod-desktop-wallpaper; fi
