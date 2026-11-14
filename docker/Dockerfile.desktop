@@ -39,7 +39,8 @@ RUN sed -i "s|//archive.ubuntu.com|//${APT_MIRROR}|g; s|//security.ubuntu.com|//
  && apt-get update \
  && apt-get install -y --no-install-recommends \
       wget ca-certificates curl perl gnupg \
-      xfce4 xfce4-terminal xfce4-panel xfce4-whiskermenu-plugin dbus-x11 x11-xserver-utils xdotool scrot \
+      xfce4 xfce4-terminal xfce4-panel xfce4-whiskermenu-plugin dbus-x11 \
+      librsvg2-common x11-xserver-utils xdotool scrot \
       $(if [ "$DESKTOP_THEME" = "plain" ]; then echo ""; elif [ "$DESKTOP_THEME" = "dock" ]; then echo adwaita-icon-theme papirus-icon-theme ubuntu-wallpapers plank; else echo yaru-theme-gtk yaru-theme-icon yaru-theme-sound fonts-ubuntu ubuntu-wallpapers; fi) \
       fonts-noto-cjk fonts-noto-color-emoji language-pack-zh-hans \
       libswitch-perl libyaml-tiny-perl libhash-merge-simple-perl \
