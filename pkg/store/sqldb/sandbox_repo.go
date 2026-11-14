@@ -213,6 +213,7 @@ func scanSandboxes(rows *sql.Rows) []*sandpod.SandboxInfo {
 		sb.Network = unmarshalNetwork(networkJSON)
 		sb.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdStr)
 		sb.LastActivity, _ = time.Parse(time.RFC3339Nano, activityStr)
+		sb.Desktop = desktopInt != 0
 		out = append(out, &sb)
 	}
 	return out
