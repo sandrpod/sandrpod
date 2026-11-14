@@ -203,6 +203,7 @@ func runSandboxCreate(
 			s.LastActivity = time.Now()
 		})
 	} else {
+		log.Printf("create: tracking %s image=%q desktop=%v (req.Desktop=%v)", req.Name, req.ImageID, req.Desktop || looksLikeDesktopImage(req.ImageID), req.Desktop)
 		_ = sandboxStore.Add(&podpkg.SandboxInfo{
 			ID:           jobID,
 			Name:         req.Name,
