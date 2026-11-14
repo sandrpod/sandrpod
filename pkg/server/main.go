@@ -1446,6 +1446,12 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					Region:       req.Region,
 					ProviderType: req.ProviderType,
 					InstanceType: req.InstanceType,
+					// The row a client polls while the job runs: it needs the image
+					// and the desktop flag, or the sandbox shows no image and the
+					// console offers no desktop button until something else fills
+					// them in (that "something else" never existed).
+					ImageID:      req.ImageID,
+					Desktop:      req.Desktop || looksLikeDesktopImage(req.ImageID),
 					State:        podpkg.StatePending,
 					Owner:        ident.Name,
 					TTLSeconds:   req.TTLSeconds,
