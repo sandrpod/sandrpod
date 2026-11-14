@@ -40,7 +40,7 @@ RUN sed -i "s|//archive.ubuntu.com|//${APT_MIRROR}|g; s|//security.ubuntu.com|//
  && apt-get install -y --no-install-recommends \
       wget ca-certificates curl perl gnupg \
       xfce4 xfce4-terminal xfce4-panel xfce4-whiskermenu-plugin dbus-x11 x11-xserver-utils xdotool scrot \
-      $(if [ "$DESKTOP_THEME" = "plain" ]; then echo ""; elif [ "$DESKTOP_THEME" = "dock" ]; then echo adwaita-icon-theme papirus-icon-theme ubuntu-wallpapers; else echo yaru-theme-gtk yaru-theme-icon yaru-theme-sound fonts-ubuntu ubuntu-wallpapers; fi) \
+      $(if [ "$DESKTOP_THEME" = "plain" ]; then echo ""; elif [ "$DESKTOP_THEME" = "dock" ]; then echo adwaita-icon-theme papirus-icon-theme ubuntu-wallpapers plank; else echo yaru-theme-gtk yaru-theme-icon yaru-theme-sound fonts-ubuntu ubuntu-wallpapers; fi) \
       fonts-noto-cjk fonts-noto-color-emoji language-pack-zh-hans \
       libswitch-perl libyaml-tiny-perl libhash-merge-simple-perl \
       libscalar-list-utils-perl liblist-moreutils-perl libtry-tiny-perl \
@@ -118,3 +118,12 @@ RUN if [ "$DESKTOP_THEME" = "dock" ]; then \
       mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml \
       && cp /tmp/desktop-panel.xml /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml \
       && echo "/usr/share/backgrounds/Jammy-Jellyfish_WP_4096x2304_Grey.png" > /etc/sandrpod-desktop-wallpaper; fi
+# plank 的 dock 配置（只有 dock 变体需要）。settings 是 keyfile，launchers 目录里
+# 每个 *.dockitem 是一个入口。位置/居中/透明都由 plank 自己管，比手工调
+# xfce4-panel 的 position 稳得多。
+RUN if [ "$DESKTOP_THEME" = "dock" ]; then \
+      mkdir -p /root/.config/plank/dock1/launchers \
+      && printf '[PlankDockPreferences]\nCurrentDock=%s\n\n[Dock1]\nPosition=3\nAlignment=3\nIconSize=48\nZoomEnabled=true\nZoomPercent=125\nTheme=Transparent\nHideMode=0\nLockItems=false\n' 1 > /root/.config/plank/dock1/settings \
+      && printf '[{"Launcher":"/usr/share/applications/google-chrome.desktop","Name":"Chrome","DockItemType":"Application"}]' > /root/.config/plank/dock1/launchers/google-chrome.dockitem \
+      && printf '[{"Launcher":"/usr/share/applications/xfce4-terminal.desktop","Name":"Terminal","DockItemType":"Application"}]' > /root/.config/plank/dock1/launchers/xfce4-terminal.dockitem \
+      && printf '[{"Launcher":"/usr/share/applications/thunar.desktop","Name":"Files","DockItemType":"Application"}]' > /root/.config/plank/dock1/launchers/thunar.dockitem; fi

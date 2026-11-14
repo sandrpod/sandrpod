@@ -111,7 +111,13 @@ apply_dock_layout() {
     done
     xfdesktop --reload >/dev/null 2>&1 || true
   fi
+  # 面板让位给 plank（自动隐藏，不占屏幕边缘）
+  xfconf-query -c xfce4-panel -p /panels/panel-1/autohide-behavior -s 2 2>/dev/null || true
   xfce4-panel -r >/dev/null 2>&1 || true
+  # plank 才是 dock 本体：居中、透明、图标放大
+  if command -v plank >/dev/null 2>&1; then
+    pgrep -x plank >/dev/null 2>&1 || (plank >/tmp/plank.log 2>&1 &)
+  fi
 }
 (
   while true; do
