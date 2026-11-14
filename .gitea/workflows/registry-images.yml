@@ -53,6 +53,21 @@ jobs:
             go_image: golang:1.27-bookworm
             runtime_image: ubuntu:22.04
             build_args: "--build-arg DESKTOP_GEOMETRY=1024x640"
+          # The other two look variants, so a fix that lands in the shared
+          # Dockerfile (the Chrome wrapper, the theme names) is never stuck in only
+          # some of the published images.
+          - name: desktop-plain
+            dockerfile: docker/Dockerfile.desktop
+            tag: desktop-plain
+            go_image: golang:1.27-bookworm
+            runtime_image: ubuntu:22.04
+            build_args: "--build-arg DESKTOP_THEME=plain"
+          - name: desktop-dock
+            dockerfile: docker/Dockerfile.desktop
+            tag: desktop-dock
+            go_image: golang:1.27-bookworm
+            runtime_image: ubuntu:22.04
+            build_args: "--build-arg DESKTOP_THEME=dock"
     steps:
       - name: checkout
         env:
