@@ -147,6 +147,19 @@ apply_dock_layout() {
     sleep 2
     xfdesktop --reload >/dev/null 2>&1 || true
   fi
+  # xfdesktop 启动时会把默认壁纸写回 xfconf（晚于上面的设置），所以加一个守护：
+  # 前 90 秒内发现 last-image 不是目标壁纸就改回，稳定后退出。
+  (
+    DEADLINE=$(( $(date +%s) + 90 ))
+    while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+      sleep 5
+      CUR=$(DISPLAY=:1 DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS \
+        xfconf-query -c xfce4-desktop -p /backdrop/screen0/monitorVNC-0/workspace0/last-image 2>/dev/null)
+      [ "$CUR" = "$WALL" ] || \
+        DISPLAY=:1 DBUS_SESSION_BUS_ADDRESS=$DBUS_SESSION_BUS_ADDRESS \
+        xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitorVNC-0/workspace0/last-image" -s "$WALL" 2>/dev/null
+    done
+  ) &
   # 面板让位给 plank（自动隐藏，不占屏幕边缘）
   xfconf-query -c xfce4-panel -p /panels/panel-1/autohide-behavior -s 2 2>/dev/null || true
   xfce4-panel -r >/dev/null 2>&1 || true
