@@ -77,6 +77,9 @@ func (m *PtyManager) CreateSession(width, height int) (*PtySession, error) {
 		env = append(env, "HISTFILE="+filepath.Join(wd, ".sandbox_history"))
 	}
 	cmd.Env = env
+	// Interactive sessions start in the work tree, matching sandbox_exec —
+	// inheriting the toolbox process's cwd dropped users into "/".
+	cmd.Dir = defaultWorkDir()
 	if err := wrapSandbox(cmd); err != nil {
 		return nil, err
 	}
