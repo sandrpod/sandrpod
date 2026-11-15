@@ -131,9 +131,20 @@ apply_dock_layout() {
   # 光写一份 XML 在名称不匹配时会被忽略——这就是"壁纸一直是老鼠"的原因。
   WALL=$(cat /etc/sandrpod-desktop-wallpaper 2>/dev/null)
   if [ -n "$WALL" ] && [ -f "$WALL" ]; then
-    for prop in $(xfconf-query -c xfce4-desktop -l 2>/dev/null | grep -E 'last-image|image-path'); do
-      xfconf-query -c xfce4-desktop -p "$prop" -s "$WALL" 2>/dev/null || true
+    # 显式写四个工作区 + 两种显示器名（-n 创建缺失的属性）。启动瞬间 xfdesktop
+    # 还没把自己的 backdrop 属性建出来，靠 grep 现有属性会拿到空列表——这就是
+    # "壁纸一直是老鼠"的第二个原因。
+    for M in monitorVNC-0 monitor0; do
+      for WS in 0 1 2 3; do
+        xfconf-query -c xfce4-desktop -p "/backdrop/screen0/$M/workspace$WS/last-image" -n -t string -s "$WALL" 2>/dev/null || \
+          xfconf-query -c xfce4-desktop -p "/backdrop/screen0/$M/workspace$WS/last-image" -s "$WALL" 2>/dev/null || true
+        xfconf-query -c xfce4-desktop -p "/backdrop/screen0/$M/workspace$WS/image-style" -n -t uint -s 5 2>/dev/null || \
+          xfconf-query -c xfce4-desktop -p "/backdrop/screen0/$M/workspace$WS/image-style" -s 5 2>/dev/null || true
+      done
     done
+    xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor0/workspace0/image-path" -n -t string -s "$WALL" 2>/dev/null || \
+      xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor0/workspace0/image-path" -s "$WALL" 2>/dev/null || true
+    sleep 2
     xfdesktop --reload >/dev/null 2>&1 || true
   fi
   # 面板让位给 plank（自动隐藏，不占屏幕边缘）
