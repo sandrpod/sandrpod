@@ -160,12 +160,21 @@ apply_dock_layout() {
         xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitorVNC-0/workspace0/last-image" -s "$WALL" 2>/dev/null
     done
   ) &
-  # mac 变体：plank 才是 dock 本体（自动居中、自动跟随分辨率），panel 直接退场
+  # mac 变体：plank 才是 dock 本体（自动居中、自动跟随分辨率），panel 直接退场。
+  # plank 由 XFCE 自启动机制拉起（镜像里已烘焙 autostart），这里只负责等它出现、
+  # 重复启动导致的实例清理，以及把 panel 压成智能隐藏。
   if [ -f /etc/sandrpod-desktop-mac ] && [ -x /usr/bin/plank ]; then
-    pkill -f xfce4-panel 2>/dev/null
-    (sleep 3; nohup plank >/tmp/plank.log 2>&1 &) 
-  else
     xfconf-query -c xfce4-panel -p /panels/panel-1/autohide-behavior -s 2 2>/dev/null || true
+    (
+      DEADLINE=$(( $(date +%s) + 120 ))
+      while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+        sleep 5
+        pgrep -x plank >/dev/null || DISPLAY=:1 nohup plank >/tmp/plank.log 2>&1 &
+        sleep 5
+        pkill -f "xfce4-panel" 2>/dev/null
+      done
+    ) &
+  else
     xfce4-panel -r >/dev/null 2>&1 || true
   fi
   # plank 才是 dock 本体：居中、透明、图标放大
