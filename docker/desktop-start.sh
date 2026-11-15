@@ -60,7 +60,11 @@ TB=$!
 GEOM=$(cat /etc/sandrpod-desktop-geometry 2>/dev/null || echo 1280x800)
 # FrameRate 30：60fps 对远程桌面是纯浪费，编码吃满 CPU 还看不清；
 # ffmpeg 在镜像里时 KasmVNC 会用 H.264（比 webp 便宜一个数量级）。
+# -publicIP：带出网限制的沙箱在隔离网络里到不了 STUN 服务器，不指定公网 IP
+# 时 KasmVNC 的 ICE 探测会失败、Xvnc 起不来（桌面黑屏/6901 拒连）。当前部署固定在
+# 这台宿主机上，IP 写死即可；换机器时改这一行。
 /usr/bin/Xvnc :1 -SecurityTypes None -DisableBasicAuth 1 -websocketPort 6901 \
+  -publicIP 47.239.22.55 \
   -httpd /usr/share/kasmvnc/www -interface 0.0.0.0 -FrameRate 30 -videoCodec h264 \
   -geometry "$GEOM" -depth 24 >/tmp/xvnc.log 2>&1 &
 XVNC=$!
