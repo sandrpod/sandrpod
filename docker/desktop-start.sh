@@ -84,7 +84,15 @@ xfconf-query -c xfwm4 -p /general/use_compositing -s false >/dev/null 2>&1 || tr
 # （XFCONF 静默失败）。所以：起会话 → 等面板起来 → 用同一个总线改设置 → 重启面板。
 apply_dock_layout() {
   [ -f /etc/sandrpod-desktop-dock ] || return 0
+  # xfconf-query 必须带着会话的 DBus 地址跑；等不到就静默失败，壁纸/dock 全不生效。
   i=0
+  while [ $i -lt 20 ]; do
+    SPID=$(pgrep xfce4-session | head -1)
+    [ -n "$SPID" ] && DBUS_SESSION_BUS_ADDRESS=$(tr "\0" "\n" < /proc/$SPID/environ | grep "^DBUS_SESSION_BUS_ADDRESS=" | cut -d= -f2-)
+    [ -n "$DBUS_SESSION_BUS_ADDRESS" ] && break
+    i=$((i+1)); sleep 1
+  done
+  export DBUS_SESSION_BUS_ADDRESS
   while [ $i -lt 20 ]; do
     if xfconf-query -c xfce4-panel -l 2>/dev/null | grep -q panels; then break; fi
     i=$((i+1)); sleep 1
