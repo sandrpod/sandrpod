@@ -15,7 +15,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -49,6 +51,13 @@ type mcpError struct {
 }
 
 // mcpTool is one callable tool: a JSON schema plus the REST call it maps to.
+// mcpRawBody carries a pre-encoded request body (e.g. a multipart upload) through
+// the internal dispatch, which otherwise always serialises as JSON.
+type mcpRawBody struct {
+	contentType string
+	data        []byte
+}
+
 type mcpTool struct {
 	// forward marks a tool whose work happens in a sandbox's own MCP bridge. The
 	// call is proxied as JSON-RPC (two steps: initialize for a session id, then
@@ -190,8 +199,22 @@ func builtinMCPTools() []mcpTool {
 				"content": str("file contents"),
 			}, "sandbox", "path", "content"),
 			call: func(a map[string]any) (string, string, any, error) {
-				return http.MethodPost, "/api/v1/sandboxes/" + urlq(strArg(a, "sandbox")) + "/toolbox/files/write",
-					map[string]any{"path": strArg(a, "path"), "content": strArg(a, "content")}, nil
+				path := strArg(a, "path")
+				var buf bytes.Buffer
+				w := multipart.NewWriter(&buf)
+				part, err := w.CreateFormFile("file", filepath.Base(path))
+				if err != nil {
+					return "", "", nil, err
+				}
+				if _, err := part.Write([]byte(strArg(a, "content"))); err != nil {
+					return "", "", nil, err
+				}
+				if err := w.Close(); err != nil {
+					return "", "", nil, err
+				}
+				return http.MethodPost, "/api/v1/sandboxes/" + urlq(strArg(a, "sandbox")) +
+						"/toolbox/files/upload?path=" + urlq(path),
+					&mcpRawBody{contentType: w.FormDataContentType(), data: buf.Bytes()}, nil
 			},
 		},
 		{
@@ -207,7 +230,7 @@ func builtinMCPTools() []mcpTool {
 					p = "/workspace"
 				}
 				return http.MethodGet, "/api/v1/sandboxes/" + urlq(strArg(a, "sandbox")) +
-					"/toolbox/files/list?path=" + urlq(p), nil, nil
+					"/toolbox/files?path=" + urlq(p), nil, nil
 			},
 		},
 		{
@@ -517,7 +540,11 @@ func (h *mcpHandler) callTool(w http.ResponseWriter, r *http.Request, req mcpReq
 		inner.URL.RawQuery = path[i+1:]
 	}
 	inner.RequestURI = path
-	if body != nil {
+	if raw, ok := body.(*mcpRawBody); ok {
+		inner.Body = io.NopCloser(bytes.NewReader(raw.data))
+		inner.ContentLength = int64(len(raw.data))
+		inner.Header.Set("Content-Type", raw.contentType)
+	} else if body != nil {
 		encoded, _ := json.Marshal(body)
 		inner.Body = io.NopCloser(bytes.NewReader(encoded))
 		inner.ContentLength = int64(len(encoded))
