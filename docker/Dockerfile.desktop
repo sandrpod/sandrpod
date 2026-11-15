@@ -117,8 +117,10 @@ ENTRYPOINT ["/app/desktop-start.sh"]
 # 只是多一个没人读的 /tmp 文件。
 COPY docker/desktop-panel.xml /tmp/desktop-panel.xml
 RUN if [ "$DESKTOP_THEME" = "dock" ]; then \
-      mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml \
+      mkdir -p /root/.config/xfce4/xfconf/xfce-perchannel-xml /usr/share/themes/WhiteSur-Dark/xfwm4 \
       && cp /tmp/desktop-panel.xml /root/.config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml \
+      && cp /usr/share/themes/Kokodi/xfwm4/* /usr/share/themes/WhiteSur-Dark/xfwm4/ \
+      && sed -i "s|^title_shadow_active=.*|title_shadow_active=false|; s|^active_text_color=.*|active_text_color=#ffffff|" /usr/share/themes/WhiteSur-Dark/xfwm4/themerc \
       && echo "/usr/share/backgrounds/Jammy-Jellyfish_WP_4096x2304_Grey.png" > /etc/sandrpod-desktop-wallpaper; fi
 # plank 的 dock 配置（只有 dock 变体需要）。settings 是 keyfile，launchers 目录里
 # 每个 *.dockitem 是一个入口。位置/居中/透明都由 plank 自己管，比手工调
