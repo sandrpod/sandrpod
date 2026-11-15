@@ -109,6 +109,8 @@ RUN printf '%s' "${DESKTOP_GEOMETRY}" > /etc/sandrpod-desktop-geometry
 # 桌面端口（容器内）；toolbox 仍在 8080
 EXPOSE 6901 5901 8080
 
+WORKDIR /workspace
+
 ENTRYPOINT ["/app/desktop-start.sh"]
 
 # Dock 布局写进 xfce4-panel.xml，而不是运行时用 xfconf-query：容器里没有会话总线，
