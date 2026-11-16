@@ -22,9 +22,9 @@ type SandboxInfo struct {
 	// Desktop marks a sandbox whose screen can be watched/driven (KasmVNC on 6901).
 	// The console used to infer this from the image name, which broke the moment an
 	// image was not called "...desktop". Set at create time, it is a fact.
-	Desktop      bool   `json:"desktop,omitempty"`
-	State        State  `json:"state"`
-	IP           string `json:"ip,omitempty"`
+	Desktop bool   `json:"desktop,omitempty"`
+	State   State  `json:"state"`
+	IP      string `json:"ip,omitempty"`
 	// Owner is the auth-token name that created the sandbox. Empty on records
 	// created before multi-token auth (or with auth disabled); empty-owner
 	// records are visible to every authenticated caller for upgrade smoothness.
