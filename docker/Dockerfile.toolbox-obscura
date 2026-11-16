@@ -1,0 +1,32 @@
+# Headless toolbox variant with the Obscura MCP server baked in.
+#
+# Obscura (github.com/h4ckf0r0day/obscura, Apache-2.0) is a Rust headless browser
+# engine; `obscura mcp` exposes browser automation tools over the MCP stdio
+# transport, which the toolbox's MCP bridge spawns on demand from
+# /workspace/.sandrpod/mcp.json. The default config below registers it.
+#
+# Base is debian (glibc): the official obscura release binaries are glibc builds
+# and the standard toolbox image is Alpine/musl, which cannot execute them. The
+# toolbox binary itself is CGO-free and static, so it moves over cleanly.
+FROM registry.sandbox.sandrpod.com/sandrpod/toolbox:latest AS toolbox
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl bash \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=toolbox /app/toolbox /app/toolbox
+
+# Obscura v0.2.7 official release binaries
+ADD https://github.com/h4ckf0r0day/obscura/releases/download/v0.2.7/obscura-x86_64-linux.tar.gz /tmp/obscura.tar.gz
+RUN mkdir -p /usr/local/bin /workspace/.sandrpod \
+ && tar xzf /tmp/obscura.tar.gz -C /usr/local/bin \
+ && chmod +x /usr/local/bin/obscura /usr/local/bin/obscura-worker \
+ && rm -f /tmp/obscura.tar.gz \
+ && printf '{"mcpServers":{"obscura":{"command":"/usr/local/bin/obscura","args":["mcp"]}}}\n' \
+      > /workspace/.sandrpod/mcp.json
+
+ENV SANDRPOD_MCP_CONFIG=/workspace/.sandrpod/mcp.json
+WORKDIR /workspace
+EXPOSE 8080
+ENTRYPOINT ["/app/toolbox"]
+CMD ["-port=8080"]
