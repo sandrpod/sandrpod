@@ -13,7 +13,9 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -86,13 +88,17 @@ func (d e2bDeps) forwardE2B(w http.ResponseWriter, r *http.Request, sandbox stri
 // flushes in real time. Cross-node forwarding is handled by the gateway calling
 // forwardE2B first, so by here the tunnel is local. Returns true when handled.
 func (d e2bDeps) portProxy(w http.ResponseWriter, r *http.Request, sandbox string, port int) bool {
-	// A preview exposes a service inside the sandbox to the internet. Without a
-	// credential that is a stranger's desktop (KasmVNC on 6901) or a stranger's
-	// debugger (Chrome CDP on 9222), so refuse before proxying.
-	if !d.previewAuthorized(w, r, sandbox, port) {
+	// Ordinary in-sandbox services are capability-based, as on E2B: possession
+	// of the unguessable <port>-<sandboxID>.<domain> hostname is the credential,
+	// and a browser cannot attach a header. Keep the one exception that matters
+	// for safety: a desktop (KasmVNC/noVNC) or a browser debugger (CDP) is a
+	// whole interactive machine, so those ports still need the console's signed
+	// URL or an API key. Config.PrivateSandboxPorts remains the opt-in that
+	// requires a key on every port.
+	if e2bSensitivePort(port) && !d.previewAuthorized(w, r, sandbox, port) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
-		fmt.Fprintf(w, "preview requires a signed URL token.\n\n"+
+		fmt.Fprintf(w, "this port exposes a desktop or debugger and requires a signed URL token.\n\n"+
 			"Open it from the console (沙箱详情 → 打开桌面), call GET /api/v1/sandboxes/%s/preview/%d\n"+
 			"with your API key, or pass Authorization: Bearer <key>.\n", sandbox, port)
 		return true
@@ -165,17 +171,18 @@ func NewE2BGateway(domain string, cfg Config, stores podpkg.Stores,
 
 func newE2BGateway(domain string, d e2bDeps) http.Handler {
 	return e2bcompat.Handler(e2bcompat.Config{
-		Domain:          domain,
-		Auth:            d.authenticator(),
-		Authz:           d.authz(),
-		Throttle:        d.throttle,
-		Authorize:       d.authorizeSandbox,
-		Sandboxes:       &e2bSandboxBackend{d},
-		Envd:            &e2bEnvdBackend{d},
-		Code:            &e2bCodeBackend{d},
-		SandboxResolver: d.resolveSingleSandbox,
-		Forwarder:       d.forwardE2B,
-		PortProxy:       d.portProxy,
+		Domain:              domain,
+		Auth:                d.authenticator(),
+		Authz:               d.authz(),
+		Throttle:            d.throttle,
+		Authorize:           d.authorizeSandbox,
+		VerifyFileSignature: d.verifyFileSignature,
+		Sandboxes:           &e2bSandboxBackend{d},
+		Envd:                &e2bEnvdBackend{d},
+		Code:                &e2bCodeBackend{d},
+		SandboxResolver:     d.resolveSingleSandbox,
+		Forwarder:           d.forwardE2B,
+		PortProxy:           d.portProxy,
 		// Opt in to requiring an API key on get_host(port) URLs. Off by default
 		// so they behave like E2B's — see Config.PrivateSandboxPorts.
 		PrivateSandboxPorts: os.Getenv("SANDRPOD_E2B_PRIVATE_PORTS") != "",
@@ -541,6 +548,7 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 		ProviderType: provider,
 		InstanceType: instanceType,
 		TTLSeconds:   int64(req.Timeout),
+		EnvVars:      req.EnvVars,
 	}
 	// An E2B templateID that looks like a container image is used directly.
 	if strings.ContainsAny(req.TemplateID, "/:") {
@@ -714,6 +722,47 @@ func (b *e2bSandboxBackend) detailFromInfo(sb *podpkg.SandboxInfo) e2bcompat.San
 		// gateway's authenticator accepts the subsequent envd requests.
 		EnvdAccessToken: b.d.envdToken(sb),
 	}
+}
+
+// e2bSensitivePort reports ports that expose an interactive desktop or a
+// debugger, which must not be anonymous even on the capability-based E2B host.
+func e2bSensitivePort(port int) bool {
+	switch port {
+	case 5900, 6080, 6901, 9222, 9223:
+		return true
+	}
+	return false
+}
+
+// verifyFileSignature checks the v1 signature the official SDK puts on
+// download_url/upload_url. The signature is
+//
+//	v1_ base64raw(sha256("<path>:<operation>:<user>:<envdToken>[:<expiration>]"))
+//
+// over the sandbox's own envd token, so possession of the URL is the capability
+// while an unrelated sandbox's token cannot forge it.
+func (d e2bDeps) verifyFileSignature(sandbox, path, operation, user, signature string, expiration int64) bool {
+	if sandbox == "" || path == "" || signature == "" {
+		return false
+	}
+	sb, ok := d.sandboxes.Get(sandbox)
+	if !ok {
+		return false
+	}
+	token := sb.Labels[e2bEnvdTokenLabel]
+	if token == "" {
+		return false
+	}
+	if expiration > 0 && time.Now().Unix() > expiration {
+		return false
+	}
+	raw := path + ":" + operation + ":" + user + ":" + token
+	if expiration > 0 {
+		raw += ":" + strconv.FormatInt(expiration, 10)
+	}
+	sum := sha256.Sum256([]byte(raw))
+	want := "v1_" + base64.RawStdEncoding.EncodeToString(sum[:])
+	return subtle.ConstantTimeCompare([]byte(want), []byte(signature)) == 1
 }
 
 // envdToken returns (creating if needed) a stable per-sandbox envd access

@@ -82,6 +82,11 @@ type CreateSandboxRequest struct {
 	InstanceType string `json:"instance_type"`
 	ImageID      string `json:"image_id,omitempty"`
 	Desktop      bool   `json:"desktop,omitempty"`
+	// EnvVars are set on the sandbox container, so every process inside it
+	// inherits them. The E2B SDK's Sandbox.create(envs=…) lands here; putting
+	// them on the container (rather than each command) also covers the Jupyter
+	// kernel the code interpreter starts.
+	EnvVars map[string]string `json:"env_vars,omitempty"`
 	// TTLSeconds, when > 0, overrides the server's idle timeout for this
 	// sandbox: it is reaped after this many seconds without activity, even if
 	// the global idle reaper is otherwise disabled.

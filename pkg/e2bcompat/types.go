@@ -111,8 +111,11 @@ type apiError struct {
 }
 
 // DefaultEnvdVersion is what we report for the in-sandbox daemon. Chosen high
-// enough that the SDK's version gates take the modern code paths.
-const DefaultEnvdVersion = "0.2.0"
+// enough that the SDK's version gates take the modern code paths: 0.5.2 enables
+// CloseStdin (implemented by /process.Process/CloseStdin) and the default-user
+// URL shape. It stays below 0.5.7 on purpose — that gate switches uploads to
+// raw octet-stream, which is a separate wire change and not needed here.
+const DefaultEnvdVersion = "0.5.2"
 
 // DefaultTimeoutSeconds mirrors E2B's create default.
 const DefaultTimeoutSeconds int32 = 15

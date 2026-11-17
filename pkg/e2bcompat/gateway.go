@@ -81,6 +81,13 @@ type Config struct {
 	// skipped (single-tenant / auth-disabled deployments). Called only for a
 	// non-empty resolved sandbox, before forwarding or dispatch.
 	Authorize func(identity, sandbox string) bool
+	// VerifyFileSignature authenticates the signed URL the official SDK builds
+	// from a per-sandbox envd access token (download_url / upload_url). E2B's
+	// file URLs are meant to be handed to a browser or curl, which cannot carry
+	// X-Access-Token; the signature in the query is the credential. Return true
+	// only for a signature the sandbox's token actually produced. expiration is
+	// the parsed signature_expiration (0 when absent).
+	VerifyFileSignature func(sandbox, path, operation, user, signature string, expiration int64) bool
 	// Forwarder, when set, is given each envd/code request once its target
 	// sandbox is known. In multi-instance load mode the sandbox's tunnel may
 	// terminate on a peer node; the forwarder reverse-proxies the request there
@@ -191,6 +198,27 @@ func Handler(cfg Config) http.Handler {
 			}
 		} else if cfg.Auth != nil {
 			ident, admin, ok = cfg.Auth(key)
+		}
+		// download_url/upload_url carry a signature over the per-sandbox envd
+		// token, because a browser or curl fetching the URL cannot send
+		// X-Access-Token. Verify it only on the file-content route and only for
+		// the sandbox named by the Host.
+		if !ok && sandbox != "" && r.URL.Path == "/files" && cfg.VerifyFileSignature != nil {
+			q := r.URL.Query()
+			if sig := q.Get("signature"); sig != "" {
+				operation := "read"
+				if r.Method == http.MethodPost || r.Method == http.MethodPut {
+					operation = "write"
+				}
+				var expiration int64
+				if raw := q.Get("signature_expiration"); raw != "" {
+					expiration, _ = strconv.ParseInt(raw, 10, 64)
+				}
+				if cfg.VerifyFileSignature(sandbox, q.Get("path"), operation,
+					q.Get("username"), sig, expiration) {
+					ident, admin, tenant, ok = "", false, "", true
+				}
+			}
 		}
 		if !ok {
 			if healthProbe {

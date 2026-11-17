@@ -175,17 +175,33 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	// the container exists so a sandbox never starts on a network it should
 	// not have had; if it fails, the create fails (see egress.go).
 	containerNetwork := p.networkName
-	env := []string{
-		"TOOLBOX_API_URL=" + req.APIURL,
-		"PODER_VERSION=" + req.PoderVersion,
-		"LOG_LEVEL=" + req.LogLevel,
+	// Caller-supplied env first, then the toolbox's own: on a duplicate key the
+	// later entry wins, and internal wiring (API URL, sandbox name) must not be
+	// overridable by a sandbox-level E2B env var.
+	env := make([]string, 0, len(req.EnvVars)+4)
+	envKeys := make([]string, 0, len(req.EnvVars))
+	for k := range req.EnvVars {
+		envKeys = append(envKeys, k)
+	}
+	sort.Strings(envKeys)
+	for _, k := range envKeys {
+		if k == "" || strings.ContainsAny(k, "=\x00") {
+			continue // not a valid environment variable name
+		}
+		value := strings.ReplaceAll(req.EnvVars[k], "\x00", "")
+		env = append(env, k+"="+value)
+	}
+	env = append(env,
+		"TOOLBOX_API_URL="+req.APIURL,
+		"PODER_VERSION="+req.PoderVersion,
+		"LOG_LEVEL="+req.LogLevel,
 		// The sandbox name drives the OAuth redirect_uri: the bridge constructs
 		// "https://7099-{name}.{domain}/callback" from it, so a browser's OAuth
 		// redirect reaches this sandbox's bridge through the E2B gateway's port
 		// proxy. Without the name the bridge would build a loopback URL that no
 		// browser can reach.
-		"SANDRPOD_SANDBOX_NAME=" + req.Name,
-	}
+		"SANDRPOD_SANDBOX_NAME="+req.Name,
+	)
 	// The wildcard domain comes from the worker's own env (operators set it once
 	// on the worker container; the pode forwards it to every sandbox it creates).
 	if dom := os.Getenv("SANDRPOD_E2B_DOMAIN"); dom != "" {

@@ -123,14 +123,14 @@ not yet exercised by the real SDK.
 | Control: pause/resume | `pause`/`resume`/`connect` | ☑ | freezes the container via the poder (docker pause); `connect` auto-resumes; verified live |
 | Control: metrics | `get_metrics` | ☑ | toolbox reads `/proc` (cpu/mem) + statfs (disk); verified live |
 | envd filesystem | `files.list/stat/makeDir/rename/remove` | ☑ | connect handlers + toolbox mapping; verified live |
-| envd file content | `files.read`/`write`/`write_files` | ☑ | plain-HTTP; batch multipart write; verified live |
+| envd file content | `files.read`/`write`/`write_files` | ☑ | plain-HTTP; batch multipart write. `download_url`/`upload_url` carry the SDK's `v1_` signature over the per-sandbox envd token and are fetchable without a header, like E2B; verified live |
 | envd watch | `files.watch_dir` | ☑ | fsnotify watcher, poll-based CreateWatcher/GetWatcherEvents/RemoveWatcher; verified live |
-| envd process | `commands.run` (fg+bg) / `list`/`kill`/`send_stdin`/`connect` | ☑ | full pid-addressed table; real streaming; verified live |
+| envd process | `commands.run` (fg+bg) / `list`/`kill`/`send_stdin`/`close_stdin`/`connect` | ☑ | full pid-addressed table; real streaming; `close_stdin` is enabled by reporting envd 0.5.2; verified live |
 | PTY | `pty.create/send_stdin/resize/kill` | ☑ | rides the Process service (pty flags); verified live |
 | code interpreter | `runCode` + contexts | ☑ | **stateful** kernel + create/list/restart/remove contexts; **matplotlib charts** captured as PNG → `Execution.results[].png`; verified live |
 | metadata | create/list `metadata` | ☑ | stored in labels, filterable |
-| env vars | `envVars` | ◐ | accepted on create; per-process injection via the process table's `envs` |
-| in-sandbox ports | `get_host(port)` | ☑ | fetchable with **no credential**, as on E2B — possession of the unguessable `<port>-<sandboxID>.<domain>` hostname is the capability, and a browser cannot send a header. Set `SANDRPOD_E2B_PRIVATE_PORTS=1` to require an API key instead; envd and the code interpreter authenticate either way |
+| env vars | `envVars` | ☑ | applied to the sandbox container, so every command, PTY and the code-interpreter kernel inherits them; a command-level `envs=` still overrides per call |
+| in-sandbox ports | `get_host(port)` | ☑ | ordinary services are fetchable with **no credential**, as on E2B — possession of the unguessable `<port>-<sandboxID>.<domain>` hostname is the capability. Desktop (5900/6080/6901) and debugger (9222/9223) ports are the exception: they still need the console's signed URL or an API key, because they expose a whole interactive machine. `SANDRPOD_E2B_PRIVATE_PORTS=1` requires a key on every port. envd, the code interpreter and signed file URLs authenticate either way |
 | MCP gateway | in-sandbox `mcp-gateway` on `:50005` | ☑ | E2B-style shim over the native bridge; reached via the generic port proxy; verified live over a real TLS vanity domain |
 | cross-node routing | any SDK call on a multi-instance cluster | ☑ | requests are forwarded to the node holding the sandbox's tunnel; verified live with a real cloud poder |
 

@@ -45,10 +45,14 @@ type PodInfo struct {
 // field silently stays at its zero value and the Poder docker driver
 // fell back to the default toolbox image regardless of caller intent.
 type CreatePodRequest struct {
-	Name          string            `json:"name"`
-	Region        string            `json:"region,omitempty"`
-	InstanceType  string            `json:"instance_type,omitempty"`
-	ImageID       string            `json:"image_id,omitempty"`
+	Name         string `json:"name"`
+	Region       string `json:"region,omitempty"`
+	InstanceType string `json:"instance_type,omitempty"`
+	ImageID      string `json:"image_id,omitempty"`
+	// EnvVars are the sandbox-level environment variables (E2B's envVars).
+	// They are applied to the container so every process inherits them; the
+	// toolbox's own variables are appended after these and win on collision.
+	EnvVars       map[string]string `json:"env_vars,omitempty"`
 	Provider      string            `json:"provider,omitempty"`
 	NetworkConfig *NetworkConfig    `json:"network_config,omitempty"`
 	DiskConfig    *DiskConfig       `json:"disk_config,omitempty"`

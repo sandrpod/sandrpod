@@ -819,3 +819,34 @@ func TestThrottle_RejectsWith429AndCarriesIdentity(t *testing.T) {
 		t.Errorf("allowed request answered %d, want 201", code)
 	}
 }
+
+// Signed download_url/upload_url must work without X-Access-Token: a browser
+// or curl fetching the URL cannot send one. The signature is verified against
+// the sandbox's envd token by the host callback.
+func TestSignedFileURLIsAnonymous(t *testing.T) {
+	const domain = "example.com"
+	env := newFakeEnvd()
+	env.files["/tmp/a.txt"] = []byte("signed-ok")
+	gw := Handler(Config{
+		Domain: domain,
+		Auth:   func(string) (string, bool, bool) { return "", false, false },
+		Envd:   env,
+		VerifyFileSignature: func(sandbox, path, operation, user, signature string, expiration int64) bool {
+			return sandbox == "sb1" && path == "/tmp/a.txt" && operation == "read" &&
+				user == "" && signature == "v1_good" && expiration == 0
+		},
+	})
+	get := func(sig string) int {
+		req := httptest.NewRequest("GET", "/files?path=%2Ftmp%2Fa.txt&signature="+sig, nil)
+		req.Host = "49983-sb1." + domain
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := get("v1_good"); code != http.StatusOK {
+		t.Fatalf("valid signature: want 200, got %d", code)
+	}
+	if code := get("v1_bad"); code != http.StatusUnauthorized {
+		t.Fatalf("bad signature: want 401, got %d", code)
+	}
+}
