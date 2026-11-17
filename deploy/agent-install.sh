@@ -24,6 +24,9 @@ PERMISSION_MODE="${SANDRPOD_PERMISSION_MODE:-prompt}"
 OS_SANDBOX="${SANDRPOD_OS_SANDBOX:-auto}"
 RUN_USER="${SANDRPOD_AGENT_USER:-}"
 VERSION="${SANDRPOD_VERSION:-latest}"
+# Where releases come from. The default is GitHub; a mirror is what makes the
+# installer usable on a network where github.com is unreachable.
+DOWNLOAD_BASE="${SANDRPOD_AGENT_DOWNLOAD_BASE:-https://github.com/sandrpod/sandrpod/releases}"
 PREFIX="${SANDRPOD_PREFIX:-/usr/local/bin}"
 DRY_RUN=0
 ASSUME_YES=0
@@ -62,6 +65,8 @@ Turn this machine into a SandrPod sandbox (an agent, not a worker).
   --token TOKEN     join token, jn_…                 (or SANDRPOD_JOIN_TOKEN)
   --name NAME       sandbox name for this machine    (default: hostname)
   --version TAG     release to install               (default: latest)
+  --download-base URL  release root                 (default: GitHub Releases;
+                    e.g. https://mirror.example.com/sandrpod/releases)
   --prefix DIR      where to install the binary      (default: /usr/local/bin)
   --work-dir DIR    writes are confined here (plus the system temp dir);
                     default: ~/sandrpod-work
@@ -92,6 +97,7 @@ while [ $# -gt 0 ]; do
     --token) TOKEN="$2"; shift 2 ;;
     --name) NAME="$2"; shift 2 ;;
     --version) VERSION="$2"; shift 2 ;;
+    --download-base) DOWNLOAD_BASE="$2"; shift 2 ;;
     --prefix) PREFIX="$2"; shift 2 ;;
     --work-dir) WORK_DIR="$2"; shift 2 ;;
     --permission-mode) PERMISSION_MODE="$2"; shift 2 ;;
@@ -173,13 +179,17 @@ fi
 
 step "Installing the binary"
 BIN="sandrpod-agent"
-URL="https://github.com/sandrpod/sandrpod/releases/${VERSION}/download/${BIN}-${PLATFORM}-${GOARCH}"
-[ "$VERSION" = "latest" ] && URL="https://github.com/sandrpod/sandrpod/releases/latest/download/${BIN}-${PLATFORM}-${GOARCH}"
+DOWNLOAD_BASE="${DOWNLOAD_BASE%/}"
+if [ "$VERSION" = "latest" ]; then
+  URL="${DOWNLOAD_BASE}/latest/download/${BIN}-${PLATFORM}-${GOARCH}"
+else
+  URL="${DOWNLOAD_BASE}/${VERSION}/download/${BIN}-${PLATFORM}-${GOARCH}"
+fi
 info "from ${URL}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 if [ "$DRY_RUN" = 0 ]; then
-  curl -fsSL --retry 3 --max-time 300 "$URL" -o "$TMP/$BIN" || die "download failed. Check the release tag, or build it: go build -o $PREFIX/$BIN ./cmd/agent"
+  curl -fsSL --retry 3 --max-time 300 "$URL" -o "$TMP/$BIN" || die "download failed. Check the release tag, the --download-base mirror, or build it: go build -o $PREFIX/$BIN ./cmd/agent"
   install -m 0755 "$TMP/$BIN" "$PREFIX/$BIN"
   info "installed $PREFIX/$BIN ($("$PREFIX/$BIN" --version 2>/dev/null | head -1 || echo 'version unknown'))"
 else
@@ -210,6 +220,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=${PREFIX}/${BIN} -api-url='${API_URL}' -token='${TOKEN}' -name='${NAME}' \
+  -state-dir='${RUN_HOME}/.sandrpod' \
   -work-dir='${WORK_DIR}' -permission-mode='${PERMISSION_MODE}' -os-sandbox='${OS_SANDBOX}'
 # on-failure, not always: the agent exits 0 when its sandbox is deleted from the
 # platform, and restarting it would re-register what somebody just removed.
@@ -244,6 +255,7 @@ else
     <string>-api-url=${API_URL}</string>
     <string>-token=${TOKEN}</string>
     <string>-name=${NAME}</string>
+    <string>-state-dir=${RUN_HOME}/.sandrpod</string>
     <string>-work-dir=${WORK_DIR}</string>
     <string>-permission-mode=${PERMISSION_MODE}</string>
     <string>-os-sandbox=${OS_SANDBOX}</string>

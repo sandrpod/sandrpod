@@ -143,9 +143,11 @@ func envBool(key string, defaultVal bool) bool {
 }
 
 var (
-	apiURL    = flag.String("api-url", envOr("SANDRPOD_API_URL", "http://localhost:8080"), "API Server URL")
-	name      = flag.String("name", envOr("SANDRPOD_SANDBOX_NAME", ""), "Sandbox name (required, must be unique per API server)")
-	token     = flag.String("token", envOr("SANDRPOD_TOKEN", ""), "API token for authentication")
+	apiURL       = flag.String("api-url", envOr("SANDRPOD_API_URL", "http://localhost:8080"), "API Server URL")
+	name         = flag.String("name", envOr("SANDRPOD_SANDBOX_NAME", ""), "Sandbox name (required, must be unique per API server)")
+	token        = flag.String("token", envOr("SANDRPOD_TOKEN", ""), "API token for authentication")
+	stateDirFlag = flag.String("state-dir", envOr("SANDRPOD_STATE_DIR", ""),
+		"directory holding the agent's worker key (default: ~/.sandrpod)")
 	workDir   = flag.String("work-dir", envOr("SANDRPOD_WORK_DIR", ""), "Working directory for code execution (default: current dir)")
 	reconnect = flag.Duration("reconnect", 5*time.Second, "Reconnect delay on disconnect")
 	help      = flag.Bool("help", false, "Show help")
@@ -281,6 +283,18 @@ func main() {
 	log.Printf("API Server:   %s", *apiURL)
 
 	ctx, cancel := context.WithCancel(context.Background())
+
+	// The credential: a stored worker key, or the join token exchanged for one.
+	// This runs before the audit pipeline and the egress server, because both
+	// authenticate to the control plane with whatever this resolves. A background
+	// retry keeps trying if the exchange could not happen at startup.
+	stateDir := agentStateDir()
+	if *stateDirFlag != "" {
+		stateDir = *stateDirFlag
+	}
+	initialToken, agentID := resolveAgentToken(*apiURL, *token, stateDir)
+	setToken(initialToken)
+	go retryAgentEnrolment(ctx, *apiURL, stateDir, agentID)
 
 	// Build the handler once and reuse across reconnects.
 	// The toolbox listens only on the yamux tunnel (not a public port),
@@ -548,7 +562,7 @@ func installEgress() error {
 			return err
 		}
 		log.Printf("egress: policy from control plane (%s); deny-all until the first sync", describeEgressListen(srv))
-		target := egressTarget{apiURL: *apiURL, token: *token, sandbox: *name}
+		target := egressTarget{apiURL: *apiURL, token: activeToken(), sandbox: *name}
 		ctx, cancel := context.WithCancel(context.Background())
 		egressSyncStop = cancel
 		go syncEgressPolicy(ctx, srv, target, *egressSync)
@@ -634,7 +648,7 @@ func startEgressServer(compiled *egress.Compiled) (*egress.Server, error) {
 // verdict comes from the server. An empty policy there means "no literal is
 // special-cased", which is the conservative direction.
 func startDeciderEgress(guard *egress.Compiled) (*egress.Server, error) {
-	target := egressTarget{apiURL: *apiURL, token: *token, sandbox: *name}
+	target := egressTarget{apiURL: *apiURL, token: activeToken(), sandbox: *name}
 	opts := egress.Options{
 		Policy: guard,
 		Sink:   egressAuditSink{rec: sharedAuditRecorder},
@@ -982,8 +996,8 @@ func requireControlPlaneCapability(need string) error {
 	if err != nil {
 		return err
 	}
-	if *token != "" {
-		req.Header.Set("Authorization", "Bearer "+*token)
+	if tok := activeToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
 	}
 	resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 	if err != nil {
@@ -1328,7 +1342,7 @@ func installAuditPipeline(ctx context.Context, tb *toolbox.Server) error {
 	}
 	tok := *auditUploadToken
 	if tok == "" {
-		tok = *token
+		tok = activeToken()
 	}
 	uploader, err := audit.NewUploader(audit.UploaderOptions{
 		URL:          *auditUploadURL,
@@ -1466,6 +1480,15 @@ func connectLoop(ctx context.Context, handler http.Handler) {
 					"Start the service again to re-attach as a new sandbox.", *name)
 				return
 			}
+			// A rejected credential is not necessarily the end: if the command line
+			// still carries the invitation, put it back and let the retry loop
+			// exchange it for a fresh key. This is what recovers a revoked or
+			// expired key while the invitation is still valid.
+			if (statusCode == http.StatusUnauthorized || statusCode == http.StatusForbidden) &&
+				strings.HasPrefix(*token, "jn_") && activeToken() != *token {
+				setToken(*token)
+				log.Printf("Credential rejected; falling back to the join token to re-enrol")
+			}
 			log.Printf("Connect failed (HTTP %d): %v — retry in %s", statusCode, err, *reconnect)
 			select {
 			case <-ctx.Done():
@@ -1517,8 +1540,8 @@ func buildHeaders() http.Header {
 	h.Set("X-Sandbox-Arch", runtime.GOARCH)
 	h.Set("X-Sandbox-OS", runtime.GOOS)
 	h.Set("X-Sandbox-OS-Version", getOSVersion())
-	if *token != "" {
-		h.Set("Authorization", "Bearer "+*token)
+	if tok := activeToken(); tok != "" {
+		h.Set("Authorization", "Bearer "+tok)
 	}
 	return h
 }
