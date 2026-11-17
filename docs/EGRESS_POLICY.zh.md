@@ -12,6 +12,29 @@
 
 ---
 
+## 0. 部署前提：egress-proxy 镜像
+
+带出网限制的沙箱会带一个**每沙箱独立的 egress-proxy sidecar 容器**（沙箱被接到隔离
+的 docker 网络上，只与该代理通信）。worker 从 `SANDRPOD_EGRESS_IMAGE`（默认
+`ghcr.io/sandrpod/egress-proxy:latest`）解析这个镜像。
+
+如果 worker 解析或拉取不到这个镜像，**所有带出网策略的创建都会失败**：
+
+```
+create egress proxy container: Error response from daemon: No such image: ghcr.io/…
+```
+
+防火墙后的自托管部署应一次性构建并发布：
+
+```bash
+docker build -f docker/Dockerfile.egress -t registry.example.com/sandrpod/egress-proxy:latest .
+docker push registry.example.com/sandrpod/egress-proxy:latest
+```
+
+并在每个 worker 上设置 `SANDRPOD_EGRESS_IMAGE`。控制台的新建表单提供同样的策略
+（限制出网 + 白名单）；不具备该能力的 worker 会返回 409，而不是创建一个没有
+实际限制的沙箱。
+
 ## 1. 它处在哪一层
 
 | 层 | 作用 | 本版本 |

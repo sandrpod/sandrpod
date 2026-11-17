@@ -5,18 +5,30 @@
 
 ## 创建时选档位
 
-| 控制台里的类型 | 镜像 | 分辨率 |
+| 控制台里的类型 | 镜像 | 外观 |
 |---|---|---|
-| 桌面沙箱 | `sandrpod-desktop:v6` | 1280×800 |
-| 桌面沙箱 · 流畅 | `sandrpod-desktop:v6s` | 1024×640，像素少约 40% |
-
-通过 API 就是 `image_id`：
+| 桌面沙箱 | `sandrpod/desktop:latest` | 原生 Ubuntu XFCE + Chrome，1280×800 |
+| 桌面沙箱 · 精简 | `sandrpod/desktop-small:latest` | 1024×640，像素少约 40% |
+| 桌面沙箱 · 素净 | `sandrpod/desktop-plain:latest` | 原生 XFCE，无 Ubuntu 主题 |
+| 桌面沙箱 · 底部 Dock | `sandrpod/desktop-dock:latest` | 底部 dock，无顶栏 |
+| 桌面沙箱 · mac 风 | `sandrpod/desktop-mac:latest` | WhiteSur 浅色主题 + 图标，Inter 字体，plank dock |
 
 ```bash
 curl -s $API/api/v1/sandboxes -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"desk","image_id":"sandrpod-desktop:v6","cpu_cores":2,"memory_mb":4096}'
+  -d '{"name":"desk","image_id":"sandrpod/desktop-mac:latest","desktop":true,"cpu_cores":2,"memory_mb":4096}'
 ```
+
+沙箱记录里有显式的 `desktop: true` 标记——控制台不再按镜像名猜类型，自定义桌面
+镜像也能保留桌面按钮。
+
+### 无桌面 + 浏览器 MCP
+
+不需要桌面、只要浏览器自动化工具的话，
+[`sandrpod/toolbox-obscura:latest`](https://github.com/h4ckf0r0day/obscura) 是
+内置 Obscura 浏览器引擎及其 MCP server 的无桌面 toolbox——38 个浏览器工具
+（`navigate`、`screenshot`、`click`、`extract`、`evaluate`…）通过沙箱的 MCP
+端点暴露。详见仓库内 `docs/OBSCURA.zh.md`。
 
 桌面需要 **2 vCPU / 4 GiB**：X、XFCE、Chrome 加 H.264 编码器一起会吃满 1 GiB，容器在重启时会被 OOM 杀掉。控制台在选桌面类型时会自动把默认值提上来。
 
