@@ -4,6 +4,23 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Run Commands
 
+The `make` targets are the documented entry points; the per-binary `go` commands
+below are what they expand to.
+
+```bash
+make build          # server + poder + agent + toolbox, current platform
+make build-all      # cross-compiled release binaries (agent/server + tray) into dist/
+make test           # go test -race -timeout 120s ./...
+make vet            # go vet ./...
+make lint           # vet + staticcheck
+make check-versions # CI gate: every pinned version in the repo agrees
+make bump-version VERSION=v0.6.0   # rewrite every pinned version in one pass
+make docker         # poder + toolbox + egress-proxy images (linux/amd64)
+make docs           # build docs-site/ (fails on a dead internal link)
+make docs-serve     # preview the docs site on :5173
+make docs-deploy    # rsync the built site to docs.sandrpod.com
+```
+
 ```bash
 # Build all binaries (dev, native arch)
 go build -o server       ./cmd/server
@@ -11,6 +28,7 @@ go build -o poder        ./cmd/poder
 go build -o agent        ./cmd/agent
 go build -o toolbox      ./cmd/toolbox
 go build -o egress-proxy ./cmd/egress-proxy    # per-pod egress proxy (container sandboxes)
+go build -o mcp-gateway  ./cmd/mcp-gateway     # E2B-compatible in-sandbox MCP shim (baked into toolbox images)
 # `sandrpod-agent relay` is a hidden subcommand: the in-sandbox bridge used when
 # the OS sandbox takes the network away (Linux). Not a separate binary.
 go build -o sandrpod-tray ./cmd/sandrpod-tray  # CGO required (systray uses Cocoa/GTK/win32)
@@ -33,6 +51,15 @@ CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/sandrp
 docker buildx build --platform linux/amd64 -f docker/Dockerfile.poder   -t ghcr.io/sandrpod/poder:latest   --load .
 docker buildx build --platform linux/amd64 -f docker/Dockerfile.toolbox -t ghcr.io/sandrpod/toolbox:latest --load .
 docker buildx build --platform linux/amd64 -f docker/Dockerfile.egress  -t ghcr.io/sandrpod/egress-proxy:latest --load .   # or: make docker-egress
+
+# Other image variants in docker/ — each is a distinct product surface, not a tweak:
+#   Dockerfile.toolbox.ubuntu    Ubuntu base (no make target; docker buildx directly)
+#   Dockerfile.toolbox.centos    CentOS Stream 9 full (make docker-toolbox-centos)
+#   Dockerfile.toolbox-obscura   headless toolbox + Obscura browser MCP (see docs/OBSCURA.md)
+#   Dockerfile.desktop           the five desktop variants: desktop / -small / -plain / -dock / -mac
+#                                (built by the CI matrix in .gitea/workflows/registry-images.yml)
+# Compose stacks: docker-compose.yml (SQLite, pulls published images), .local.yml (build from
+#   source), .pg.yml (PostgreSQL / multi-instance), .prod.yml (reference production).
 
 # Run API Server (port 8080, in-memory store by default)
 go run ./cmd/server -port 8080
@@ -121,6 +148,44 @@ go run ./hack/playground/echo -gen-ca /tmp/pg/certs     # self-signed CA + cert 
 go run ./hack/playground/echo -addr :8443 -cert /tmp/pg/certs/cert.pem -key /tmp/pg/certs/key.pem
 ```
 
+## Testing & CI Gates
+
+```bash
+go test -race ./...                          # what `make test` runs
+go test -race ./pkg/server -run TestName     # one package / one test
+go test -race ./pkg/egress/...               # one subtree
+go test -cover ./...                         # coverage
+```
+
+- **PostgreSQL suites self-skip** unless `TEST_POSTGRES_DSN` is set. That env var is
+  the only thing `.github/workflows/postgres.yml` adds, and it is the only place
+  the SQLite-vs-PostgreSQL differences show up: `pkg/store/sqldb`, job claiming, and
+  the multi-instance server/scheduler tests. A SQLite-only SQL function (this is how
+  `instr()` broke every placement query on PostgreSQL) passes the default suite. If
+  you touch store SQL, scheduling, or placement, run:
+  `TEST_POSTGRES_DSN=postgres://... go test ./pkg/store/sqldb/ ./pkg/sandpod/ ./pkg/server/ -count=1`
+- CI fails on anything `gofmt -l ./cmd ./pkg` prints, on `go vet ./...`, on
+  `go build ./...`, and on `scripts/check-versions.sh`. `staticcheck` is local-only
+  (`make lint`), not part of CI.
+- Two CI systems, not interchangeable (see `docs/CI.md`): GitHub Actions
+  (`.github/workflows/`: CI, postgres, images, release, playground) and Gitea Actions
+  (`.gitea/workflows/`: registry images, docs site). Gitea runners cannot reach
+  github.com, Docker Hub or proxy.golang.org, so `.gitea/` workflows must not use
+  `uses:` and must keep the mirror `--build-arg`s.
+
+## Documentation & Release
+
+- `docs/README.md` is the index of the deep-dive docs (`docs/ARCHITECTURE.md` is the
+  implemented architecture; provider guides, egress, credentials, OS sandbox, MCP,
+  desktop, deployment each have their own file). Write new deep dives there.
+- `docs-site/` is the public VitePress site (docs.sandrpod.com) with its own English
+  and `zh/` Markdown — it is not generated from `docs/`. `srcExclude: ["README.md"]`;
+  the prebuild step publishes `deploy/node-install.sh` at `/install.sh`, so build with
+  `npm run build` (what `make docs` does), never `npx vitepress build` directly.
+- Releases: `make bump-version VERSION=vX.Y.Z` rewrites every pinned version, then a
+  `v*` tag drives `.github/workflows/release.yml` (CGO-free binaries + multi-arch
+  GHCR images). `media/` is deliberately excluded from the version rewrite.
+
 ## Architecture Overview
 
 SandrPod is open-source, self-hosted **execution infrastructure (a control
@@ -153,7 +218,9 @@ Client → API Server (Control Plane)
 
 **sandrpod-tray** (`cmd/sandrpod-tray`): User-session GUI daemon for employee-PC mode. Provides tray icon, native consent dialogs (osascript/zenity/PowerShell), and a local HTTP settings page. Communicates with `sandrpod-agent` over `~/.sandrpod/authz.sock`. See `docs/PERMISSION_AND_AUDIT.md`.
 
-**Toolbox** (`cmd/toolbox`): Code execution service running inside each sandbox container. Provides HTTP API for code execution with PTY support.
+**Toolbox** (`cmd/toolbox`): Code execution service running inside each sandbox container. Provides HTTP API for code execution with PTY support, and — on by default — the MCP bridge at `/mcp` (`pkg/mcpbridge`), optionally bearer-guarded by `-mcp-token`.
+
+**mcp-gateway** (`cmd/mcp-gateway`): A drop-in for E2B's in-sandbox `mcp-gateway` binary, baked into the toolbox images (`docker/Dockerfile.toolbox*`). When the unmodified E2B SDK runs `mcp-gateway --config '<json>'` after `Sandbox.create({mcp})`, this shim serves the aggregated MCP servers on `:50005/mcp` and writes the bearer token to `/etc/mcp-gateway/.token`. It reuses `pkg/mcpbridge`; its state dir is deliberately separate from the toolbox's own `/mcp` bridge.
 
 ### Key Packages
 
@@ -163,6 +230,8 @@ Client → API Server (Control Plane)
 - `pkg/store/`: Repository implementations — in-memory adapter (`memory.go`) and a dialect-parameterised SQL backend (`sqldb/`) that targets **either SQLite or PostgreSQL from one codebase** (a thin `Dialect` handles placeholder rebinding, DDL types, and the `FOR UPDATE SKIP LOCKED` job claim). A given server instance uses exactly one backend, chosen at startup by the `-db` DSN scheme (`sqlite:` / `postgres://`) — not both simultaneously. Plug-in via `store.Stores` aggregate.
 - `pkg/tunnel/`: WebSocket + yamux reverse tunnel (`PoderTunnel`, `TunnelStore`). Used by both Poder and sandrpod-agent.
 - `pkg/toolbox/`: Code execution engine with PTY, file operations, and process management.
+- `pkg/mcpbridge/`: MCP aggregator — manages child MCP servers (stdio/HTTP), aggregates their tools/resources, supports OAuth, and serves both the toolbox's `/mcp` endpoint and `cmd/mcp-gateway`. Largest test surface in the repo (`mcpbridge` has ~19 test files); see `docs/MCP_BRIDGE.md`, `docs/MCP_AUTH.md`.
+- `pkg/e2bcompat/`: E2B wire protocol for the unmodified E2B SDK — one handler dispatch by Host: `api.<domain>` → control plane, `<port>-<sandbox>.<domain>` → envd/generic port proxy. Implements envd process/files/watch/code-interpreter and the E2B gateway (`pkg/server.NewE2BGateway` wires it).
 - `pkg/permission/`: Decision engine for employee-PC mode. 6-branch policy (hardlock → mandatory deny → work_dir → permanent → session → ask). `mandatory.go` holds the always-write-denied set inside a work tree (git hooks/config, shell startup files, `.mcp.json`, IDE launch config) plus `MandatoryDenyPaths` for the OS-sandbox walk. Includes `Store` (atomic JSON), `Manager`, `IPCClient/Server`, command policy scanner, and default hardlock seeds.
 - `pkg/notify/`: Cross-platform consent dialog. macOS: `osascript display dialog`; Linux: `zenity`/`kdialog`; Windows: PowerShell `MessageBox`. Fail-close (timeout/error → deny).
 - `pkg/audit/`: Local NDJSON audit log (`Recorder`, auto-rotate at 8 MiB) + background HTTP uploader (`Uploader`, at-least-once delivery). Decoupled from `pkg/permission` via `AuditSink` interface.
