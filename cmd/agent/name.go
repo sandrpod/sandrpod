@@ -53,12 +53,12 @@ func generatedSandboxName(hostname func() (string, error)) string {
 	if host == "" {
 		host = "agent"
 	}
-	suffix := make([]byte, 2)
+	suffix := make([]byte, 4)
 	if _, err := rand.Read(suffix); err != nil {
 		// A broken RNG is a broken machine; the pid still gives uniqueness
 		// within the fleet, which is all this suffix is for.
 		pid := os.Getpid()
-		suffix = []byte{byte(pid >> 8), byte(pid)}
+		suffix = []byte{byte(pid >> 24), byte(pid >> 16), byte(pid >> 8), byte(pid)}
 	}
 	return host + "-" + hex.EncodeToString(suffix)
 }

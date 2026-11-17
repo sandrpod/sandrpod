@@ -27,10 +27,10 @@ func TestResolveSandboxName_GeneratedIsStable(t *testing.T) {
 	if first != second {
 		t.Fatalf("name changed across starts: %q then %q", first, second)
 	}
-	if !regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*-[0-9a-f]{4}$`).MatchString(first) {
+	if !regexp.MustCompile(`^[a-z0-9][a-z0-9._-]*-[0-9a-f]{8}$`).MatchString(first) {
 		t.Fatalf("generated name %q is not hostname-suffix", first)
 	}
-	if len(first) > 53 {
+	if len(first) > 57 {
 		t.Fatalf("generated name %q is too long", first)
 	}
 	data, err := os.ReadFile(filepath.Join(dir, agentNameFile))
