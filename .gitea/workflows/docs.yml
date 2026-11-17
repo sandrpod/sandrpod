@@ -9,6 +9,11 @@ on:
     branches: [main]
     paths:
       - "docs-site/**"
+      # The site publishes these two at /install.sh and /agent.sh. A change to the
+      # source must republish the site, or the console keeps handing out the old
+      # script (this is how the scripts went missing once already).
+      - "deploy/node-install.sh"
+      - "deploy/agent-install.sh"
       - ".gitea/workflows/docs.yml"
 
 jobs:

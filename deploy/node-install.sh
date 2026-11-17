@@ -389,6 +389,10 @@ if [ "$DRY_RUN" = "0" ] && command -v docker >/dev/null 2>&1 && docker ps -a --f
 fi
 
 WORKER_ENV=( -e SANDRPOD_TOOLBOX_IMAGE="$TOOLBOX_IMAGE" )
+# The proxy image is pulled above; without this the worker uses its own default
+# and a deployment with a private registry silently runs the wrong (or no)
+# egress-proxy for every policy-bearing sandbox.
+if [ -n "$EGRESS_IMAGE" ]; then WORKER_ENV+=( -e SANDRPOD_EGRESS_IMAGE="$EGRESS_IMAGE" ); fi
 if [ -n "$E2B_DOMAIN" ]; then WORKER_ENV+=( -e SANDRPOD_E2B_DOMAIN="$E2B_DOMAIN" ); fi
 if [ -n "$REGISTRY" ]; then
   WORKER_ENV+=( -e SANDRPOD_REGISTRY="$REGISTRY" )
