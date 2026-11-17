@@ -1509,6 +1509,9 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					// policy), so it is a conflict, not a server fault.
 					status = http.StatusConflict
 				}
+				if errors.Is(err, errSandboxNameTaken) {
+					status = http.StatusConflict
+				}
 				http.Error(w, err.Error(), status)
 				return
 			}

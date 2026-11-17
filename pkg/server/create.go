@@ -40,6 +40,12 @@ type Admission interface {
 // e2bcompat.ErrQuotaExceeded for the E2B gateway).
 var ErrQuotaExceeded = errors.New("sandbox quota reached")
 
+// errSandboxNameTaken is the race-safe form of the handler's "already exists"
+// check: two creates can pass that check before either writes a record, and the
+// loser must not upsert the winner's record (which may belong to another tenant)
+// with its own placement.
+var errSandboxNameTaken = errors.New("sandbox name is already taken")
+
 // admissionFor returns the deployment's gate, or the built-in quota rule. Both
 // New and the E2B gateway need the same one, and it must be the same object:
 // a deployment that counts usage would otherwise count twice.
@@ -106,6 +112,15 @@ func runSandboxCreate(
 	// never reaches the wire — the poder does not need to know.
 	if requester.Tenant != "" {
 		req.Workspace = requester.Tenant
+	}
+
+	// The handler refuses an existing name before scheduling, but two racing
+	// creates can both pass that check. Re-check here, before anything is
+	// provisioned: an upsert of another tenant's record would repoint its
+	// tunnel/placement at this caller's container (the owner field is left
+	// untouched, so the victim keeps the name while losing the sandbox).
+	if existing, ok := sandboxStore.Get(req.Name); ok && !canAccessSandbox(requester, existing) {
+		return nil, preJobID, fmt.Errorf("%w: %s", errSandboxNameTaken, req.Name)
 	}
 
 	// Data persistence is the default: an idle sandbox gets stopped rather than

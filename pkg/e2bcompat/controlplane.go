@@ -17,6 +17,11 @@ import (
 // it, so a client can tell "you have too many" from "something broke".
 var ErrQuotaExceeded = errors.New("sandbox quota exceeded")
 
+// ErrAlreadyExists is returned when the requested sandbox name is already held
+// by another record (possibly another tenant's). The native API answers 409 for
+// the same condition; the E2B surface says it in its own vocabulary.
+var ErrAlreadyExists = errors.New("sandbox already exists")
+
 // SandboxBackend is what the control plane needs from SandrPod. The server
 // implements it over its scheduler/store; tests use a fake. `identity` is the
 // resolved API key (already authenticated) so the backend can attribute
@@ -93,6 +98,10 @@ func (c *controlPlane) handleSandboxes(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			if errors.Is(err, ErrQuotaExceeded) {
 				writeErr(w, http.StatusTooManyRequests, err.Error())
+				return
+			}
+			if errors.Is(err, ErrAlreadyExists) {
+				writeErr(w, http.StatusConflict, err.Error())
 				return
 			}
 			writeErr(w, http.StatusInternalServerError, err.Error())

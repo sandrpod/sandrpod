@@ -565,6 +565,10 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 			return e2bcompat.SandboxDetail{}, fmt.Errorf("%w (%d)",
 				e2bcompat.ErrQuotaExceeded, b.d.cfg.MaxSandboxesPerOwner)
 		}
+		if errors.Is(err, errSandboxNameTaken) {
+			return e2bcompat.SandboxDetail{}, fmt.Errorf("%w: %s",
+				e2bcompat.ErrAlreadyExists, create.Name)
+		}
 		return e2bcompat.SandboxDetail{}, err
 	}
 	// Persist E2B metadata + template as labels so get/list round-trip them.
