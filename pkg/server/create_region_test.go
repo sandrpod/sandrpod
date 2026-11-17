@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -45,6 +46,35 @@ func TestIsCloudProviderName(t *testing.T) {
 		if !isCloudProviderName(cloud) {
 			t.Errorf("%q treated as local", cloud)
 		}
+	}
+}
+
+// The handler refuses an existing name before scheduling, but two racing creates
+// can both pass that check. The choke point must re-check ownership: an upsert of
+// another tenant's record would repoint its placement at this caller's container.
+func TestCreate_RefusesAnotherTenantsNameBeforeScheduling(t *testing.T) {
+	stores := store.NewMemoryStores()
+	if err := stores.Sandboxes.Add(&podpkg.SandboxInfo{
+		Name:  "taken",
+		Owner: "workspace:alice",
+		State: podpkg.StateRunning,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	req := &podpkg.CreateSandboxRequest{Name: "taken", ProviderType: "local", Region: "local"}
+	_, _, err := runSandboxCreate(nil, stores.Sandboxes, stores.Poders, stores.Jobs,
+		tunnel.NewTunnelStore(), Config{}, stores.TunnelOwners, req, "", "workspace:bob", nil,
+		Identity{Name: "workspace:bob", Role: RoleUser, Tenant: "bob"})
+	if !errors.Is(err, errSandboxNameTaken) {
+		t.Fatalf("err = %v, want errSandboxNameTaken", err)
+	}
+	if jobs := stores.Jobs.ListJobs(); len(jobs) != 0 {
+		t.Fatalf("a refused create left %d job(s) behind", len(jobs))
+	}
+	sb, ok := stores.Sandboxes.Get("taken")
+	if !ok || sb.Owner != "workspace:alice" || sb.State != podpkg.StateRunning {
+		t.Fatalf("the existing record was mutated: %+v", sb)
 	}
 }
 
