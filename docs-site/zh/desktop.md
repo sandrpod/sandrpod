@@ -28,7 +28,7 @@ curl -s $API/api/v1/sandboxes -H "Authorization: Bearer $TOKEN" \
 [`sandrpod/toolbox-obscura:latest`](https://github.com/h4ckf0r0day/obscura) 是
 内置 Obscura 浏览器引擎及其 MCP server 的无桌面 toolbox——38 个浏览器工具
 （`navigate`、`screenshot`、`click`、`extract`、`evaluate`…）通过沙箱的 MCP
-端点暴露。详见仓库内 `docs/OBSCURA.zh.md`。
+端点暴露。详见 [Obscura 浏览器 MCP](/zh/obscura)。
 
 桌面需要 **2 vCPU / 4 GiB**：X、XFCE、Chrome 加 H.264 编码器一起会吃满 1 GiB，容器在重启时会被 OOM 杀掉。控制台在选桌面类型时会自动把默认值提上来。
 
