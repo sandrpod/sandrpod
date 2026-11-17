@@ -17,7 +17,9 @@ on:
       - "pkg/**"
       - "cmd/**"
       - "docker/**"
-      - ".gitea/workflows/registry-images.yml"
+      # The workflow file is deliberately NOT a trigger: editing it (e.g. the
+      # retention step below) would otherwise kick off a six-image rebuild on the
+      # same small host that has to keep enough free space to serve git.
 
 jobs:
   build:
@@ -113,4 +115,12 @@ jobs:
             docker tag "$IMG:latest" "$IMG:main-${GITHUB_SHA:-unknown}"
             docker push "$IMG:main-${GITHUB_SHA:-unknown}"
             docker push "$IMG:latest"
+            # `runs-on: ubuntu-latest` is the local act_runner on a 40 GB host.
+            # Leaving each run's six multi-GB images tagged here filled the disk
+            # and broke git receive-pack ("unable to create temporary object
+            # directory"). The tags are published, so drop the local refs; the
+            # dangling layers go with them. Only this job's images are named, and
+            # -f prunes dangling layers only, never the tagged base images.
+            docker rmi "$IMG:main-${GITHUB_SHA:-unknown}" "$IMG:latest" >/dev/null 2>&1 || true
+            docker image prune -f >/dev/null 2>&1 || true
           fi
