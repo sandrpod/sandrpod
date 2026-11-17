@@ -37,7 +37,7 @@ curl -s $API/api/v1/sandboxes -H "Authorization: Bearer $TOKEN" \
 | 入口 | 地址 | 给谁用 |
 |---|---|---|
 | 观看端 | `https://6901-<沙箱>.<预览域>/` | 用眼睛看、用鼠标操作的人 |
-| CDP | `https://9222-<沙箱>.<预览域>/json/version` | Playwright / chrome-devtools-mcp 驱动**同一个** Chrome |
+| CDP | `https://9222-<沙箱>.<预览域>/json/version`（需签名 token 或 API Key） | Playwright / chrome-devtools-mcp 驱动**同一个** Chrome |
 | 沙箱 MCP | `/api/v1/sandboxes/<名>/toolbox/mcp` → `desktop_*` | 想要"截图/点击/输入"作为工具调用的 agent |
 
 控制台里的 **桌面** 按钮会签发一个签名 URL 并打开观看端。
@@ -78,21 +78,34 @@ curl -s $API/api/v1/sandboxes -H "Authorization: Bearer $TOKEN" \
 Chrome 以 `--remote-debugging-port=9222 --remote-debugging-address=0.0.0.0
 --remote-allow-origins=*` 启动，桌面会自动开一个窗口，所以沙箱一起来这个端点就活了。
 
+**CDP 和 6901 一样是预览端口：必须有签名 token 或 API Key。** 裸 URL 会返回
+`401 preview requires a signed URL token`——它是沙箱里真实浏览器的凭证，不是公开端口。
+
 ```bash
-curl -s https://9222-<沙箱>.<域名>/json/version
-curl -s https://9222-<沙箱>.<域名>/json/list    # 页面 id
+# 用 API Key：
+curl -s -H "Authorization: Bearer $SANDRPOD_API_TOKEN" \
+  https://9222-<沙箱>.<域名>/json/version
+curl -s -H "Authorization: Bearer $SANDRPOD_API_TOKEN" \
+  https://9222-<沙箱>.<域名>/json/list    # 页面 id
+
+# 或者签一个和控制台相同的 URL（2 小时，绑定沙箱 + 端口）：
+URL=$(curl -s -H "Authorization: Bearer $SANDRPOD_API_TOKEN" \
+  https://cloud.example.com/api/v1/sandboxes/<沙箱>/preview/9222 | jq -r .url)
+TOKEN=${URL##*token=}
+curl -s "https://9222-<沙箱>.<域名>/json/version?token=$TOKEN"
 ```
 
-Chrome 上报的 `webSocketDebuggerUrl` 里是 `127.0.0.1:9222`（它绑定的地址）；把主机改掉、路径保留：
+Chrome 上报的 `webSocketDebuggerUrl` 里是 `127.0.0.1:9222`（它绑定的地址）；把主机改掉、路径保留，
+token 放在查询串里：
 
 ```
-wss://9222-<沙箱>.<域名>/devtools/page/<pageId>
+wss://9222-<沙箱>.<域名>/devtools/page/<pageId>?token=<签名>
 ```
 
 ```json
 { "mcpServers": { "playwright": { "command": "npx",
   "args": ["@playwright/mcp@latest", "--cdp-endpoint",
-           "wss://9222-<沙箱>.<域名>/devtools/page/<pageId>"] } } }
+           "wss://9222-<沙箱>.<域名>/devtools/page/<pageId>?token=<签名>"] } } }
 ```
 
 因为它驱动的是沙箱里真实的 Chrome，人可以在任务中途接管同一个窗口。

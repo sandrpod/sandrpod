@@ -131,9 +131,11 @@ func (d e2bDeps) previewAuthorized(w http.ResponseWriter, r *http.Request, sandb
 }
 
 // handlePreviewURL serves GET /api/v1/sandboxes/{name}/preview/{port}: the
-// signed URL for a sandbox port. Auth is the mux middleware's; the caller must
-// at least be allowed to see the sandbox (the same owner scoping the rest of the
-// API applies, since the record lookup is the standard one).
+// signed URL for a sandbox port. Auth is the mux middleware's, but that only
+// establishes *who* is asking — it does not scope which sandbox they may ask
+// about. The ownership check here is the one that matters: a signed token is a
+// bearer credential for a desktop (KasmVNC) or a debugger (Chrome CDP), so
+// minting one for another tenant's sandbox would hand over that sandbox.
 func handlePreviewURL(w http.ResponseWriter, r *http.Request, cfg Config, sandboxes interface {
 	Get(string) (*podpkg.SandboxInfo, bool)
 }) {
@@ -153,7 +155,14 @@ func handlePreviewURL(w http.ResponseWriter, r *http.Request, cfg Config, sandbo
 		http.Error(w, "invalid port", http.StatusBadRequest)
 		return
 	}
-	if _, ok := sandboxes.Get(name); !ok {
+	sb, ok := sandboxes.Get(name)
+	if !ok {
+		http.Error(w, "sandbox not found", http.StatusNotFound)
+		return
+	}
+	// 404 rather than 403, same as every other sandbox-scoped route: a caller
+	// must not learn that a sandbox it cannot touch exists.
+	if !canAccessSandbox(IdentityFrom(r), sb) {
 		http.Error(w, "sandbox not found", http.StatusNotFound)
 		return
 	}

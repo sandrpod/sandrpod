@@ -144,7 +144,7 @@ func envBool(key string, defaultVal bool) bool {
 
 var (
 	apiURL       = flag.String("api-url", envOr("SANDRPOD_API_URL", "http://localhost:8080"), "API Server URL")
-	name         = flag.String("name", envOr("SANDRPOD_SANDBOX_NAME", ""), "Sandbox name (required, must be unique per API server)")
+	name         = flag.String("name", envOr("SANDRPOD_SANDBOX_NAME", ""), "Sandbox name (default: hostname plus a short stable suffix, generated once)")
 	token        = flag.String("token", envOr("SANDRPOD_TOKEN", ""), "API token for authentication")
 	stateDirFlag = flag.String("state-dir", envOr("SANDRPOD_STATE_DIR", ""),
 		"directory holding the agent's worker key (default: ~/.sandrpod)")
@@ -266,6 +266,15 @@ func main() {
 		return
 	}
 
+	// The state directory is also where the generated sandbox name lives, so it
+	// is resolved before the name. An explicit -name always wins; otherwise the
+	// name is the hostname plus a short stable suffix, persisted on first start.
+	stateDir := agentStateDir()
+	if *stateDirFlag != "" {
+		stateDir = *stateDirFlag
+	}
+	*name = resolveSandboxName(*name, stateDir)
+
 	if *name == "" {
 		fmt.Fprintln(os.Stderr, "Error: -name is required")
 		flag.Usage()
@@ -288,10 +297,6 @@ func main() {
 	// This runs before the audit pipeline and the egress server, because both
 	// authenticate to the control plane with whatever this resolves. A background
 	// retry keeps trying if the exchange could not happen at startup.
-	stateDir := agentStateDir()
-	if *stateDirFlag != "" {
-		stateDir = *stateDirFlag
-	}
 	initialToken, agentID := resolveAgentToken(*apiURL, *token, stateDir)
 	setToken(initialToken)
 	go retryAgentEnrolment(ctx, *apiURL, stateDir, agentID)

@@ -46,7 +46,7 @@ Interactive terminals (console 终端, PTY) start in **/workspace**, same as
 | Entry | URL | Who it is for |
 |---|---|---|
 | Viewer (KasmVNC) | `https://6901-<sandbox>.<preview-domain>/` | A human watching or driving the screen |
-| CDP | `https://9222-<sandbox>.<preview-domain>/json/version` | Playwright MCP / chrome-devtools-mcp driving **the same** Chrome |
+| CDP | `https://9222-<sandbox>.<preview-domain>/json/version` (signed token or API key) | Playwright MCP / chrome-devtools-mcp driving **the same** Chrome |
 | Sandbox MCP | `/api/v1/sandboxes/<name>/toolbox/mcp` → `desktop_*` tools | An agent that wants screenshot/click/type as tool calls |
 
 The console's sandbox detail has an **打开桌面** button that mints a signed URL
@@ -75,16 +75,30 @@ Chrome starts with `--remote-debugging-port=9222 --remote-debugging-address=0.0.
 --remote-allow-origins=*`, and the desktop auto-opens a window so the endpoint
 is live as soon as the sandbox is.
 
+**CDP is a preview port like 6901: it needs a signed token or an API key.** A bare
+URL answers `401 preview requires a signed URL token`; it is a credential for the
+sandbox's real browser, not a public endpoint.
+
 ```bash
-curl -s https://9222-<sandbox>.<domain>/json/version
-curl -s https://9222-<sandbox>.<domain>/json/list      # page ids
+# API key:
+curl -s -H "Authorization: Bearer $SANDRPOD_API_TOKEN" \
+  https://9222-<sandbox>.<domain>/json/version
+curl -s -H "Authorization: Bearer $SANDRPOD_API_TOKEN" \
+  https://9222-<sandbox>.<domain>/json/list      # page ids
+
+# Or the signed URL the console uses (2h, bound to sandbox + port):
+URL=$(curl -s -H "Authorization: Bearer $SANDRPOD_API_TOKEN" \
+  https://cloud.example.com/api/v1/sandboxes/<sandbox>/preview/9222 | jq -r .url)
+TOKEN=${URL##*token=}
+curl -s "https://9222-<sandbox>.<domain>/json/version?token=$TOKEN"
 ```
 
 Chrome reports `webSocketDebuggerUrl` with `127.0.0.1:9222` as the host (that is
-the address it bound); a remote client rewrites the host and keeps the path:
+the address it bound); a remote client rewrites the host, keeps the path, and
+carries the token:
 
 ```
-wss://9222-<sandbox>.<domain>/devtools/page/<pageId>
+wss://9222-<sandbox>.<domain>/devtools/page/<pageId>?token=<signed>
 ```
 
 Playwright MCP:
@@ -92,7 +106,7 @@ Playwright MCP:
 ```json
 { "mcpServers": { "playwright": { "command": "npx",
   "args": ["@playwright/mcp@latest", "--cdp-endpoint",
-           "wss://9222-<sandbox>.<domain>/devtools/page/<pageId>"] } } }
+           "wss://9222-<sandbox>.<domain>/devtools/page/<pageId>?token=<signed>"] } } }
 ```
 
 Because it is the sandbox's real Chrome, a human can take over the same window

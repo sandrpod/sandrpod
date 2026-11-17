@@ -63,7 +63,8 @@ Turn this machine into a SandrPod sandbox (an agent, not a worker).
 
   --api-url URL     control plane to register with   (or SANDRPOD_API_URL)
   --token TOKEN     join token, jn_…                 (or SANDRPOD_JOIN_TOKEN)
-  --name NAME       sandbox name for this machine    (default: hostname)
+  --name NAME       sandbox name for this machine    (default: hostname plus a
+                    short stable suffix, generated on first start)
   --version TAG     release to install               (default: latest)
   --download-base URL  release root                 (default: GitHub Releases;
                     e.g. https://mirror.example.com/sandrpod/releases)
@@ -130,8 +131,11 @@ case "$ARCH" in
   *) die "unsupported architecture ${ARCH}" ;;
 esac
 info "system: ${PLATFORM}/${GOARCH}"
-[ -z "$NAME" ] && NAME="$(hostname -s 2>/dev/null || hostname)"
-info "sandbox name: ${NAME}"
+if [ -n "$NAME" ]; then
+  info "sandbox name: ${NAME}"
+else
+  info "sandbox name: generated on first start (hostname + short suffix, stable per machine)"
+fi
 
 # Who the service runs as. Not root by default: an agent that can be driven by a
 # remote model as root is one prompt injection away from the whole machine, and
@@ -276,8 +280,13 @@ PLIST
 fi
 
 step "Done"
+if [ -n "$NAME" ]; then
+  SANDBOX_LINE="this machine is now the sandbox \"${NAME}\""
+else
+  SANDBOX_LINE="this machine is now a sandbox (name: hostname + short suffix, printed in its log)"
+fi
 cat <<EOF
-    this machine is now the sandbox "${NAME}"
+    ${SANDBOX_LINE}
     control plane: ${API_URL}
 
     It dials out; nothing needs to be reachable from outside.

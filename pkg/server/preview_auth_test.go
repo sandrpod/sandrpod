@@ -2,11 +2,15 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 )
 
 func TestPreviewTokenRoundTrip(t *testing.T) {
@@ -70,5 +74,55 @@ func TestPreviewURLEndpointShape(t *testing.T) {
 	}
 	if !strings.HasPrefix(u, "https://6901-box.sandbox.example.com/?token=") {
 		t.Fatalf("unexpected preview URL %q", u)
+	}
+}
+
+// previewSandboxStore is the one-method repository handlePreviewURL needs.
+type previewSandboxStore map[string]*podpkg.SandboxInfo
+
+func (s previewSandboxStore) Get(name string) (*podpkg.SandboxInfo, bool) {
+	sb, ok := s[name]
+	return sb, ok
+}
+
+// A signed preview URL is a bearer credential for a desktop (KasmVNC) and a
+// debugger (Chrome CDP). Authentication alone must not be enough to mint one for
+// somebody else's sandbox.
+func TestPreviewURL_IsScopedToTheOwner(t *testing.T) {
+	cfg := Config{Token: "platform-token", E2BDomain: "sandbox.example.com"}
+	store := previewSandboxStore{
+		"box": {Name: "box", Owner: "workspace:alice"},
+	}
+
+	call := func(ident Identity) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/sandboxes/box/preview/6901", nil)
+		r = r.WithContext(context.WithValue(r.Context(), identityCtxKey{}, ident))
+		w := httptest.NewRecorder()
+		handlePreviewURL(w, r, cfg, store)
+		return w
+	}
+
+	if code := call(Identity{Name: "workspace:bob", Role: RoleUser}).Code; code != http.StatusNotFound {
+		t.Fatalf("another tenant's preview URL: got %d, want 404", code)
+	}
+	if code := call(Identity{}).Code; code != http.StatusNotFound {
+		t.Fatalf("anonymous preview URL: got %d, want 404", code)
+	}
+
+	w := call(Identity{Name: "workspace:alice", Role: RoleUser})
+	if w.Code != http.StatusOK {
+		t.Fatalf("owner preview URL: got %d, want 200", w.Code)
+	}
+	var out struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.URL, "6901-box.sandbox.example.com") || !strings.Contains(out.URL, "token=") {
+		t.Fatalf("owner got %q, want a signed URL for the sandbox", out.URL)
+	}
+	if code := call(Identity{Name: "admin", Role: RoleAdmin}).Code; code != http.StatusOK {
+		t.Fatalf("admin preview URL: got %d, want 200", code)
 	}
 }
