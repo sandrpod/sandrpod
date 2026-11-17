@@ -118,9 +118,11 @@ jobs:
             # `runs-on: ubuntu-latest` is the local act_runner on a 40 GB host.
             # Leaving each run's six multi-GB images tagged here filled the disk
             # and broke git receive-pack ("unable to create temporary object
-            # directory"). The tags are published, so drop the local refs; the
-            # dangling layers go with them. Only this job's images are named, and
-            # -f prunes dangling layers only, never the tagged base images.
-            docker rmi "$IMG:main-${GITHUB_SHA:-unknown}" "$IMG:latest" >/dev/null 2>&1 || true
+            # directory"). The tags are published, so drop every local ref for
+            # THIS image — not just this run's, or the older main-<sha> tags still
+            # accumulate. Then prune the dangling layers. Only this matrix leg's
+            # repository is touched, and -f never removes the tagged base images.
+            docker images --format '{{.Repository}}:{{.Tag}}' "$IMG" \
+              | grep -F "${IMG}:" | xargs -r docker rmi >/dev/null 2>&1 || true
             docker image prune -f >/dev/null 2>&1 || true
           fi
