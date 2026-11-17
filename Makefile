@@ -152,7 +152,11 @@ docs-serve: ## Preview the documentation site on :5173
 	cd docs-site && npm run dev
 
 docs-deploy: docs ## Publish it (rsync; needs SSH to the host)
-	rsync -az --delete docs-site/.vitepress/dist/ $(DOCS_HOST):$(DOCS_ROOT)/
+	# Files 644 / dirs 755: rsync from a checkout whose umask left the install
+	# scripts at 711 produces a webroot Caddy cannot read (403 for /agent.sh and
+	# /install.sh, with the page itself fine). The scripts are piped to bash, so
+	# they do not need the execute bit on the server.
+	rsync -az --delete --chmod=Du=rwx,Dgo=rx,Fu=rw,Fgo=r docs-site/.vitepress/dist/ $(DOCS_HOST):$(DOCS_ROOT)/
 	@echo "published to https://docs.sandrpod.com"
 
 help: ## Show this help
