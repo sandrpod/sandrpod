@@ -124,7 +124,12 @@ func (c *controlPlane) handleSandboxes(w http.ResponseWriter, r *http.Request) {
 // handleSandboxByID is /sandboxes/{id}[/timeout|/pause|/resume|/refreshes].
 func (c *controlPlane) handleSandboxByID(w http.ResponseWriter, r *http.Request) {
 	ident := identOf(r)
-	rest := strings.TrimPrefix(r.URL.Path, "/sandboxes/")
+	// The mux registers both /sandboxes/ and /v2/sandboxes/. Strip the version
+	// prefix before parsing, otherwise /v2/sandboxes/<id>/connect is read as
+	// sandbox "v2" with an unknown action and answers 405 (the current SDK's
+	// Sandbox.connect uses the /v2 spelling).
+	path := strings.TrimPrefix(r.URL.Path, "/v2")
+	rest := strings.TrimPrefix(path, "/sandboxes/")
 	if rest == "" {
 		writeErr(w, http.StatusNotFound, "sandbox id required")
 		return

@@ -850,3 +850,27 @@ func TestSignedFileURLIsAnonymous(t *testing.T) {
 		t.Fatalf("bad signature: want 401, got %d", code)
 	}
 }
+
+// The current SDK's Sandbox.connect calls POST /v2/sandboxes/{id}/connect.
+// The version prefix used to be left on the path, so the control plane saw
+// sandbox "v2" with an unknown action and answered 405.
+func TestControlPlaneV2Connect(t *testing.T) {
+	box := newFakeSandboxes()
+	box.created["sb1"] = SandboxDetail{SandboxID: "sb1", State: StateRunning}
+	gw := Handler(Config{
+		Domain:    "example.com",
+		Auth:      func(k string) (string, bool, bool) { return "user1", false, IsE2BKey(k) },
+		Sandboxes: box,
+	})
+	req := httptest.NewRequest("POST", "/v2/sandboxes/sb1/connect", strings.NewReader("{}"))
+	req.Host = "api.example.com"
+	req.Header.Set("X-API-KEY", "e2b_"+strings.Repeat("a", 40))
+	rec := httptest.NewRecorder()
+	gw.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("v2 connect: want 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"sandboxID":"sb1"`) {
+		t.Fatalf("v2 connect body: %s", rec.Body.String())
+	}
+}
