@@ -24,9 +24,9 @@ func NewRoutingID() string {
 	if _, err := rand.Read(b[:]); err != nil {
 		// A broken RNG is a broken machine; a timestamp still gives uniqueness
 		// within one server, which is all a routing key needs.
-		return fmt.Sprintf("sb_%016x", time.Now().UnixNano())
+		return fmt.Sprintf("sb-%016x", time.Now().UnixNano())
 	}
-	return "sb_" + hex.EncodeToString(b[:])
+	return "sb-" + hex.EncodeToString(b[:])
 }
 
 // DisplayNameOf returns the user-facing name, falling back to the routing key

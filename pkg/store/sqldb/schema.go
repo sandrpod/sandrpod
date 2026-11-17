@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
     name           TEXT PRIMARY KEY,
     -- The user-facing name, unique per owner (workspace) rather than globally.
     -- The name column is the internal routing key: for legacy rows it is the old
-    -- name; for new ones it is sb_<hex>. The unique index below is created after
+    -- name; for new ones it is sb-<hex>. The unique index below is created after
     -- the column migration so an old database can be upgraded in place.
     display_name   TEXT    NOT NULL DEFAULT '',
     id             TEXT    NOT NULL DEFAULT '',

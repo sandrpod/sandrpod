@@ -347,7 +347,7 @@ func TestNewRoutingID(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 1000; i++ {
 		id := NewRoutingID()
-		if len(id) < 18 || id[:3] != "sb_" {
+		if len(id) < 18 || id[:3] != "sb-" {
 			t.Fatalf("unexpected routing id %q", id)
 		}
 		if seen[id] {

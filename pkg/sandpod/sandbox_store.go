@@ -17,7 +17,7 @@ type SandboxInfo struct {
 	// Name is the routing key: globally unique and immutable. Every URL, Host,
 	// container and tunnel identifier uses it. Records created before
 	// tenant-scoped names carry the old user-facing name here (so old links keep
-	// working); new records get sb_<hex>.
+	// working); new records get sb-<hex>.
 	Name string `json:"routing_id"`
 	// DisplayName is the name the user chose, unique per workspace (Owner) rather
 	// than globally. API paths address sandboxes by this name and resolve it
