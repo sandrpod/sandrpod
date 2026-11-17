@@ -9,13 +9,37 @@ desktop MCP tools.
 
 ## Images
 
-| Tag | Screen | Use |
-|---|---|---|
-| `sandrpod-desktop:v6` | 1280×800 | Standard |
-| `sandrpod-desktop:v6s` | 1024×640 | ~40% fewer pixels; for a capped uplink |
+Five registry-built variants, all from `docker/Dockerfile.desktop` (the CI matrix in
+`.gitea/workflows/registry-images.yml` builds and pushes them on every main push):
 
-Both are built from `docker/Dockerfile.desktop`; the only difference is
-`--build-arg DESKTOP_GEOMETRY=1024x640`.
+| Console type | Image | Look |
+|---|---|---|
+| 桌面沙箱 / Desktop | `sandrpod/desktop:latest` | Stock Ubuntu XFCE + Chrome |
+| 桌面沙箱 · 精简 | `sandrpod/desktop-small:latest` | Same, 1024×640, for a capped uplink |
+| 桌面沙箱 · 素净 | `sandrpod/desktop-plain:latest` | Stock XFCE without the Ubuntu theme |
+| 桌面沙箱 · 底部 Dock | `sandrpod/desktop-dock:latest` | Bottom dock, no top panel |
+| 桌面沙箱 · mac 风 | `sandrpod/desktop-mac:latest` | WhiteSur (light) theme + icons + Inter font + plank dock |
+
+The older local tags `sandrpod-desktop:v6` / `v6s` still work.
+
+Sandbox records carry an explicit `desktop: true` flag set at create time — the
+console no longer guesses the tier from the image name, so a custom desktop image
+keeps the desktop buttons.
+
+### The mac variant
+
+`desktop-mac` is the closest to a macOS desktop: WhiteSur light GTK theme, WhiteSur
+icons, Inter font, an xfwm4 skin, and **plank** as the only dock (the XFCE panel is
+disabled in this image). Plank auto-centers and follows the browser window size —
+KasmVNC resizes the virtual screen to the viewer, and a panel cannot do that.
+
+Wallpaper is the stock one; change it per-sandbox (right-click → Desktop Settings) if
+you want the WhiteSur art. Egress-restricted desktops need `-publicIP` on Xvnc (the
+image pins it) or KasmVNC's STUN probe fails on the isolated network and the desktop
+never starts.
+
+Interactive terminals (console 终端, PTY) start in **/workspace**, same as
+`sandbox_exec`.
 
 ## Three ways in
 
@@ -118,3 +142,5 @@ comfortably; the 1024×640 variant is for when it does not.
 | `401 preview requires a signed URL token` | Open it from the console or use `/preview/{port}`; the raw URL is not public |
 | `No password configured for VNC Auth` | The X server was started without `-SecurityTypes None` |
 | Blank Chrome window, log full of `incorrect profile type` | Chrome needs `--user-data-dir` (the image sets `/root/.chrome-profile`) |
+| Terminal opens in `/` | Toolbox older than 2026-11-15 — rebuild the image (the PTY now starts in /workspace) |
+| Egress-restricted desktop never starts, Xvnc log full of `STUN server didn't work` | KasmVNC's ICE probe cannot leave the isolated network; the image pins `-publicIP` |

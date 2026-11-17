@@ -6,18 +6,32 @@
 
 ## Pick the tier when you create
 
-| Type in the console | Image | Screen |
+| Type in the console | Image | Look |
 |---|---|---|
-| 桌面沙箱 / Desktop | `sandrpod-desktop:v6` | 1280×800 |
-| 桌面沙箱 · 流畅 / Desktop (light) | `sandrpod-desktop:v6s` | 1024×640, ~40% fewer pixels |
-
-Via the API it is just `image_id`:
+| 桌面沙箱 / Desktop | `sandrpod/desktop:latest` | Stock Ubuntu XFCE + Chrome, 1280×800 |
+| 桌面沙箱 · 精简 / Desktop (light) | `sandrpod/desktop-small:latest` | 1024×640, ~40% fewer pixels |
+| 桌面沙箱 · 素净 / Desktop (plain) | `sandrpod/desktop-plain:latest` | Stock XFCE without the Ubuntu theme |
+| 桌面沙箱 · 底部 Dock / Desktop (dock) | `sandrpod/desktop-dock:latest` | Bottom dock, no top panel |
+| 桌面沙箱 · mac 风 / Desktop (mac) | `sandrpod/desktop-mac:latest` | WhiteSur light theme + icons, Inter font, plank dock |
 
 ```bash
 curl -s $API/api/v1/sandboxes -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"name":"desk","image_id":"sandrpod-desktop:v6","cpu_cores":2,"memory_mb":4096}'
+  -d '{"name":"desk","image_id":"sandrpod/desktop-mac:latest","desktop":true,"cpu_cores":2,"memory_mb":4096}'
 ```
+
+The sandbox record carries an explicit `desktop: true` flag — the console no
+longer guesses the tier from the image name, so custom desktop images keep the
+desktop buttons.
+
+### Headless + browser MCP
+
+Need browser automation tools without a desktop?
+[`sandrpod/toolbox-obscura:latest`](https://github.com/h4ckf0r0day/obscura) is a
+headless toolbox with the Obscura browser engine and its MCP server baked in —
+38 browser tools (`navigate`, `screenshot`, `click`, `extract`, `evaluate`, …)
+exposed through the sandbox's MCP endpoint. See `docs/OBSCURA.md` in the repo
+for details.
 
 A desktop needs **2 vCPU / 4 GiB**: X, XFCE, Chrome and the H.264 encoder together
 overrun 1 GiB and the container gets OOM-killed on restart. The console raises the

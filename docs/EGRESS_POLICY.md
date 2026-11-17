@@ -13,6 +13,31 @@ part it cannot.
 
 ---
 
+## 0. Deployment prerequisite: the egress-proxy image
+
+A walled sandbox is created with a **per-sandbox egress-proxy sidecar container**
+(the sandbox is attached to an isolated docker network and talks only to that
+proxy). The worker looks the image up in `SANDRPOD_EGRESS_IMAGE` (default
+`ghcr.io/sandrpod/egress-proxy:latest`).
+
+If the worker cannot resolve or pull that image, **every create with a network
+policy fails** with
+
+```
+create egress proxy container: Error response from daemon: No such image: ghcr.io/…
+```
+
+self-hosted deployments behind firewalls should build and publish it once
+
+```bash
+docker build -f docker/Dockerfile.egress -t registry.example.com/sandrpod/egress-proxy:latest .
+docker push registry.example.com/sandrpod/egress-proxy:latest
+```
+
+and set `SANDRPOD_EGRESS_IMAGE` on every worker. The console's create form offers
+the same policy (限制出网 + allow-list); workers without the capability answer 409
+rather than creating an unenforced sandbox.
+
 ## 1. Where this sits
 
 | Layer | What it does | In this build |
