@@ -7,7 +7,7 @@ description: sandrpod-cli 参考 —— 每条命令都在真实部署上验证�
 
 ```bash
 pip install sandrpod-cli          # 或：uv tool install sandrpod-cli
-sandrpod-cli --version            # 0.7.0
+sandrpod-cli --version            # 0.7.1
 ```
 
 ```bash
@@ -15,18 +15,26 @@ export SANDRPOD_API_URL=https://cloud.example.com
 export SANDRPOD_API_TOKEN=sk_...          # 单租户服务器上也可以用平台 token
 ```
 
-下面每一条命令都在 0.7.0 的部署上实际跑过。
+下面每一条命令都在 0.7.1 的部署上实际跑过。
+
+## 两个名字
+
+每个沙箱有一个**显示名**（`web-dev`，你起的、工作区里人认得的标签）和一个
+**routing id**（`sb-0123456789abcdef`，全局且不可变）。`create` 接收显示名；
+`list`/`get` 同时打印两者。所有命令都接受任一形式，但 CLI 会先解析，实际请求
+一律带 routing id。脚本和书签请用 routing id：预览主机、API 路径和 E2B 表面
+都用它寻址。
 
 ## 沙箱
 
 | 命令 | 作用 |
 |---|---|
-| `create <名字> [--provider p] [--region r] [--instance-type t] [--image i]` | 创建并等待 `RUNNING` |
+| `create <显示名> [--provider p] [--region r] [--instance-type t] [--image i]` | 创建并等待 `RUNNING`；打印 routing id |
 | `create <名字> --no-wait` | 立即返回 job id，用 `job get` 轮询 |
 | `create <名字> --poder <id>` | 跳过调度器，放到指定 worker |
 | `create <名字> --ttl 3600 --cpu 2 --memory 2048` | 闲置 TTL、核数、内存（MiB） |
 | `create <名字> --allow-domain a.example --deny-domain b.example` | 创建时带出网白名单 |
-| `list` / `get <名字>` / `delete <名字…>` | 清点 |
+| `list` / `get <名字>` / `delete <名字…>` | 清点；`list`/`get` 同时显示两个名字 |
 | `start <名字>` / `stop <名字>` | 恢复 / 暂停 |
 | `env <名字>` | 沙箱内部的架构、系统、shell |
 | `stats <名字>` | 该沙箱的实时 CPU、内存、磁盘 |

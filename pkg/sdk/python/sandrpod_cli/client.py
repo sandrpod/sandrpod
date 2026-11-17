@@ -2,6 +2,7 @@
 # CLI Client
 
 import io
+import re
 import urllib.parse
 import requests
 from typing import Optional, Dict, Any, List, Tuple
@@ -24,16 +25,27 @@ def _is_loopback(url: str) -> bool:
 class CLIClient:
     """SandrPod CLI 客户端"""
 
+    # /api/v1/sandboxes/{ref} and everything below it. "execute" and "stream"
+    # are endpoint names, not sandbox refs; those take ?sandbox= instead.
+    _SANDBOX_PATH = re.compile(r"^/api/v1/sandboxes/([^/?#]+)(.*)$")
+    _NON_SANDBOX_REFS = frozenset({"execute", "stream"})
+
     def __init__(
         self,
         api_url: str = "http://localhost:8080",
         timeout: int = 30,
         token: Optional[str] = None,
         mcp_token: Optional[str] = None,
+        resolve_refs: bool = False,
     ):
         self.api_url = api_url.rstrip("/")
         self.timeout = timeout
         self.mcp_token = mcp_token
+        # The CLI turns this on: display names are for humans, every request goes
+        # out with the immutable routing id instead. The client stays a thin API
+        # wrapper by default so callers/tests see exactly the URL they asked for.
+        self.resolve_refs = resolve_refs
+        self._sandbox_ids: Dict[str, str] = {}
         self.session = requests.Session()
         # A system HTTP proxy must not intercept traffic to a *loopback* API.
         # requests reads the OS proxy settings (on macOS via SystemConfiguration),
@@ -56,7 +68,13 @@ class CLIClient:
             self.session.headers["Authorization"] = f"Bearer {token}"
 
     def _request(self, method: str, path: str, timeout: int = None, **kwargs) -> requests.Response:
-        """发送 HTTP 请求"""
+        """发送 HTTP 请求；CLI 模式下把路径/查询里的沙箱引用换成 routing id"""
+        if self.resolve_refs:
+            path = self._rewrite_sandbox_refs(path)
+        return self._send(method, path, timeout, **kwargs)
+
+    def _send(self, method: str, path: str, timeout: int = None, **kwargs) -> requests.Response:
+        """发送请求，不解析沙箱引用（解析本身也走这里，避免递归）"""
         url = f"{self.api_url}{path}"
         if timeout is None:
             timeout = self.timeout
@@ -81,6 +99,48 @@ class CLIClient:
                 response=resp
             )
         return resp
+
+    def sandbox_id(self, ref: str) -> str:
+        """Resolve a display name or routing id to the routing id.
+
+        Display names are workspace-scoped labels; the routing id is the global,
+        immutable key every operational request should carry. One GET answers it
+        and is cached for the rest of the process, so a command that makes several
+        calls still resolves once.
+        """
+        if not self.resolve_refs or not ref:
+            return ref
+        cached = self._sandbox_ids.get(ref)
+        if cached:
+            return cached
+        resp = self._send("GET", f"/api/v1/sandboxes/{urllib.parse.quote(ref, safe='')}")
+        data = resp.json()
+        rid = data.get("routing_id") or data.get("name") or ref
+        self._sandbox_ids[ref] = rid
+        self._sandbox_ids[rid] = rid
+        return rid
+
+    def _rewrite_sandbox_refs(self, path: str) -> str:
+        """Replace sandbox refs in a relative API path with routing ids."""
+        parts = urllib.parse.urlsplit(path)
+        new_path = parts.path
+        match = self._SANDBOX_PATH.match(parts.path)
+        if match and match.group(1) not in self._NON_SANDBOX_REFS:
+            rid = self.sandbox_id(match.group(1))
+            new_path = (f"/api/v1/sandboxes/{urllib.parse.quote(rid, safe='')}"
+                        f"{match.group(2)}")
+        query = parts.query
+        if "sandbox=" in query:
+            pairs = urllib.parse.parse_qsl(query, keep_blank_values=True)
+            rewritten = []
+            for key, value in pairs:
+                if key == "sandbox" and value:
+                    value = self.sandbox_id(value)
+                rewritten.append((key, value))
+            query = urllib.parse.urlencode(rewritten)
+        if new_path == parts.path and query == parts.query:
+            return path
+        return urllib.parse.urlunsplit(("", "", new_path, query, parts.fragment))
 
     def _handle_error(self, resp: requests.Response) -> None:
         """处理 HTTP 错误响应"""
@@ -196,6 +256,7 @@ class CLIClient:
 
     def pty_url(self, name: str) -> str:
         """交互式 PTY 的 WebSocket URL(http→ws, https→wss)"""
+        name = self.sandbox_id(name)
         base = self.api_url
         if base.startswith("https://"):
             base = "wss://" + base[len("https://"):]
@@ -292,7 +353,7 @@ class CLIClient:
             dict: {"event": stdout|stderr|error|exit, "data": str}
         """
         params = {
-            "sandbox": name,
+            "sandbox": self.sandbox_id(name),
             "language": language,
             "code": code,
             "timeout": str(timeout),
@@ -342,6 +403,7 @@ class CLIClient:
 
     def write_file(self, name: str, path: str, content: str) -> Dict[str, Any]:
         """写入文件 (通过 upload)"""
+        name = self.sandbox_id(name)
         files = {"file": (path, content.encode(), "application/octet-stream")}
         encoded_path = urllib.parse.quote(path, safe="")
         resp = self.session.post(
@@ -369,10 +431,11 @@ class CLIClient:
 
     def mcp_url(self, name: str) -> str:
         """沙箱原生 MCP 端点 URL (给 MCP 客户端连接；需带鉴权头)"""
-        return f"{self.api_url}/api/v1/sandboxes/{name}/mcp"
+        return f"{self.api_url}/api/v1/sandboxes/{self.sandbox_id(name)}/mcp"
 
     def upload_files(self, name: str, files: List[Tuple[str, bytes]], path: str = "/") -> Dict[str, Any]:
         """上传文件列表到指定目录"""
+        name = self.sandbox_id(name)
         file_dict = {}
         for fname, fcontent in files:
             file_dict[fname] = (fname, io.BytesIO(fcontent), "application/octet-stream")

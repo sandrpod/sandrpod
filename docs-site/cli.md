@@ -7,7 +7,7 @@ description: The sandrpod-cli reference — every command verified against a liv
 
 ```bash
 pip install sandrpod-cli          # or: uv tool install sandrpod-cli
-sandrpod-cli --version            # 0.7.0
+sandrpod-cli --version            # 0.7.1
 ```
 
 ```bash
@@ -15,18 +15,27 @@ export SANDRPOD_API_URL=https://cloud.example.com
 export SANDRPOD_API_TOKEN=sk_...          # or the platform token on a single-tenant server
 ```
 
-Every command below was run against a deployed server at version 0.7.0.
+Every command below was run against a deployed server at version 0.7.1.
+
+## Two names
+
+A sandbox has a **display name** (`web-dev`, what you chose and what other people
+in the workspace recognise) and a **routing id** (`sb-0123456789abcdef`, global
+and immutable). `create` takes the display name; `list` and `get` print both.
+Every command accepts either, but the CLI resolves it and sends the routing id
+on the wire. Use the routing id in scripts and bookmarks: it is the key the
+preview hosts, API paths and E2B surface all address.
 
 ## Sandboxes
 
 | Command | What it does |
 |---|---|
-| `create <name> [--provider p] [--region r] [--instance-type t] [--image i]` | create and wait for `RUNNING` |
+| `create <display-name> [--provider p] [--region r] [--instance-type t] [--image i]` | create and wait for `RUNNING`; prints the routing id |
 | `create <name> --no-wait` | return a job id immediately; poll with `job get` |
 | `create <name> --poder <id>` | skip the scheduler, place on a named worker |
 | `create <name> --ttl 3600 --cpu 2 --memory 2048` | idle TTL, cores, MiB |
 | `create <name> --allow-domain a.example --deny-domain b.example` | egress allow-list at creation |
-| `list` / `get <name>` / `delete <name…>` | inventory |
+| `list` / `get <name>` / `delete <name…>` | inventory; `list` and `get` show both names |
 | `start <name>` / `stop <name>` | resume / pause |
 | `env <name>` | arch, OS, shell inside the sandbox |
 | `stats <name>` | live CPU, memory, disk for that sandbox |

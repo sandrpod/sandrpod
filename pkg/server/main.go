@@ -1718,9 +1718,11 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			}
 		}
 
-		// Detect session sub-path
+		// Detect session sub-path. Use the caller's path segment: after name
+		// resolution `name` is the routing key, which is not necessarily what
+		// the request URL carries.
 		sessionPath := ""
-		sessionPrefix := name + "/session"
+		sessionPrefix := parts[0] + "/session"
 		if trimmed, ok := strings.CutPrefix(path, sessionPrefix); ok {
 			sessionPath = trimmed
 			if sessionPath == "" {
@@ -1740,7 +1742,10 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			}
 			// subPath is "mcp", "mcp/manifest", "mcp/sse", … A direct-agent embeds
 			// the bridge at /mcp; a poder serves it behind /toolbox/<name>/mcp.
-			subPath := strings.TrimPrefix(path, name+"/")
+			// `path` still begins with the reference the caller used (display
+			// name or routing id); `name` is the resolved routing key and may
+			// differ, so strip the caller's segment rather than the resolved one.
+			subPath := strings.TrimPrefix(path, parts[0]+"/")
 			// ?admin=1 reaches the bridge's manifest with the pending OAuth
 			// authorization URL included (the public payload redacts it). The
 			// URL is a credential handoff — whoever opens it consents — so only
@@ -2931,15 +2936,19 @@ func proxyWS(client, upstream *websocket.Conn) {
 // toolboxSubPath extracts the toolbox sub-path from a request URL path.
 // e.g. "/api/v1/sandboxes/my-box/toolbox/files/foo" → "files/foo"
 func toolboxSubPath(fullPath, sandboxName string) string {
-	prefix := "/api/v1/sandboxes/" + sandboxName + "/toolbox/"
-	sub := strings.TrimPrefix(fullPath, prefix)
-	if sub == fullPath {
-		sub = strings.TrimPrefix(fullPath, "/api/v1/sandboxes/"+sandboxName+"/toolbox")
+	// Anchor on the fixed "/toolbox/" segment instead of the sandbox ref in the
+	// path. By the time this runs the ref has been resolved to the routing key,
+	// while the URL may still carry the workspace-scoped display name; matching
+	// the resolved key against the unresolved path dropped the whole sub-path
+	// (POST /files/upload became POST /files, and every write answered 405).
+	if i := strings.Index(fullPath, "/toolbox/"); i >= 0 {
+		if sub := fullPath[i+len("/toolbox/"):]; sub != "" {
+			return sub
+		}
 	}
-	if sub == "" || sub == fullPath {
-		return "files"
-	}
-	return sub
+	// No sub-path (or a non-standard route): the toolbox's file listing is the
+	// historical fallback.
+	return "files"
 }
 
 // splitPath splits a URL path by "/".

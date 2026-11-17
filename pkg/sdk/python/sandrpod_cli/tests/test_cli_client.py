@@ -80,3 +80,59 @@ def test_create_sends_network(monkeypatch):
     sent.clear()
     client.create_sandbox("s3")
     assert "network" not in sent
+
+
+# ─── routing ids ───────────────────────────────────────────────────────────
+
+
+def test_resolve_refs_rewrites_sandbox_paths(monkeypatch):
+    client = CLIClient(api_url="http://127.0.0.1:8080", resolve_refs=True)
+    calls = []
+
+    def fake_send(method, path, timeout=None, **kwargs):
+        calls.append((method, path))
+        if path == "/api/v1/sandboxes/display":
+            return _Resp({"name": "display", "routing_id": "sb-0123456789abcdef"})
+        return _Resp({"ok": True})
+
+    monkeypatch.setattr(client, "_send", fake_send)
+    client.list_files("display", "/tmp")
+    assert calls == [
+        ("GET", "/api/v1/sandboxes/display"),
+        ("GET", "/api/v1/sandboxes/sb-0123456789abcdef/toolbox/files"),
+    ]
+
+
+def test_resolve_refs_rewrites_execute_query(monkeypatch):
+    client = CLIClient(api_url="http://127.0.0.1:8080", resolve_refs=True)
+    calls = []
+
+    def fake_send(method, path, timeout=None, **kwargs):
+        calls.append((method, path))
+        if path == "/api/v1/sandboxes/display":
+            return _Resp({"name": "display", "routing_id": "sb-0123456789abcdef"})
+        return _Resp({"output": "", "exit_code": 0})
+
+    monkeypatch.setattr(client, "_send", fake_send)
+    client.execute("display", "true")
+    assert calls[-1][0] == "POST"
+    assert "sandbox=sb-0123456789abcdef" in calls[-1][1]
+    assert "sandbox=display" not in calls[-1][1]
+
+
+def test_resolve_refs_caches_the_lookup(monkeypatch):
+    client = CLIClient(api_url="http://127.0.0.1:8080", resolve_refs=True)
+    calls = []
+
+    def fake_send(method, path, timeout=None, **kwargs):
+        calls.append(path)
+        if path == "/api/v1/sandboxes/display":
+            return _Resp({"name": "display", "routing_id": "sb-0123456789abcdef"})
+        return _Resp({})
+
+    monkeypatch.setattr(client, "_send", fake_send)
+    client.stop_sandbox("display")
+    client.start_sandbox("display")
+    assert calls.count("/api/v1/sandboxes/display") == 1
+    assert calls.count("/api/v1/sandboxes/sb-0123456789abcdef/stop") == 1
+    assert calls.count("/api/v1/sandboxes/sb-0123456789abcdef/start") == 1

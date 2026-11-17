@@ -153,7 +153,12 @@ def cli(ctx, api_url, timeout, mcp_token):
     token = get_configured_token()
     if mcp_token is None:
         mcp_token = get_configured_mcp_token()
-    ctx.obj["client"] = CLIClient(api_url=api_url, timeout=timeout, token=token, mcp_token=mcp_token)
+    # Display names are workspace-scoped labels; the routing id is the global
+    # key. Send the routing id on every operational request — the server still
+    # accepts a display name for compatibility, but a client that mixes both
+    # hits the toolbox sub-path ambiguity.
+    ctx.obj["client"] = CLIClient(api_url=api_url, timeout=timeout, token=token,
+                                  mcp_token=mcp_token, resolve_refs=True)
 
 
 # ========== Config Commands ==========
@@ -216,13 +221,17 @@ def list_sandboxes(ctx):
         if not sandboxes:
             click.echo("No sandboxes found")
             return
-        click.echo(f"{'Name':<20} {'State':<12} {'Provider':<10} {'Region':<12} {'Arch':<8} {'OS Version'}")
-        click.echo("-" * 85)
+        # Two names on purpose: the display name is the workspace-scoped label a
+        # human recognises; the routing id is the immutable key operations use.
+        click.echo(f"{'Name':<20} {'Routing ID':<22} {'State':<12} {'Provider':<10} {'Region':<12} {'Arch':<8} {'OS Version'}")
+        click.echo("-" * 107)
         for sb in sandboxes:
             arch = sb.get("arch", "-")
             os_ver = sb.get("os_version", "-")
+            display = sb.get("name") or "-"
+            rid = sb.get("routing_id") or "-"
             click.echo(
-                f"{sb.get('name', 'N/A'):<20} {sb.get('state', 'N/A'):<12} "
+                f"{display:<20} {rid:<22} {sb.get('state', 'N/A'):<12} "
                 f"{sb.get('provider_type', 'N/A'):<10} {sb.get('region', 'N/A'):<12} "
                 f"{arch:<8} {os_ver}"
             )
@@ -265,10 +274,12 @@ def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, c
             sb = client.create_sandbox_on_poder(
                 poder, name, region, provider_type, instance_type, image, network=network
             )
-            click.echo(f"Sandbox:  {sb.get('name', name)}")
-            click.echo(f"State:    {sb.get('state', 'N/A')}")
-            click.echo(f"Poder ID: {sb.get('poder_id', poder)}")
-            click.echo(f"IP:       {sb.get('ip', 'N/A')}")
+            click.echo(f"Sandbox:    {sb.get('name', name)}")
+            if sb.get("routing_id"):
+                click.echo(f"Routing ID: {sb.get('routing_id')}")
+            click.echo(f"State:      {sb.get('state', 'N/A')}")
+            click.echo(f"Poder ID:   {sb.get('poder_id', poder)}")
+            click.echo(f"IP:         {sb.get('ip', 'N/A')}")
             return
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -278,37 +289,47 @@ def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, c
     # immediately; old servers ignore the flag and block synchronously — if the
     # connection drops mid-way we just fall through to polling).
     job_id = None
+    created = {}
+    routing_id = name
     try:
         resp = client.create_sandbox(name, region, provider_type, instance_type, image,
                                      async_=True, ttl_seconds=ttl, cpu_cores=cpu,
                                      memory_mb=memory, network=network)
         job_id = resp.get("job_id")
-        click.echo(f"Sandbox:  {resp.get('sandbox', {}).get('name', name)}")
-        click.echo(f"Job ID:   {job_id or 'N/A'}")
-        click.echo(f"Status:   {resp.get('status', 'N/A')}")
+        created = resp.get("sandbox", {}) or {}
+        routing_id = created.get("routing_id") or name
+        click.echo(f"Sandbox:    {created.get('name', name)}")
+        click.echo(f"Routing ID: {routing_id}")
+        click.echo(f"Job ID:     {job_id or 'N/A'}")
+        click.echo(f"Status:     {resp.get('status', 'N/A')}")
     except Exception as e:
         click.echo(f"(create request did not return cleanly: {e})", err=True)
         click.echo("Provisioning may still be running server-side; polling status...")
 
     if no_wait:
-        click.echo(f"Tip: run `sandrpod-cli get {name}` to check state")
+        click.echo(f"Tip: run `sandrpod-cli get {routing_id}` to check state")
         return
 
     # Poll until RUNNING / ERROR / timeout. Tolerate early 404s (record may
-    # appear a moment later on older servers).
+    # appear a moment later on older servers). Poll by routing id when the
+    # create response gave us one; the display name is only a label.
+    ref = routing_id
     deadline = _time.time() + wait_timeout
     last_state = None
     while _time.time() < deadline:
         _time.sleep(5)
         try:
-            state = client.get_sandbox(name).get("state")
+            info = client.get_sandbox(ref)
+            routing_id = info.get("routing_id") or routing_id
+            ref = routing_id
+            state = info.get("state")
         except Exception:
             state = None
         if state != last_state and state:
-            click.echo(f"State:    {state}")
+            click.echo(f"State:      {state}")
             last_state = state
         if state == "RUNNING":
-            click.echo(f"Sandbox '{name}' is ready")
+            click.echo(f"Sandbox '{name}' is ready (routing id {routing_id})")
             return
         if state == "ERROR":
             msg = ""
@@ -319,7 +340,7 @@ def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, c
                     pass
             click.echo(f"Error: sandbox entered ERROR state{': ' + msg if msg else ''}", err=True)
             sys.exit(1)
-    click.echo(f"Error: timed out after {wait_timeout}s waiting for '{name}' (check `sandrpod-cli get {name}`)", err=True)
+    click.echo(f"Error: timed out after {wait_timeout}s waiting for '{name}' (check `sandrpod-cli get {routing_id}`)", err=True)
     sys.exit(1)
 
 
@@ -332,6 +353,7 @@ def get_sandbox(ctx, name):
     try:
         sandbox = client.get_sandbox(name)
         click.echo(f"Name:          {sandbox.get('name')}")
+        click.echo(f"Routing ID:    {sandbox.get('routing_id') or '-'}")
         click.echo(f"State:         {sandbox.get('state')}")
         click.echo(f"Region:        {sandbox.get('region')}")
         click.echo(f"Provider Type: {sandbox.get('provider_type')}")
@@ -443,8 +465,10 @@ def delete(ctx, names):
     failed = []
     for name in names:
         try:
-            client.delete_sandbox(name)
-            click.echo(f"Sandbox '{name}' deleted")
+            rid = client.sandbox_id(name)
+            client.delete_sandbox(rid)
+            suffix = f" ({rid})" if rid != name else ""
+            click.echo(f"Sandbox '{name}'{suffix} deleted")
         except Exception as e:
             click.echo(f"Error deleting '{name}': {e}", err=True)
             failed.append(name)
