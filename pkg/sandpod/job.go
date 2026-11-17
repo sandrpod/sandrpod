@@ -31,10 +31,14 @@ const (
 
 // Job is the job model.
 type Job struct {
-	ID           string     `json:"id"`
-	Type         JobType    `json:"type"`
-	Status       JobStatus  `json:"status"`
-	SandboxName  string     `json:"sandbox_name"`
+	ID          string    `json:"id"`
+	Type        JobType   `json:"type"`
+	Status      JobStatus `json:"status"`
+	SandboxName string    `json:"sandbox_name"`
+	// RoutingID is the sandbox's global routing key; SandboxName stays the
+	// user-facing name the console shows. Resume/poll code must use RoutingID
+	// when it needs to touch the record.
+	RoutingID    string     `json:"routing_id,omitempty"`
 	SandboxID    string     `json:"sandbox_id,omitempty"` // actual container/VM ID
 	Region       string     `json:"region"`
 	ProviderType string     `json:"provider_type,omitempty"` // provider type: aws, aliyun, local

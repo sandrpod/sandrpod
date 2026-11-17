@@ -167,7 +167,7 @@ docker run -d --name sandrpod-poder \
 | 参数 | 环境变量 | 默认值 | 说明 |
 |---|---|---|---|
 | `-api-url` | `SANDRPOD_API_URL` | `http://localhost:8080` | API Server 地址 |
-| `-name` | `SANDRPOD_SANDBOX_NAME` | — | 沙箱名（全局唯一） |
+| `-name` | `SANDRPOD_SANDBOX_NAME` | — | 沙箱名（工作区内唯一；路由键自动生成） |
 | `-work-dir` | `SANDRPOD_WORK_DIR` | 当前目录 | 代码执行工作目录 |
 | `-token` | `SANDRPOD_TOKEN` | `""` | API token |
 | `-reconnect` | — | `5s` | 断线重连间隔 |

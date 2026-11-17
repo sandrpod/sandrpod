@@ -6,7 +6,11 @@ import "time"
 // All implementations must be safe for concurrent use.
 type SandboxRepository interface {
 	Add(sb *SandboxInfo) error
+	// Get resolves a routing key. URL handlers must first resolve a user-facing
+	// name with GetByName, then use the record's Name for everything below.
 	Get(name string) (*SandboxInfo, bool)
+	// GetByName resolves the tenant-scoped display name (unique per Owner).
+	GetByName(owner, name string) (*SandboxInfo, bool)
 	Update(name string, fn func(*SandboxInfo)) error
 	List() []*SandboxInfo
 	ListByPoderID(poderID string) []*SandboxInfo

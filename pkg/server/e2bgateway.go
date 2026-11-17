@@ -533,7 +533,10 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 	name := "e2b" + randToken(8)
 	provider, region, instanceType := e2bSubstrate()
 	create := &podpkg.CreateSandboxRequest{
-		Name:         name,
+		Name: name,
+		// E2B has no user-chosen name; the sandbox id is the display name too.
+		// The id stays the routing key, which is what the SDK puts in the Host.
+		DisplayName:  name,
 		Region:       region,
 		ProviderType: provider,
 		InstanceType: instanceType,

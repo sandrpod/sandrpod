@@ -18,6 +18,9 @@ func NewSandboxRepo(db *DB) *sandboxRepo {
 }
 
 func (r *sandboxRepo) Add(sb *sandpod.SandboxInfo) error {
+	if sb.DisplayName == "" {
+		sb.DisplayName = sb.Name // records created before tenant-scoped names
+	}
 	labels, err := json.Marshal(sb.Labels)
 	if err != nil {
 		return fmt.Errorf("store/sqlite: sandbox Add marshal labels: %w", err)
@@ -28,11 +31,11 @@ func (r *sandboxRepo) Add(sb *sandpod.SandboxInfo) error {
 	}
 	_, err = r.db.Exec(`
 		INSERT INTO sandboxes
-		  (name, id, region, provider_type, instance_type, image_id, desktop, state,
+		  (name, display_name, id, region, provider_type, instance_type, image_id, desktop, state,
 		   ip, poder_id, poder_url, container_id, proxy_url, api_url,
 		   arch, os, os_version, labels, egress_policy, owner, ttl_seconds, cpu_cores, memory_mb, created_at, last_activity)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		sb.Name, sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID, boolInt(sb.Desktop),
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		sb.Name, sb.DisplayName, sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID, boolInt(sb.Desktop),
 		string(sb.State), sb.IP, sb.PoderID, sb.PoderURL, sb.ContainerID,
 		sb.ProxyURL, sb.APIURL, sb.Arch, sb.OS, sb.OSVersion,
 		string(labels), network, sb.Owner, sb.TTLSeconds, sb.CPUCores, sb.MemoryMB,
@@ -47,6 +50,16 @@ func (r *sandboxRepo) Add(sb *sandpod.SandboxInfo) error {
 
 func (r *sandboxRepo) Get(name string) (*sandpod.SandboxInfo, bool) {
 	sb, ok, err := r.getByName(name)
+	if err != nil || !ok {
+		return nil, false
+	}
+	return sb, true
+}
+
+// GetByName resolves a tenant-scoped display name.
+func (r *sandboxRepo) GetByName(owner, name string) (*sandpod.SandboxInfo, bool) {
+	row := r.db.QueryRow(`SELECT `+sandboxColumns+` FROM sandboxes WHERE owner=? AND display_name=?`, owner, name)
+	sb, ok, err := scanSandbox(row)
 	if err != nil || !ok {
 		return nil, false
 	}
@@ -108,7 +121,7 @@ func (r *sandboxRepo) Delete(name string) error {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
-const sandboxColumns = `name, id, region, provider_type, instance_type, image_id, desktop, state,
+const sandboxColumns = `name, display_name, id, region, provider_type, instance_type, image_id, desktop, state,
     ip, poder_id, poder_url, container_id, proxy_url, api_url,
     arch, os, os_version, labels, egress_policy, owner, ttl_seconds, cpu_cores, memory_mb, created_at, last_activity`
 
@@ -133,12 +146,12 @@ func (r *sandboxRepo) upsertTx(tx *Tx, sb *sandpod.SandboxInfo) error {
 	}
 	_, err = tx.Exec(`
 		INSERT INTO sandboxes
-		  (name, id, region, provider_type, instance_type, image_id, desktop, state,
+		  (name, display_name, id, region, provider_type, instance_type, image_id, desktop, state,
 		   ip, poder_id, poder_url, container_id, proxy_url, api_url,
 		   arch, os, os_version, labels, egress_policy, owner, ttl_seconds, cpu_cores, memory_mb, created_at, last_activity)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(name) DO UPDATE SET
-		  id=excluded.id, region=excluded.region, provider_type=excluded.provider_type,
+		  display_name=excluded.display_name, id=excluded.id, region=excluded.region, provider_type=excluded.provider_type,
 		  instance_type=excluded.instance_type, image_id=excluded.image_id,
 		  state=excluded.state, ip=excluded.ip, poder_id=excluded.poder_id,
 		  poder_url=excluded.poder_url, container_id=excluded.container_id,
@@ -146,7 +159,7 @@ func (r *sandboxRepo) upsertTx(tx *Tx, sb *sandpod.SandboxInfo) error {
 		  arch=excluded.arch, os=excluded.os, os_version=excluded.os_version,
 		  labels=excluded.labels, egress_policy=excluded.egress_policy,
 		  owner=excluded.owner, ttl_seconds=excluded.ttl_seconds, last_activity=excluded.last_activity`,
-		sb.Name, sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID, boolInt(sb.Desktop),
+		sb.Name, displayNameOrKey(sb), sb.ID, sb.Region, sb.ProviderType, sb.InstanceType, sb.ImageID, boolInt(sb.Desktop),
 		string(sb.State), sb.IP, sb.PoderID, sb.PoderURL, sb.ContainerID,
 		sb.ProxyURL, sb.APIURL, sb.Arch, sb.OS, sb.OSVersion,
 		string(labels), network, sb.Owner, sb.TTLSeconds, sb.CPUCores, sb.MemoryMB,
@@ -154,6 +167,13 @@ func (r *sandboxRepo) upsertTx(tx *Tx, sb *sandpod.SandboxInfo) error {
 		sb.LastActivity.UTC().Format(time.RFC3339Nano),
 	)
 	return err
+}
+
+func displayNameOrKey(sb *sandpod.SandboxInfo) string {
+	if sb.DisplayName != "" {
+		return sb.DisplayName
+	}
+	return sb.Name
 }
 
 // scanSandbox scans one row (from QueryRow) into a SandboxInfo.
@@ -168,7 +188,7 @@ func scanSandbox(row *sql.Row) (*sandpod.SandboxInfo, bool, error) {
 	)
 	desktopInt := 0
 	err := row.Scan(
-		&sb.Name, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID, &desktopInt,
+		&sb.Name, &sb.DisplayName, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID, &desktopInt,
 		&state, &sb.IP, &sb.PoderID, &sb.PoderURL, &sb.ContainerID,
 		&sb.ProxyURL, &sb.APIURL, &sb.Arch, &sb.OS, &sb.OSVersion,
 		&labelsJSON, &networkJSON, &sb.Owner, &sb.TTLSeconds, &sb.CPUCores, &sb.MemoryMB, &createdStr, &activityStr,
@@ -202,7 +222,7 @@ func scanSandboxes(rows *sql.Rows) []*sandpod.SandboxInfo {
 		)
 		desktopInt := 0
 		if err := rows.Scan(
-			&sb.Name, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID, &desktopInt,
+			&sb.Name, &sb.DisplayName, &sb.ID, &sb.Region, &sb.ProviderType, &sb.InstanceType, &sb.ImageID, &desktopInt,
 			&state, &sb.IP, &sb.PoderID, &sb.PoderURL, &sb.ContainerID,
 			&sb.ProxyURL, &sb.APIURL, &sb.Arch, &sb.OS, &sb.OSVersion,
 			&labelsJSON, &networkJSON, &sb.Owner, &sb.TTLSeconds, &sb.CPUCores, &sb.MemoryMB, &createdStr, &activityStr,

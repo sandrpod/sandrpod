@@ -174,7 +174,7 @@ path, so it also carries the permission gate and the audit pipeline (§2.7).
 | Flag | Env | Default | What it does |
 |---|---|---|---|
 | `-api-url` | `SANDRPOD_API_URL` | `http://localhost:8080` | API Server address |
-| `-name` | `SANDRPOD_SANDBOX_NAME` | — | Sandbox name (globally unique) |
+| `-name` | `SANDRPOD_SANDBOX_NAME` | — | Sandbox name (unique per workspace; the routing key is generated) |
 | `-work-dir` | `SANDRPOD_WORK_DIR` | cwd | Execution working directory |
 | `-token` | `SANDRPOD_TOKEN` | `""` | API token |
 | `-reconnect` | — | `5s` | Reconnect delay |

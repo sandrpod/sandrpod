@@ -674,3 +674,37 @@ func TestSandboxRepo_EgressPolicyRoundTrip(t *testing.T) {
 		t.Fatalf("a sandbox created without a policy must read back nil, got %+v", got.Network)
 	}
 }
+
+// The display name is unique per owner; the routing key is the global key.
+func TestSandboxRepo_TenantScopedNames(t *testing.T) {
+	db, err := sqldb.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	repo := sqldb.NewSandboxRepo(db)
+
+	a := &sandpod.SandboxInfo{Name: "sb_a000000000000000", DisplayName: "mysandbox", Owner: "workspace:a", State: sandpod.StateRunning, CreatedAt: time.Now(), LastActivity: time.Now()}
+	b := &sandpod.SandboxInfo{Name: "sb_b000000000000000", DisplayName: "mysandbox", Owner: "workspace:b", State: sandpod.StateRunning, CreatedAt: time.Now(), LastActivity: time.Now()}
+	if err := repo.Add(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Add(b); err != nil {
+		t.Fatalf("second tenant's mysandbox was refused: %v", err)
+	}
+	if got, ok := repo.GetByName("workspace:a", "mysandbox"); !ok || got.Name != a.Name {
+		t.Fatalf("workspace a resolved %+v", got)
+	}
+	if got, ok := repo.GetByName("workspace:b", "mysandbox"); !ok || got.Name != b.Name {
+		t.Fatalf("workspace b resolved %+v", got)
+	}
+	// The display name round-trips; the routing key is what Get uses.
+	got, ok := repo.Get(a.Name)
+	if !ok || got.DisplayName != "mysandbox" {
+		t.Fatalf("Get(%s) = %+v", a.Name, got)
+	}
+	dup := &sandpod.SandboxInfo{Name: "sb_c000000000000000", DisplayName: "mysandbox", Owner: "workspace:a", State: sandpod.StateRunning, CreatedAt: time.Now(), LastActivity: time.Now()}
+	if err := repo.Add(dup); err == nil {
+		t.Fatal("a duplicate display name in one workspace was accepted")
+	}
+}

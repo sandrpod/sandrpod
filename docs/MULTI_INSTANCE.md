@@ -68,7 +68,7 @@ so with N instances exactly one wins: verified with two instances and one stale
 job — one `resume: delivered` line, one `COMPLETED` row.
 
 Semantics are **at-least-once**, and the worker tolerates a repeat: a pode names
-the container after the sandbox, so a second delivery for the same name lands on
+the container after the sandbox's routing key, so a second delivery for the same name lands on
 the same container. A job whose worker is connected to no instance fails with
 that reason instead of retrying forever.
 

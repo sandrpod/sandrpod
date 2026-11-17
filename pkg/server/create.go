@@ -46,6 +46,15 @@ var ErrQuotaExceeded = errors.New("sandbox quota reached")
 // with its own placement.
 var errSandboxNameTaken = errors.New("sandbox name is already taken")
 
+// displayNameOf is the user-facing name for a request whose Name may already be
+// the routing key (the HTTP handler and the E2B backend both split them).
+func displayNameOf(req *podpkg.CreateSandboxRequest) string {
+	if req.DisplayName != "" {
+		return req.DisplayName
+	}
+	return req.Name
+}
+
 // admissionFor returns the deployment's gate, or the built-in quota rule. Both
 // New and the E2B gateway need the same one, and it must be the same object:
 // a deployment that counts usage would otherwise count twice.
@@ -96,7 +105,7 @@ func runSandboxCreate(
 ) (*podpkg.SandboxInfo, string, error) {
 	failBoth := func(jobID, msg string) {
 		notifyEvent("sandbox.error", map[string]any{
-			"name": req.Name, "provider": req.ProviderType, "error": msg,
+			"name": displayNameOf(req), "routing_id": req.Name, "provider": req.ProviderType, "error": msg,
 			"owner": owner, "cpu_cores": req.CPUCores, "memory_mb": req.MemoryMB,
 		})
 		if jobID != "" {
@@ -114,13 +123,16 @@ func runSandboxCreate(
 		req.Workspace = requester.Tenant
 	}
 
-	// The handler refuses an existing name before scheduling, but two racing
-	// creates can both pass that check. Re-check here, before anything is
-	// provisioned: an upsert of another tenant's record would repoint its
-	// tunnel/placement at this caller's container (the owner field is left
-	// untouched, so the victim keeps the name while losing the sandbox).
-	if existing, ok := sandboxStore.Get(req.Name); ok && !canAccessSandbox(requester, existing) {
-		return nil, preJobID, fmt.Errorf("%w: %s", errSandboxNameTaken, req.Name)
+	// The handler refuses an existing display name before scheduling, but two
+	// racing creates can both pass that check. Re-check here, before anything is
+	// provisioned: an upsert of another record would repoint its placement at
+	// this caller's container. A record with this exact routing key is this
+	// request's own async PENDING row and is allowed.
+	if existing, ok := sandboxStore.Get(req.Name); ok && existing.Owner != owner {
+		return nil, preJobID, fmt.Errorf("%w: %s", errSandboxNameTaken, displayNameOf(req))
+	}
+	if existing, ok := sandboxStore.GetByName(owner, displayNameOf(req)); ok && existing.Name != req.Name {
+		return nil, preJobID, fmt.Errorf("%w: %s", errSandboxNameTaken, displayNameOf(req))
 	}
 
 	// Data persistence is the default: an idle sandbox gets stopped rather than
@@ -173,6 +185,12 @@ func runSandboxCreate(
 	jobID := preJobID
 	if jobID == "" {
 		jobID = schedJob.ID
+		// The scheduler names jobs after the request's routing key; keep the
+		// user-facing name for the console and the key for resume/lookup.
+		if req.DisplayName != "" {
+			schedJob.SandboxName = req.DisplayName
+			schedJob.RoutingID = req.Name
+		}
 		schedJob.Owner = owner
 		if err := jobStore.AddJob(schedJob); err != nil {
 			return nil, jobID, err
@@ -194,6 +212,9 @@ func runSandboxCreate(
 	}
 	if _, exists := sandboxStore.Get(req.Name); exists {
 		_ = sandboxStore.Update(req.Name, func(s *podpkg.SandboxInfo) {
+			if s.DisplayName == "" {
+				s.DisplayName = displayNameOf(req)
+			}
 			s.PoderID = schedJob.PoderID
 			s.ProxyURL = "tunnel://" + schedJob.PoderID
 			s.Arch = sbArch
@@ -221,6 +242,7 @@ func runSandboxCreate(
 		_ = sandboxStore.Add(&podpkg.SandboxInfo{
 			ID:           jobID,
 			Name:         req.Name,
+			DisplayName:  displayNameOf(req),
 			Region:       req.Region,
 			ProviderType: req.ProviderType,
 			InstanceType: req.InstanceType,
@@ -361,7 +383,10 @@ func pushCreateToPoder(
 	if sb != nil {
 		notifyEvent("sandbox.running", sandboxEvent(sb, map[string]any{"poder_id": poderID}))
 	} else {
-		notifyEvent("sandbox.running", map[string]any{"name": req.Name, "provider": req.ProviderType, "poder_id": poderID})
+		notifyEvent("sandbox.running", map[string]any{
+			"name": displayNameOf(req), "routing_id": req.Name,
+			"provider": req.ProviderType, "poder_id": poderID,
+		})
 	}
 	return sb, jobID, nil
 }

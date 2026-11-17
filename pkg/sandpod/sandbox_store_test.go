@@ -308,3 +308,51 @@ func TestSandboxStore_Concurrency(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// Two workspaces may both call a sandbox "mysandbox": the display name is
+// unique per owner, while the routing key (what hosts and tunnels use) is
+// globally unique.
+func TestSandboxStore_TenantScopedNames(t *testing.T) {
+	s := NewSandboxStore()
+	a := &SandboxInfo{Name: "sb_aaaaaaaaaaaaaaaa", DisplayName: "mysandbox", Owner: "workspace:a", State: StateRunning}
+	b := &SandboxInfo{Name: "sb_bbbbbbbbbbbbbbbb", DisplayName: "mysandbox", Owner: "workspace:b", State: StateRunning}
+	if err := s.Add(a); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Add(b); err != nil {
+		t.Fatalf("the second workspace's mysandbox was refused: %v", err)
+	}
+	if got, ok := s.GetByName("workspace:a", "mysandbox"); !ok || got.Name != a.Name {
+		t.Fatalf("workspace a resolved %+v, want %s", got, a.Name)
+	}
+	if got, ok := s.GetByName("workspace:b", "mysandbox"); !ok || got.Name != b.Name {
+		t.Fatalf("workspace b resolved %+v, want %s", got, b.Name)
+	}
+	// A third sandbox with the same display name in the same workspace is a
+	// conflict; the routing key is what separates tenants.
+	dup := &SandboxInfo{Name: "sb_cccccccccccccccc", DisplayName: "mysandbox", Owner: "workspace:a", State: StateRunning}
+	if err := s.Add(dup); err == nil {
+		t.Fatal("a duplicate display name in the same workspace was accepted")
+	}
+	// Deleting one frees its routing key only; the other workspace keeps its name.
+	if err := s.Delete(a.Name); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := s.GetByName("workspace:b", "mysandbox"); !ok {
+		t.Fatal("deleting one workspace's sandbox removed the other's name")
+	}
+}
+
+func TestNewRoutingID(t *testing.T) {
+	seen := map[string]bool{}
+	for i := 0; i < 1000; i++ {
+		id := NewRoutingID()
+		if len(id) < 18 || id[:3] != "sb_" {
+			t.Fatalf("unexpected routing id %q", id)
+		}
+		if seen[id] {
+			t.Fatalf("duplicate routing id %q", id)
+		}
+		seen[id] = true
+	}
+}

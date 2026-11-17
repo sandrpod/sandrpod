@@ -353,3 +353,74 @@ func canAccessSandbox(id Identity, sb *podpkg.SandboxInfo) bool {
 func canAccessJob(id Identity, j *podpkg.Job) bool {
 	return id.IsAdmin() || j.Owner == "" || j.Owner == id.Name
 }
+
+// resolveSandboxRef maps what a URL or query says — a routing key, or a display
+// name within the caller's workspace — to the record. Names are tenant-scoped,
+// so the same "mysandbox" may exist in several workspaces; the routing key is
+// what every Host, tunnel and container below this point uses.
+//
+// An admin may address a sandbox by a globally unique display name, but only
+// when exactly one record has it: guessing between two tenants would be worse
+// than asking for the routing id.
+// sandboxLookup is what reference resolution needs: a direct hit, a tenant-scoped
+// display hit, and the full list for an admin's unambiguous search. Narrower than
+// SandboxRepository so a test can supply just these three.
+type sandboxLookup interface {
+	Get(string) (*podpkg.SandboxInfo, bool)
+	GetByName(owner, name string) (*podpkg.SandboxInfo, bool)
+	List() []*podpkg.SandboxInfo
+}
+
+func resolveSandboxRef(ss sandboxLookup, id Identity, ref string) (*podpkg.SandboxInfo, bool) {
+	return resolveSandboxRefOpt(ss, id, ref, false)
+}
+
+// resolveSandboxRefWorker additionally lets a worker in a tenant reach that
+// tenant's sandboxes. Only the egress/policy routes use it: an agent polls the
+// policy of the sandbox it is itself running, and a worker key identifies the
+// tenant rather than the workspace owner.
+func resolveSandboxRefWorker(ss sandboxLookup, id Identity, ref string) (*podpkg.SandboxInfo, bool) {
+	return resolveSandboxRefOpt(ss, id, ref, true)
+}
+
+func resolveSandboxRefOpt(ss sandboxLookup, id Identity, ref string, allowTenantWorker bool) (*podpkg.SandboxInfo, bool) {
+	if ref == "" {
+		return nil, false
+	}
+	allowed := func(sb *podpkg.SandboxInfo) bool {
+		if canAccessSandbox(id, sb) {
+			return true
+		}
+		return allowTenantWorker && id.IsWorker() && id.Tenant != "" &&
+			sb.Owner == "workspace:"+id.Tenant
+	}
+	if sb, ok := ss.Get(ref); ok && allowed(sb) {
+		return sb, true
+	}
+	// Not a routing key this caller may use — it may still be a display name in
+	// their own workspace (or a routing key owned by another tenant, which must
+	// not be resolved through the display index).
+	ownerKey := id.Name
+	if id.IsWorker() && id.Tenant != "" {
+		ownerKey = "workspace:" + id.Tenant
+	}
+	if sb, ok := ss.GetByName(ownerKey, ref); ok && allowed(sb) {
+		return sb, true
+	}
+	if id.IsAdmin() {
+		var found *podpkg.SandboxInfo
+		for _, sb := range ss.List() {
+			if sb.DisplayNameOf() != ref {
+				continue
+			}
+			if found != nil {
+				return nil, false // ambiguous across tenants
+			}
+			found = sb
+		}
+		if found != nil {
+			return found, true
+		}
+	}
+	return nil, false
+}

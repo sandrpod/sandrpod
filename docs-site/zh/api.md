@@ -34,6 +34,11 @@ description: 原生控制面 API —— 沙箱、worker、执行、出网，以�
 | `GET` | `/api/v1/sandboxes/{name}/toolbox/*` | 转发到沙箱内的 toolbox |
 | `POST` | `/api/v1/sandboxes/{name}/snapshot` | 提交成镜像 |
 
+`{name}` 是创建时填的名字，**只在工作区内唯一**：两个工作区都可以有 `mysandbox`，
+请求会按调用凭据所属的工作区解析。每个沙箱对象还带 `routing_id`，它是服务端全局唯一
+的路由键，预览 Host（`<端口>-<routing_id>.<域名>`）用的就是它；不要自己拼 URL，
+用 `/preview/{port}` 签发。
+
 创建请求体：
 
 ```json

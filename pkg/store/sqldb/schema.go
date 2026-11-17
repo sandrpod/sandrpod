@@ -17,6 +17,11 @@ import "database/sql"
 const ddl = `
 CREATE TABLE IF NOT EXISTS sandboxes (
     name           TEXT PRIMARY KEY,
+    -- The user-facing name, unique per owner (workspace) rather than globally.
+    -- The name column is the internal routing key: for legacy rows it is the old
+    -- name; for new ones it is sb_<hex>. The unique index below is created after
+    -- the column migration so an old database can be upgraded in place.
+    display_name   TEXT    NOT NULL DEFAULT '',
     id             TEXT    NOT NULL DEFAULT '',
     region         TEXT    NOT NULL DEFAULT '',
     provider_type  TEXT    NOT NULL DEFAULT '',
@@ -132,6 +137,14 @@ var columnMigrations = []string{
 	`ALTER TABLE sandboxes ADD COLUMN memory_mb INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE poders ADD COLUMN capabilities TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE poders ADD COLUMN workspace TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE sandboxes ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`,
+	// Existing rows keep their old name as both the routing key and the display
+	// name, so every old URL/host keeps resolving.
+	`UPDATE sandboxes SET display_name = name WHERE display_name = ''`,
+	// The tenant-scoped uniqueness rule. IF NOT EXISTS keeps this idempotent;
+	// adding it after the backfill means it is created on the first startup that
+	// has the column.
+	`CREATE UNIQUE INDEX IF NOT EXISTS idx_sandboxes_owner_display ON sandboxes(owner, display_name)`,
 	`ALTER TABLE jobs ADD COLUMN request TEXT NOT NULL DEFAULT ''`,
 }
 

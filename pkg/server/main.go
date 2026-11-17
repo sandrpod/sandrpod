@@ -158,16 +158,16 @@ func logDeletedRejection(name string) {
 // delivered" from "delivered and then deleted": both leave the same evidence. A
 // pending job left behind would be delivered on the next pass and recreate the
 // sandbox somebody just removed.
-func failJobsFor(jobs podpkg.JobRepository, sandboxName, reason string) {
+func failJobsFor(jobs podpkg.JobRepository, sandboxKey, reason string) {
 	for _, j := range jobs.ListJobs() {
-		if j.SandboxName != sandboxName || j.Status != podpkg.JobStatusPending {
+		if jobRoutingKey(j) != sandboxKey || j.Status != podpkg.JobStatusPending {
 			continue
 		}
 		_ = jobs.UpdateJob(j.ID, func(x *podpkg.Job) {
 			x.Status = podpkg.JobStatusFailed
 			x.ErrorMessage = reason
 		})
-		log.Printf("sandbox delete: failed pending job %s for %s (%s)", j.ID, sandboxName, reason)
+		log.Printf("sandbox delete: failed pending job %s for %s (%s)", j.ID, sandboxKey, reason)
 	}
 }
 
@@ -179,6 +179,10 @@ func failJobsFor(jobs podpkg.JobRepository, sandboxName, reason string) {
 // Five minutes is short on purpose: an agent restarted by hand after that is a
 // person asking for it back.
 var sandboxTombstones = podpkg.NewTombstones(5 * time.Minute)
+
+// sandboxTombstoneKey scopes a deletion to one workspace: "macbook" in another
+// tenant is a different sandbox and must not be blocked by this one's delete.
+func sandboxTombstoneKey(owner, display string) string { return owner + "\x00" + display }
 
 // apiRateLimit, when non-nil, throttles user-role tokens (see -rate-limit).
 var apiRateLimit *rateLimiter
@@ -658,19 +662,24 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	// === Local agent direct-connect entry point (end-user scenario) ===
 	// sandrpod-agent dials this endpoint on startup to register the local machine as a direct sandbox
 	mux.HandleFunc("/ws/sandbox/connect", workerRoute(func(w http.ResponseWriter, r *http.Request) {
-		sandboxName := r.Header.Get("X-Sandbox-Name")
-		if sandboxName == "" {
+		displayName := r.Header.Get("X-Sandbox-Name")
+		if displayName == "" {
 			http.Error(w, "X-Sandbox-Name header required", http.StatusBadRequest)
 			return
 		}
+		ident := IdentityFrom(r)
 		// A worker credential with no tenant would register a sandbox that belongs
 		// to nobody — and an ownerless record is visible to every token on the
 		// server. Refuse rather than create one; a self-hosted server uses its
 		// admin token here, which is not a worker.
-		if ident := IdentityFrom(r); ident.IsWorker() && ident.Tenant == "" {
+		if ident.IsWorker() && ident.Tenant == "" {
 			http.Error(w, "Forbidden: worker credential without a tenant", http.StatusForbidden)
 			return
 		}
+		owner := sandboxOwner(ident)
+		// Tombstones are keyed by workspace + display name: two tenants may both
+		// have a "macbook", and deleting one must not block the other.
+		tombKey := sandboxTombstoneKey(owner, displayName)
 		// Deleted while this agent was attached: tell it to stop rather than let it
 		// recreate the record it was just removed with.
 		//
@@ -679,19 +688,20 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		// Without the refresh it would come back after the window closed, and the
 		// delete would appear to have failed five minutes later — which is worse
 		// than appearing to fail immediately, because nobody is watching by then.
-		if sandboxTombstones.Contains(sandboxName) {
-			sandboxTombstones.Add(sandboxName)
-			logDeletedRejection(sandboxName)
+		if sandboxTombstones.Contains(tombKey) {
+			sandboxTombstones.Add(tombKey)
+			logDeletedRejection(displayName)
 			http.Error(w, "sandbox was deleted", http.StatusGone)
 			return
 		}
-		// One name cannot belong to two workspaces: the store is keyed by name, so
-		// a second tenant registering "macbook" would take over the first one's
-		// record.
-		if existing, ok := sandboxStore.Get(sandboxName); ok && existing.Owner != "" &&
-			existing.Owner != sandboxOwner(IdentityFrom(r)) && !IdentityFrom(r).IsAdmin() {
-			http.Error(w, "Conflict: a sandbox with this name belongs to another workspace", http.StatusConflict)
-			return
+		// The display name is tenant-scoped; the tunnel/container/host below use
+		// the record's routing key so a second workspace may reuse the name.
+		sandboxName := ""
+		existing, exists := sandboxStore.GetByName(owner, displayName)
+		if exists {
+			sandboxName = existing.Name
+		} else {
+			sandboxName = podpkg.NewRoutingID()
 		}
 
 		ws, err := wsUpgrader.Upgrade(w, r, nil)
@@ -723,10 +733,10 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		// is Owner=="" — which canAccessSandbox treats as world-visible, letting
 		// ANY authenticated token reach the employee's machine. Empty only when
 		// auth is disabled (single-tenant).
-		owner := sandboxOwner(IdentityFrom(r))
 		sb := &podpkg.SandboxInfo{
 			ID:           sandboxName,
 			Name:         sandboxName,
+			DisplayName:  displayName,
 			Region:       sanitizeUTF8(r.Header.Get("X-Sandbox-Region")),
 			ProviderType: "local-agent",
 			State:        podpkg.StateRunning,
@@ -742,7 +752,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		// swallow the persist error: a silent failure here (as when the bad-UTF-8
 		// INSERT was rejected) leaves the agent "connected" but absent from the
 		// store — forever offline — with nothing in the logs.
-		if _, ok := sandboxStore.Get(sandboxName); ok {
+		if exists {
 			if err := sandboxStore.Update(sandboxName, func(s *podpkg.SandboxInfo) {
 				s.State = podpkg.StateRunning
 				s.ProxyURL = "direct://" + sandboxName
@@ -757,7 +767,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		} else if err := sandboxStore.Add(sb); err != nil {
 			log.Printf("ERROR: agent %s connect: persist sandbox failed (%v) — will appear OFFLINE despite a live tunnel", sandboxName, err)
 		}
-		log.Printf("Agent %s connected as direct sandbox", sandboxName)
+		log.Printf("Agent %s connected as direct sandbox %s", displayName, sandboxName)
 
 		defer func() {
 			// Only mark offline if we are still the active tunnel (guards against
@@ -1127,10 +1137,10 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			return
 		}
 		ident := IdentityFrom(r)
-		sb, ok := sandboxStore.Get(req.Sandbox)
-		if ok && !canAccessSandbox(ident, sb) {
-			http.Error(w, "sandbox not found", http.StatusNotFound)
-			return
+		sb, ok := resolveSandboxRefWorker(sandboxStore, ident, req.Sandbox)
+		if !ok {
+			// Unknown or not owned: decide against a nil policy, which denies.
+			sb = nil
 		}
 
 		verdict := decideForSandbox(sb, ok, req.Host, req.Port)
@@ -1326,6 +1336,12 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				http.Error(w, reason, http.StatusBadRequest)
 				return
 			}
+			// The user's name is tenant-scoped; everything below the API uses the
+			// generated routing key so two workspaces can both have "mysandbox".
+			// A client-supplied display_name/routing_id is overwritten here.
+			displayName := req.Name
+			req.DisplayName = displayName
+			req.Name = podpkg.NewRoutingID()
 			// A policy that does not parse is a 400 here, not a sandbox that
 			// provisions and then denies everything: the operator sees the
 			// typo while they still have the create call in front of them.
@@ -1395,8 +1411,8 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				}
 			}
 
-			if _, exists := sandboxStore.Get(req.Name); exists {
-				http.Error(w, fmt.Sprintf("sandbox %s already exists", req.Name), http.StatusConflict)
+			if _, exists := sandboxStore.GetByName(ident.Name, displayName); exists {
+				http.Error(w, fmt.Sprintf("sandbox %s already exists in this workspace", displayName), http.StatusConflict)
 				return
 			}
 
@@ -1420,7 +1436,8 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					ID:           podpkg.GenerateJobID(),
 					Type:         podpkg.JobTypeCreateSandbox,
 					Status:       podpkg.JobStatusPending,
-					SandboxName:  req.Name,
+					SandboxName:  displayName,
+					RoutingID:    req.Name,
 					Region:       req.Region,
 					ProviderType: req.ProviderType,
 					InstanceType: req.InstanceType,
@@ -1443,6 +1460,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				sandbox := &podpkg.SandboxInfo{
 					ID:           job.ID,
 					Name:         req.Name,
+					DisplayName:  displayName,
 					Region:       req.Region,
 					ProviderType: req.ProviderType,
 					InstanceType: req.InstanceType,
@@ -1555,16 +1573,17 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				http.Error(w, "sandbox name is required", http.StatusBadRequest)
 				return
 			}
-			if sb, ok := sandboxStore.Get(sandboxName); ok && !canAccessSandbox(ident, sb) {
+			sb, ok := resolveSandboxRef(sandboxStore, ident, sandboxName)
+			if !ok {
 				http.Error(w, "sandbox not found", http.StatusNotFound)
 				return
 			}
-			sb, t, ok := sandboxTunnel(sandboxName, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
+			sandboxName = sb.Name
+			_, t, ok := sandboxTunnel(sandboxName, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 			if !ok {
 				return
 			}
 			proxyHTTP(t, r, "http://poder/execute?sandbox="+sandboxName, w)
-			_ = sb
 			return
 		}
 
@@ -1579,15 +1598,21 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				http.Error(w, "sandbox name is required", http.StatusBadRequest)
 				return
 			}
-			if sb, ok := sandboxStore.Get(sandboxName); ok && !canAccessSandbox(ident, sb) {
+			sb, ok := resolveSandboxRef(sandboxStore, ident, sandboxName)
+			if !ok {
 				http.Error(w, "sandbox not found", http.StatusNotFound)
 				return
 			}
+			sandboxName = sb.Name
 			_, t, ok := sandboxTunnel(sandboxName, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 			if !ok {
 				return
 			}
-			targetURL := "http://poder/stream?" + r.URL.RawQuery
+			// The worker addresses the container by routing key; the query the
+			// client sent may carry a display name, so rebuild it.
+			q := r.URL.Query()
+			q.Set("sandbox", sandboxName)
+			targetURL := "http://poder/stream?" + q.Encode()
 			var body []byte
 			if r.Method == http.MethodPost {
 				body, _ = io.ReadAll(r.Body)
@@ -1612,7 +1637,9 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			return
 		}
 
-		// Parse {name} and action from the path
+		// Parse {name} and action from the path. The name may be a routing key
+		// (old links, console URLs) or a display name within the caller's
+		// workspace; everything below this point uses the routing key.
 		parts := splitPath(path)
 		name := parts[0]
 		action := ""
@@ -1620,12 +1647,12 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			action = parts[1]
 		}
 
-		// Ownership: user-role tokens only reach their own sandboxes (missing
-		// records fall through to the per-action 404s).
-		if sb, ok := sandboxStore.Get(name); ok && !canAccessSandbox(ident, sb) {
+		sb, ok := resolveSandboxRefOpt(sandboxStore, ident, name, action == "egress")
+		if !ok {
 			http.Error(w, "sandbox not found", http.StatusNotFound)
 			return
 		}
+		name = sb.Name
 
 		// Egress policy of this sandbox: what its enforcing agent is allowed
 		// to reach. GET is served to the owning Identity *and* to the sandbox
@@ -1640,8 +1667,9 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				case http.MethodGet:
 					w.Header().Set("Content-Type", "application/json")
 					json.NewEncoder(w).Encode(map[string]any{
-						"sandbox": name,
-						"policy":  sb.Network,
+						"sandbox":    sb.DisplayNameOf(),
+						"routing_id": sb.Name,
+						"policy":     sb.Network,
 					})
 					return
 				case http.MethodPut, http.MethodPost:
@@ -2009,7 +2037,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				// remember the deletion (the reconnect answers 410 and the agent
 				// stops).
 				failJobsFor(jobStore, name, "sandbox was deleted before its delivery completed")
-				sandboxTombstones.Add(name)
+				sandboxTombstones.Add(sandboxTombstoneKey(sb.Owner, sb.DisplayNameOf()))
 				if t, ok := directStore.Get(name); ok {
 					if cerr := t.Close(); cerr != nil {
 						log.Printf("sandbox delete: closing agent tunnel for %s: %v", name, cerr)
@@ -2033,7 +2061,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			// (an agent that registered before the proxy URL was stamped). The
 			// normal agent path returns above.
 			if pID == "" {
-				sandboxTombstones.Add(name)
+				sandboxTombstones.Add(sandboxTombstoneKey(sb.Owner, sb.DisplayNameOf()))
 				if t, ok := directStore.Get(name); ok {
 					t.Close()
 				}

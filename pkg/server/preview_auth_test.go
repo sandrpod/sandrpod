@@ -77,12 +77,29 @@ func TestPreviewURLEndpointShape(t *testing.T) {
 	}
 }
 
-// previewSandboxStore is the one-method repository handlePreviewURL needs.
+// previewSandboxStore is the lookup handlePreviewURL needs.
 type previewSandboxStore map[string]*podpkg.SandboxInfo
 
 func (s previewSandboxStore) Get(name string) (*podpkg.SandboxInfo, bool) {
 	sb, ok := s[name]
 	return sb, ok
+}
+
+func (s previewSandboxStore) List() []*podpkg.SandboxInfo {
+	out := make([]*podpkg.SandboxInfo, 0, len(s))
+	for _, sb := range s {
+		out = append(out, sb)
+	}
+	return out
+}
+
+func (s previewSandboxStore) GetByName(owner, name string) (*podpkg.SandboxInfo, bool) {
+	for _, sb := range s {
+		if sb.Owner == owner && sb.DisplayNameOf() == name {
+			return sb, true
+		}
+	}
+	return nil, false
 }
 
 // A signed preview URL is a bearer credential for a desktop (KasmVNC) and a
@@ -124,5 +141,54 @@ func TestPreviewURL_IsScopedToTheOwner(t *testing.T) {
 	}
 	if code := call(Identity{Name: "admin", Role: RoleAdmin}).Code; code != http.StatusOK {
 		t.Fatalf("admin preview URL: got %d, want 200", code)
+	}
+}
+
+// Two workspaces can both have a sandbox called "mysandbox"; each preview URL
+// must be minted for that workspace's routing key, never the other's.
+func TestPreviewURL_TenantNamesResolveToOwnRoutingKey(t *testing.T) {
+	cfg := Config{Token: "platform-token", E2BDomain: "sandbox.example.com"}
+	store := previewSandboxStore{
+		"sb_aaaaaaaaaaaaaaaa": {Name: "sb_aaaaaaaaaaaaaaaa", DisplayName: "mysandbox", Owner: "workspace:alice"},
+		"sb_bbbbbbbbbbbbbbbb": {Name: "sb_bbbbbbbbbbbbbbbb", DisplayName: "mysandbox", Owner: "workspace:bob"},
+	}
+	call := func(ident Identity) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodGet, "/api/v1/sandboxes/mysandbox/preview/6901", nil)
+		r = r.WithContext(context.WithValue(r.Context(), identityCtxKey{}, ident))
+		w := httptest.NewRecorder()
+		handlePreviewURL(w, r, cfg, store)
+		return w
+	}
+
+	for _, tc := range []struct {
+		ident Identity
+		key   string
+	}{
+		{Identity{Name: "workspace:alice", Role: RoleUser}, "sb_aaaaaaaaaaaaaaaa"},
+		{Identity{Name: "workspace:bob", Role: RoleUser}, "sb_bbbbbbbbbbbbbbbb"},
+	} {
+		w := call(tc.ident)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", tc.ident.Name, w.Code, w.Body.String())
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, tc.key) {
+			t.Fatalf("%s got %s, want its own routing key %s", tc.ident.Name, body, tc.key)
+		}
+	}
+	if w := call(Identity{}); w.Code != http.StatusNotFound {
+		t.Fatalf("anonymous got %d, want 404", w.Code)
+	}
+	// An admin cannot guess between two identical display names; a routing key
+	// is unambiguous.
+	if w := call(Identity{Name: "admin", Role: RoleAdmin}); w.Code != http.StatusNotFound {
+		t.Fatalf("ambiguous admin reference got %d, want 404", w.Code)
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/sandboxes/sb_aaaaaaaaaaaaaaaa/preview/6901", nil)
+	r = r.WithContext(context.WithValue(r.Context(), identityCtxKey{}, Identity{Name: "workspace:bob", Role: RoleUser}))
+	w := httptest.NewRecorder()
+	handlePreviewURL(w, r, cfg, store)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("bob opened alice's routing key: %d", w.Code)
 	}
 }

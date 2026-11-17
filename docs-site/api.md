@@ -36,6 +36,12 @@ delete every worker. Do not ship it inside an agent.
 | `GET` | `/api/v1/sandboxes/{name}/toolbox/*` | proxy to the in-sandbox toolbox |
 | `POST` | `/api/v1/sandboxes/{name}/snapshot` | commit the container to an image |
 
+`{name}` is the workspace-scoped name from the create request: two workspaces may
+both use `mysandbox`, and a request resolves the name within the caller's
+workspace. Every sandbox object also carries `routing_id`, the server-wide key
+the wildcard preview hosts use (`<port>-<routing_id>.<domain>`); treat it as
+opaque and let `/preview/{port}` mint URLs instead of building them.
+
 Create body:
 
 ```json

@@ -18,8 +18,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 )
 
 // PreviewCookie carries the signed token after the first ?token= hit, so the
@@ -136,9 +134,7 @@ func (d e2bDeps) previewAuthorized(w http.ResponseWriter, r *http.Request, sandb
 // about. The ownership check here is the one that matters: a signed token is a
 // bearer credential for a desktop (KasmVNC) or a debugger (Chrome CDP), so
 // minting one for another tenant's sandbox would hand over that sandbox.
-func handlePreviewURL(w http.ResponseWriter, r *http.Request, cfg Config, sandboxes interface {
-	Get(string) (*podpkg.SandboxInfo, bool)
-}) {
+func handlePreviewURL(w http.ResponseWriter, r *http.Request, cfg Config, sandboxes sandboxLookup) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -149,30 +145,28 @@ func handlePreviewURL(w http.ResponseWriter, r *http.Request, cfg Config, sandbo
 		http.NotFound(w, r)
 		return
 	}
-	name := parts[0]
+	ref := parts[0]
 	port, err := strconv.Atoi(parts[2])
 	if err != nil || port <= 0 || port > 65535 {
 		http.Error(w, "invalid port", http.StatusBadRequest)
 		return
 	}
-	sb, ok := sandboxes.Get(name)
+	// The reference may be a display name (the console) or a routing key (old
+	// links); the signature and the Host it opens must use the routing key.
+	sb, ok := resolveSandboxRef(sandboxes, IdentityFrom(r), ref)
 	if !ok {
 		http.Error(w, "sandbox not found", http.StatusNotFound)
 		return
 	}
-	// 404 rather than 403, same as every other sandbox-scoped route: a caller
-	// must not learn that a sandbox it cannot touch exists.
-	if !canAccessSandbox(IdentityFrom(r), sb) {
-		http.Error(w, "sandbox not found", http.StatusNotFound)
-		return
-	}
-	url, err := cfg.previewTokenEndpoint(name, port)
+	url, err := cfg.previewTokenEndpoint(sb.Name, port)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"url": url, "sandbox": name, "port": port})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"url": url, "sandbox": sb.DisplayNameOf(), "routing_id": sb.Name, "port": port,
+	})
 }
 
 // previewTokenEndpoint mints a signed URL for a sandbox port. Admin-less: the

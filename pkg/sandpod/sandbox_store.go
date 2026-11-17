@@ -13,8 +13,16 @@ import (
 
 // SandboxInfo holds metadata about a sandbox instance.
 type SandboxInfo struct {
-	ID           string `json:"id"`
-	Name         string `json:"name"`
+	ID string `json:"id"`
+	// Name is the routing key: globally unique and immutable. Every URL, Host,
+	// container and tunnel identifier uses it. Records created before
+	// tenant-scoped names carry the old user-facing name here (so old links keep
+	// working); new records get sb_<hex>.
+	Name string `json:"routing_id"`
+	// DisplayName is the name the user chose, unique per workspace (Owner) rather
+	// than globally. API paths address sandboxes by this name and resolve it
+	// within the caller's tenant.
+	DisplayName  string `json:"name"`
 	Region       string `json:"region"`
 	ProviderType string `json:"provider_type,omitempty"` // provider type: local, aws, aliyun, azure, gcp
 	InstanceType string `json:"instance_type"`
@@ -62,7 +70,13 @@ type SandboxInfo struct {
 
 // CreateSandboxRequest is the request body for creating a sandbox.
 type CreateSandboxRequest struct {
-	Name         string `json:"name"`
+	// Name is the user's chosen name on the wire. The control plane replaces it
+	// with the generated routing key before provisioning and keeps the original
+	// in DisplayName, so the request that reaches a worker is globally unique.
+	Name string `json:"name"`
+	// DisplayName is the user-facing name while Name is a routing key. Set by
+	// the control plane; a client-supplied value is overwritten.
+	DisplayName  string `json:"display_name,omitempty"`
 	Region       string `json:"region"`
 	ProviderType string `json:"provider_type"` // provider type: local, aws, aliyun, azure, gcp
 	InstanceType string `json:"instance_type"`
@@ -122,12 +136,16 @@ type ExecuteCodeRequest struct {
 type SandboxStore struct {
 	mu        sync.RWMutex
 	sandboxes map[string]*SandboxInfo
+	// byDisplay maps owner → display name → routing key. The display name is
+	// unique per owner (tenant), not globally.
+	byDisplay map[string]map[string]string
 }
 
 // NewSandboxStore creates a new SandboxStore.
 func NewSandboxStore() *SandboxStore {
 	return &SandboxStore{
 		sandboxes: make(map[string]*SandboxInfo),
+		byDisplay: make(map[string]map[string]string),
 	}
 }
 
@@ -136,20 +154,46 @@ func (s *SandboxStore) Add(sb *SandboxInfo) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.sandboxes[sb.Name]; exists {
-		return fmt.Errorf("sandbox %s already exists", sb.Name)
+	stored := *sb
+	if stored.DisplayName == "" {
+		stored.DisplayName = stored.Name // records created before display names
+	}
+	if _, exists := s.sandboxes[stored.Name]; exists {
+		return fmt.Errorf("sandbox %s already exists", stored.Name)
+	}
+	if s.byDisplay[stored.Owner] != nil {
+		if _, exists := s.byDisplay[stored.Owner][stored.DisplayName]; exists {
+			return fmt.Errorf("sandbox name %q is already taken in this workspace", stored.DisplayName)
+		}
 	}
 
-	s.sandboxes[sb.Name] = sb
+	s.sandboxes[stored.Name] = &stored
+	if s.byDisplay[stored.Owner] == nil {
+		s.byDisplay[stored.Owner] = make(map[string]string)
+	}
+	s.byDisplay[stored.Owner][stored.DisplayName] = stored.Name
 	return nil
 }
 
-// Get retrieves a sandbox by name.
+// Get retrieves a sandbox by routing key.
 func (s *SandboxStore) Get(name string) (*SandboxInfo, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	sb, ok := s.sandboxes[name]
+	return sb, ok
+}
+
+// GetByName resolves a tenant-scoped display name to its record.
+func (s *SandboxStore) GetByName(owner, name string) (*SandboxInfo, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	key, ok := s.byDisplay[owner][name]
+	if !ok {
+		return nil, false
+	}
+	sb, ok := s.sandboxes[key]
 	return sb, ok
 }
 
@@ -168,6 +212,26 @@ func (s *SandboxStore) Update(name string, updateFn func(*SandboxInfo)) error {
 	// them. Replace the entry instead; the old object stays frozen.
 	next := *sb
 	updateFn(&next)
+	if next.DisplayName == "" {
+		next.DisplayName = next.Name
+	}
+	if next.Name != name {
+		return fmt.Errorf("sandbox routing key is immutable (%q -> %q)", name, next.Name)
+	}
+	if next.DisplayName != sb.DisplayName {
+		if s.byDisplay[next.Owner] != nil {
+			if _, taken := s.byDisplay[next.Owner][next.DisplayName]; taken {
+				return fmt.Errorf("sandbox name %q is already taken in this workspace", next.DisplayName)
+			}
+		}
+		if s.byDisplay[sb.Owner] != nil {
+			delete(s.byDisplay[sb.Owner], sb.DisplayName)
+		}
+		if s.byDisplay[next.Owner] == nil {
+			s.byDisplay[next.Owner] = make(map[string]string)
+		}
+		s.byDisplay[next.Owner][next.DisplayName] = next.Name
+	}
 	s.sandboxes[name] = &next
 	return nil
 }

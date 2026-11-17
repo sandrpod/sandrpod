@@ -30,6 +30,15 @@ import (
 // re-delivering it resurrects a sandbox somebody deleted.
 const resumeMaxAge = 40 * time.Minute
 
+// jobRoutingKey is the record key for a job. Old rows predate the split and
+// carried the name in SandboxName; new ones carry an opaque routing id.
+func jobRoutingKey(j *podpkg.Job) string {
+	if j.RoutingID != "" {
+		return j.RoutingID
+	}
+	return j.SandboxName
+}
+
 const (
 	// ResumeStaleAfter is how long a job may sit PENDING before another attempt
 	// is made. Long enough that the in-flight delivery (2 min budget) usually
@@ -90,7 +99,7 @@ func resumeOnce(d resumeDeps) int {
 				j.Status = podpkg.JobStatusFailed
 				j.ErrorMessage = "delivery payload was not recorded; cannot resume"
 			})
-			_ = d.sandboxes.Update(job.SandboxName, func(sb *podpkg.SandboxInfo) {
+			_ = d.sandboxes.Update(jobRoutingKey(job), func(sb *podpkg.SandboxInfo) {
 				if sb.State == podpkg.StatePending {
 					sb.State = podpkg.StateError
 				}
@@ -132,14 +141,14 @@ func resumeOnce(d resumeDeps) int {
 		//   absent      never delivered → deliver
 		//   RUNNING     up already: the completion write was what got lost
 		//   terminal    ERROR/STOPPED/TERMINATED: retrying cannot fix it
-		sb, exists := d.sandboxes.Get(job.SandboxName)
+		sb, exists := d.sandboxes.Get(jobRoutingKey(job))
 		if !exists {
 			// A record that the create path never wrote (its delivery timed out
 			// while a 2 GB image was still pulling). The job payload is the only
 			// description left, so take the fields a client reads back from it —
 			// without them the console cannot tell it is a desktop sandbox and its
 			// row shows no image at all.
-			sb = &podpkg.SandboxInfo{Name: job.SandboxName, State: podpkg.StatePending}
+			sb = &podpkg.SandboxInfo{Name: jobRoutingKey(job), DisplayName: job.SandboxName, State: podpkg.StatePending}
 			var req podpkg.CreateSandboxRequest
 			if len(job.Request) > 0 && json.Unmarshal(job.Request, &req) == nil {
 				sb.ImageID = req.ImageID
