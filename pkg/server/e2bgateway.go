@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/e2bcompat"
+	"github.com/sandrpod/sandrpod/pkg/egress"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
@@ -532,6 +533,35 @@ type e2bSandboxBackend struct{ d e2bDeps }
 // _INSTANCE_TYPE) to route the unmodified E2B SDK's Sandbox.create() onto a
 // cloud provider (e.g. gcp / asia-east1-a / e2-medium) so it provisions real
 // cloud VMs. Region/instance type are only consulted for non-local providers.
+// e2bNetworkPolicy translates E2B's network options into the egress policy the
+// container worker enforces. An empty policy means "no egress"; an absent one
+// means the sandbox was created without a network restriction.
+//
+// E2B's allow_internet_access=false is a deny-all policy. allow_out maps to
+// AllowedDomains; deny_out alone becomes "*" minus the denied entries. The
+// per-method `rules` shape has no SandrPod equivalent yet — refusing it is the
+// only honest answer, because accepting it would run the sandbox wide open.
+func e2bNetworkPolicy(req e2bcompat.NewSandbox) (*egress.Policy, error) {
+	if req.Network != nil {
+		if len(req.Network.Rules) > 0 || req.Network.MaskRequestHost != "" || req.Network.AllowPublicTraffic != nil {
+			return nil, fmt.Errorf("E2B network rules/mask_request_host/allow_public_traffic are not supported by this deployment; use allow_out/deny_out")
+		}
+		allow := append([]string(nil), req.Network.AllowOut...)
+		deny := append([]string(nil), req.Network.DenyOut...)
+		if len(allow) == 0 && len(deny) > 0 {
+			allow = []string{"*"}
+		}
+		if len(allow) == 0 && len(deny) == 0 {
+			return nil, nil // an empty network object means "no restriction"
+		}
+		return &egress.Policy{AllowedDomains: allow, DeniedDomains: deny, StrictAllowlist: true}, nil
+	}
+	if req.AllowInternetAccess != nil && !*req.AllowInternetAccess {
+		return &egress.Policy{}, nil // allow-list empty = no egress
+	}
+	return nil, nil
+}
+
 func e2bSubstrate() (provider, region, instanceType string) {
 	provider = os.Getenv("SANDRPOD_E2B_PROVIDER")
 	if provider == "" {
@@ -567,6 +597,11 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 	if strings.ContainsAny(req.TemplateID, "/:") {
 		create.ImageID = req.TemplateID
 	}
+	policy, err := e2bNetworkPolicy(req)
+	if err != nil {
+		return e2bcompat.SandboxDetail{}, err
+	}
+	create.Network = policy
 	// The E2B client is identified by a name plus an admin flag; the admission
 	// gate takes an Identity, so build the equivalent one.
 	requester := Identity{Name: ident, Role: RoleUser, Tenant: req.Tenant}

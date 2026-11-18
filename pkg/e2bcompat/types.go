@@ -13,7 +13,10 @@
 // services map onto an EnvdBackend (our toolbox, reached over the tunnel).
 package e2bcompat
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // The schemas below mirror E2B's spec/openapi.yml exactly (field names and JSON
 // tags) so the SDK's generated client deserializes our responses unchanged.
@@ -28,10 +31,25 @@ type NewSandbox struct {
 	AllowInternetAccess *bool             `json:"allow_internet_access,omitempty"`
 	Metadata            map[string]string `json:"metadata,omitempty"`
 	EnvVars             map[string]string `json:"envVars,omitempty"`
+	// Network is the E2B create-time network policy. allow_out/deny_out are
+	// translated to the egress policy; rules (per-method HTTP rules) are not
+	// implemented and are refused rather than silently ignored.
+	Network *E2BNetwork `json:"network,omitempty"`
 	// Tenant is NOT part of E2B's wire format. The gateway fills it from the
 	// authenticated identity so the backend can scope placement the same way
 	// the native API does; a single-tenant host leaves it empty.
 	Tenant string `json:"-"`
+}
+
+// E2BNetwork is the subset of the SDK's SandboxNetworkOpts this deployment
+// understands. Rules is the full per-domain HTTP rule set; it is decoded so
+// the gateway can reject it explicitly instead of pretending to enforce it.
+type E2BNetwork struct {
+	AllowOut           []string                   `json:"allow_out,omitempty"`
+	DenyOut            []string                   `json:"deny_out,omitempty"`
+	Rules              map[string]json.RawMessage `json:"rules,omitempty"`
+	AllowPublicTraffic *bool                      `json:"allow_public_traffic,omitempty"`
+	MaskRequestHost    string                     `json:"mask_request_host,omitempty"`
 }
 
 // Sandbox is the POST /sandboxes (and resume) response.
