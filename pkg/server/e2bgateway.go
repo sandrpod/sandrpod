@@ -616,7 +616,7 @@ func e2bSubstrate() (provider, region, instanceType string) {
 
 func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompat.NewSandbox) (e2bcompat.SandboxDetail, error) {
 	if req.AutoPauseMemory != nil && *req.AutoPauseMemory {
-		return e2bcompat.SandboxDetail{}, errors.New("autoPauseMemory is not supported: a stopped sandbox preserves /workspace but not process memory")
+		return e2bcompat.SandboxDetail{}, e2bcompat.InvalidError{Msg: "autoPauseMemory is not supported: a stopped sandbox preserves /workspace but not process memory"}
 	}
 	name := "e2b" + randToken(8)
 	provider, region, instanceType := e2bSubstrate()
@@ -806,8 +806,12 @@ func (b *e2bSandboxBackend) GetMetrics(ident, sandboxID string) ([]e2bcompat.San
 	if m.MemTotal == 0 {
 		m.MemTotal = 512 << 20
 	}
-	if m.DiskTotal == 0 {
-		m.DiskTotal = uint64(e2bcompat.DefaultDiskSizeMB) << 20
+	// The toolbox's disk numbers describe the host/root filesystem, not the
+	// sandbox's workspace volume. Report the declared size instead: it is what
+	// SandboxDetail says and what the plan reserves.
+	m.DiskTotal = uint64(e2bcompat.DefaultDiskSizeMB) << 20
+	if m.DiskUsed > m.DiskTotal {
+		m.DiskUsed = m.DiskTotal
 	}
 	now := time.Now().UTC()
 	return []e2bcompat.SandboxMetric{{

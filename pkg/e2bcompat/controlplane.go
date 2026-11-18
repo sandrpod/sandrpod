@@ -96,6 +96,11 @@ func (c *controlPlane) handleSandboxes(w http.ResponseWriter, r *http.Request) {
 		req.Tenant = tenantOf(r)
 		detail, err := c.backend.CreateSandbox(ident, adminOf(r), req)
 		if err != nil {
+			var invalid InvalidError
+			if errors.As(err, &invalid) {
+				writeErr(w, http.StatusBadRequest, invalid.Error())
+				return
+			}
 			if errors.Is(err, ErrQuotaExceeded) {
 				writeErr(w, http.StatusTooManyRequests, err.Error())
 				return

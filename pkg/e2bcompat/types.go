@@ -122,6 +122,12 @@ type ResumeRequest struct {
 	Timeout int32 `json:"timeout,omitempty"`
 }
 
+// InvalidError is a request the gateway understood and refuses: the control
+// plane maps it to 400 rather than the generic 500 a backend failure gets.
+type InvalidError struct{ Msg string }
+
+func (e InvalidError) Error() string { return e.Msg }
+
 // apiError is E2B's error envelope (spec Error schema: {code, message}).
 type apiError struct {
 	Code    int32  `json:"code"`
