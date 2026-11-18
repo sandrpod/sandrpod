@@ -148,10 +148,20 @@ func teardownSandbox(ctx context.Context, sb *podpkg.SandboxInfo, ss podpkg.Sand
 		req, _ := http.NewRequestWithContext(reqCtx, http.MethodDelete, "http://poder/sandboxes/"+sb.Name, nil)
 		if resp, err := t.Client.Do(req); err != nil {
 			log.Printf("idle reaper: container cleanup for %s failed: %v", sb.Name, err)
+			markPendingContainerCleanup(sb.PoderID, sb.Name)
 		} else {
+			if resp.StatusCode >= 300 && resp.StatusCode != http.StatusNotFound {
+				log.Printf("idle reaper: container cleanup for %s: status %d", sb.Name, resp.StatusCode)
+				markPendingContainerCleanup(sb.PoderID, sb.Name)
+			}
 			resp.Body.Close()
 		}
 		cancel()
+	} else {
+		// The worker is offline. The heartbeat handler will delete the container
+		// when it reconnects; without this the record is gone but the container
+		// keeps running (and consuming a slot) forever.
+		markPendingContainerCleanup(sb.PoderID, sb.Name)
 	}
 }
 
