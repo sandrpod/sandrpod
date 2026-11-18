@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -15,6 +16,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,6 +72,13 @@ func NewDockerPoder(region, networkName string) (*DockerPoder, error) {
 		dockerClient: dockerClient,
 		networkName:  networkName,
 	}
+	// Reconnect to tenant networks created before this poder restarted. Do it
+	// off the startup path; a slow Docker daemon must not delay the tunnel.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		pode.reconnectManagedNetworks(ctx)
+	}()
 
 	// Clean up egress sidecars whose sandbox died with the host. Off the startup
 	// path: a pode that cannot list containers should still serve.
@@ -175,6 +184,20 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	// the container exists so a sandbox never starts on a network it should
 	// not have had; if it fails, the create fails (see egress.go).
 	containerNetwork := p.networkName
+	// Multi-tenant isolation: a shared bridge lets any sandbox reach every other
+	// sandbox's toolbox on :8080 (the toolbox has no auth by default). Put each
+	// tenant's containers on its own bridge; the poder joins it so the tunnel
+	// proxy still reaches them, while another tenant's containers are on a
+	// different bridge and cannot be addressed. Same-tenant sandboxes remain
+	// mutually reachable (one trust boundary); an egress policy keeps its
+	// existing per-pod network below.
+	if req.Network == nil && req.Tenant != "" {
+		tenantNet, err := p.ensureTenantNetwork(ctx, req.Tenant)
+		if err != nil {
+			return nil, err
+		}
+		containerNetwork = tenantNet
+	}
 	// Caller-supplied env first, then the toolbox's own: on a duplicate key the
 	// later entry wins, and internal wiring (API URL, sandbox name) must not be
 	// overridable by a sandbox-level E2B env var.
@@ -264,6 +287,12 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	}
 	if req.MemoryMB > 0 {
 		hostConfig.Memory = req.MemoryMB * 1024 * 1024
+	}
+	// A sandbox is untrusted code. Cap process count even when the caller did
+	// not ask for a resource limit: a fork bomb otherwise takes the whole host
+	// (and every other tenant) down. Operators can tune the cap.
+	if pids := pidsLimit(); pids > 0 {
+		hostConfig.PidsLimit = &pids
 	}
 	if req.GPU > 0 {
 		// The nvidia container runtime injects the driver and maps /dev/nvidia*.
@@ -609,6 +638,90 @@ func (p *DockerPoder) copyVolume(ctx context.Context, from, to string) error {
 		}
 	}
 	return nil
+}
+
+// tenantNetworkName maps a tenant to a stable, short Docker network name. The
+// tenant id itself is not exposed in the network name.
+func tenantNetworkName(tenant string) string {
+	sum := sha256.Sum256([]byte(tenant))
+	return "sandrpod-t-" + hex.EncodeToString(sum[:6])
+}
+
+// ensureTenantNetwork creates (or finds) the tenant's private bridge and makes
+// sure this poder container is attached to it. A poder running as a host binary
+// (cloud VM) needs no self-attach: the host routes to every bridge.
+func (p *DockerPoder) ensureTenantNetwork(ctx context.Context, tenant string) (string, error) {
+	name := tenantNetworkName(tenant)
+	_, err := p.dockerClient.NetworkInspect(ctx, name, network.InspectOptions{})
+	if err != nil {
+		_, createErr := p.dockerClient.NetworkCreate(ctx, name, network.CreateOptions{
+			Driver: "bridge",
+			Labels: map[string]string{"sandrpod/managed": "true"},
+		})
+		if createErr != nil {
+			// Another create raced us; if the network exists now, use it.
+			if _, inspectErr := p.dockerClient.NetworkInspect(ctx, name, network.InspectOptions{}); inspectErr != nil {
+				return "", fmt.Errorf("create tenant network %s: %w", name, createErr)
+			}
+		}
+	}
+	if err := p.attachSelf(ctx, name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+// attachSelf connects this poder's own container to the network. In a container
+// the hostname is the container id (Docker's default); in host mode there is no
+// container to attach and the host can already reach the bridge.
+func (p *DockerPoder) attachSelf(ctx context.Context, networkName string) error {
+	if _, err := os.Stat("/.dockerenv"); err != nil {
+		return nil
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		return fmt.Errorf("tenant network %s: resolve self container: %w", networkName, err)
+	}
+	if err := p.dockerClient.NetworkConnect(ctx, networkName, host, nil); err != nil {
+		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "already connected") {
+			return nil
+		}
+		return fmt.Errorf("tenant network %s: attach poder %s: %w", networkName, host, err)
+	}
+	return nil
+}
+
+// reconnectManagedNetworks re-attaches this poder to every tenant network after
+// a container restart. Without it, existing sandboxes would become unreachable
+// because the poder's extra network attachments live in the container's network
+// namespace, not in the Docker volume.
+func (p *DockerPoder) reconnectManagedNetworks(ctx context.Context) {
+	nets, err := p.dockerClient.NetworkList(ctx, network.ListOptions{
+		Filters: filters.NewArgs(filters.Arg("label", "sandrpod/managed=true")),
+	})
+	if err != nil {
+		log.Printf("poder: list tenant networks: %v", err)
+		return
+	}
+	for _, n := range nets {
+		if err := p.attachSelf(ctx, n.ID); err != nil {
+			log.Printf("poder: reconnect tenant network %s: %v", n.Name, err)
+		}
+	}
+}
+
+// pidsLimit is the per-container process cap. SANDRPOD_PIDS_LIMIT=0 disables it
+// for an operator who deliberately wants no cap; the default protects the host.
+func pidsLimit() int64 {
+	raw := strings.TrimSpace(os.Getenv("SANDRPOD_PIDS_LIMIT"))
+	if raw == "" {
+		return 2048 // Chrome/XFCE desktops need headroom; still bounds a fork bomb
+	}
+	n, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || n < 0 {
+		return 2048
+	}
+	return n
 }
 
 // WorkspaceVolumeName is the volume a sandbox's /workspace lives in. Derived

@@ -71,3 +71,14 @@ func TestE2BSensitivePort(t *testing.T) {
 		}
 	}
 }
+
+func TestE2BInternalPortBlocked(t *testing.T) {
+	if !e2bInternalPort(8080) {
+		t.Fatal("toolbox port 8080 must be blocked from the E2B port proxy")
+	}
+	for _, p := range []int{8000, 50005, 49983, 49999} {
+		if e2bInternalPort(p) {
+			t.Errorf("port %d should not be an internal-blocked port", p)
+		}
+	}
+}

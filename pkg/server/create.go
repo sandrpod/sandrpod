@@ -331,6 +331,9 @@ func pushCreateToPoder(
 	jobStore podpkg.JobRepository,
 	fail func(msg string),
 ) (*podpkg.SandboxInfo, string, error) {
+	// The poder uses this to choose a per-tenant Docker network; Workspace is
+	// deliberately not on the wire (it is placement-only), Tenant is.
+	req.Tenant = req.Workspace
 	bodyBytes, _ := json.Marshal(req)
 	// Two minutes was enough for a warm worker and not for a cold one: the first
 	// create on a just-provisioned VM has to unpack the image and build the egress

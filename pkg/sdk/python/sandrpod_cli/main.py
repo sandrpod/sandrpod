@@ -79,9 +79,19 @@ def load_config():
 
 
 def save_config(config):
-    """保存配置文件"""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    CONFIG_FILE.write_text(yaml.dump(config, default_flow_style=False))
+    """保存配置文件（含 API token，目录 0700、文件 0600）"""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True, mode=0o700)
+    try:
+        os.chmod(CONFIG_DIR, 0o700)
+    except OSError:
+        pass
+    fd = os.open(CONFIG_FILE, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(yaml.dump(config, default_flow_style=False))
+    try:
+        os.chmod(CONFIG_FILE, 0o600)
+    except OSError:
+        pass
     click.echo(f"Config saved to {CONFIG_FILE}")
 
 

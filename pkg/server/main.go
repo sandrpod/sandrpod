@@ -937,6 +937,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 
 		// /api/v1/poders/{id}/sandboxes routes
 		if strings.Contains(path, "/sandboxes") {
+			who := IdentityFrom(r)
 			parts := strings.SplitN(path, "/", 2)
 			if len(parts) < 2 {
 				http.NotFound(w, r)
@@ -974,6 +975,11 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 							pID, podpkg.CapabilityEgress), http.StatusConflict)
 						return
 					}
+				}
+				// Keep the pinned-create path tenant-scoped too: the poder uses
+				// this to choose the per-tenant network.
+				if who.Tenant != "" {
+					req.Tenant = who.Tenant
 				}
 				body, _ := json.Marshal(req)
 				proxyReq, _ := http.NewRequestWithContext(r.Context(), http.MethodPost, "http://poder/sandboxes", bytes.NewReader(body))

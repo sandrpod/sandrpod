@@ -88,6 +88,14 @@ func (d e2bDeps) forwardE2B(w http.ResponseWriter, r *http.Request, sandbox stri
 // flushes in real time. Cross-node forwarding is handled by the gateway calling
 // forwardE2B first, so by here the tunnel is local. Returns true when handled.
 func (d e2bDeps) portProxy(w http.ResponseWriter, r *http.Request, sandbox string, port int) bool {
+	// Port 8080 is the toolbox control plane, not a user service. Its API has
+	// no per-sandbox credential (TOOLBOX_TOKEN is empty by default), so routing
+	// the public E2B host to it would turn the unguessable sandbox hostname into
+	// unauthenticated code execution. Never proxy it.
+	if e2bInternalPort(port) {
+		http.Error(w, "port is not a previewable in-sandbox service", http.StatusNotFound)
+		return true
+	}
 	// Ordinary in-sandbox services are capability-based, as on E2B: possession
 	// of the unguessable <port>-<sandboxID>.<domain> hostname is the credential,
 	// and a browser cannot attach a header. Keep the one exception that matters
@@ -549,6 +557,11 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 		InstanceType: instanceType,
 		TTLSeconds:   int64(req.Timeout),
 		EnvVars:      req.EnvVars,
+		// E2B has no per-create CPU/memory fields (the template defines them);
+		// this deployment reports 2 vCPU/512 MiB in SandboxDetail, so enforce
+		// the same values instead of silently running unbounded containers.
+		CPUCores: 2,
+		MemoryMB: 512,
 	}
 	// An E2B templateID that looks like a container image is used directly.
 	if strings.ContainsAny(req.TemplateID, "/:") {
@@ -722,6 +735,16 @@ func (b *e2bSandboxBackend) detailFromInfo(sb *podpkg.SandboxInfo) e2bcompat.San
 		// gateway's authenticator accepts the subsequent envd requests.
 		EnvdAccessToken: b.d.envdToken(sb),
 	}
+}
+
+// e2bInternalPort reports ports that belong to the sandbox's control plane and
+// must never be reachable through the generic E2B port proxy.
+func e2bInternalPort(port int) bool {
+	switch port {
+	case 8080: // toolbox API (execute/files/process)
+		return true
+	}
+	return false
 }
 
 // e2bSensitivePort reports ports that expose an interactive desktop or a

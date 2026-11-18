@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/egress"
@@ -90,6 +91,11 @@ func (r *sandboxRepo) Update(name string, fn func(*sandpod.SandboxInfo)) error {
 func (r *sandboxRepo) List() []*sandpod.SandboxInfo {
 	rows, err := r.db.Query(`SELECT ` + sandboxColumns + ` FROM sandboxes ORDER BY created_at`)
 	if err != nil {
+		// Returning nil makes a database outage look like an empty workspace,
+		// which invites users to create a sandbox on a control plane that cannot
+		// read its own state. Surface it; callers can still render their empty
+		// error state from the request log.
+		log.Printf("store/sqldb: list sandboxes: %v", err)
 		return nil
 	}
 	defer rows.Close()
@@ -101,6 +107,7 @@ func (r *sandboxRepo) ListByPoderID(poderID string) []*sandpod.SandboxInfo {
 		`SELECT `+sandboxColumns+` FROM sandboxes WHERE poder_id=? ORDER BY created_at`, poderID,
 	)
 	if err != nil {
+		log.Printf("store/sqldb: list sandboxes by poder %s: %v", poderID, err)
 		return nil
 	}
 	defer rows.Close()

@@ -52,7 +52,12 @@ type CreatePodRequest struct {
 	// EnvVars are the sandbox-level environment variables (E2B's envVars).
 	// They are applied to the container so every process inherits them; the
 	// toolbox's own variables are appended after these and win on collision.
-	EnvVars       map[string]string `json:"env_vars,omitempty"`
+	EnvVars map[string]string `json:"env_vars,omitempty"`
+	// Tenant scopes the container to a per-tenant Docker network. Two tenants
+	// on the same worker must not share a bridge (a sandbox can otherwise reach
+	// every other sandbox's toolbox). Empty keeps the legacy shared network for
+	// single-tenant/self-hosted deployments.
+	Tenant        string            `json:"tenant,omitempty"`
 	Provider      string            `json:"provider,omitempty"`
 	NetworkConfig *NetworkConfig    `json:"network_config,omitempty"`
 	DiskConfig    *DiskConfig       `json:"disk_config,omitempty"`

@@ -103,6 +103,10 @@ type CreateSandboxRequest struct {
 	// wire format: the control plane fills it from the caller's identity and
 	// uses it only to choose a worker. Empty means "no placement scoping".
 	Workspace string `json:"-"`
+	// Tenant is the same identity carried to the poder, which uses it to put
+	// the container on a per-tenant Docker network. It is not a user-facing
+	// field; the server derives it from Workspace.
+	Tenant string `json:"tenant,omitempty"`
 	// Async makes POST /sandboxes return a job id immediately and provision in
 	// the background; poll GET /api/v1/jobs/{id} (or the sandbox state) for
 	// progress. Cloud provisioning takes minutes — long synchronous responses
@@ -272,10 +276,20 @@ func (s *SandboxStore) Delete(name string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.sandboxes[name]; !ok {
+	sb, ok := s.sandboxes[name]
+	if !ok {
 		return fmt.Errorf("sandbox %s not found", name)
 	}
 
 	delete(s.sandboxes, name)
+	// The display index is the name-uniqueness index. Leaving it behind makes a
+	// deleted display name look taken forever (and a later create fails 409 with
+	// no row behind it). Remove the owner bucket too when it becomes empty.
+	if byOwner := s.byDisplay[sb.Owner]; byOwner != nil {
+		delete(byOwner, sb.DisplayName)
+		if len(byOwner) == 0 {
+			delete(s.byDisplay, sb.Owner)
+		}
+	}
 	return nil
 }
