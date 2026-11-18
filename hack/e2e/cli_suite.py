@@ -293,22 +293,28 @@ try:
         p = cli("get", NAME, timeout=30)
         m = re.search(r"Routing ID:\s+(\S+)", out(p))
         routing = m.group(1) if m else NAME
-        req = urllib.request.Request(API_URL + "/api/v1/snapshots",
-                                     headers={"X-Sandrpod-Token": KEY})
-        with urllib.request.urlopen(req, timeout=30) as r:
-            snapshots = json.loads(r.read() or b"{}").get("snapshots") or []
         removed = 0
-        for s in snapshots:
-            if s.get("source") != routing and s.get("image") != "cli-e2e-snap:test":
-                continue
-            q = urllib.parse.quote(s.get("image", ""), safe="")
-            d = urllib.request.Request(API_URL + "/api/v1/snapshots?image=" + q,
-                                       method="DELETE", headers={"X-Sandrpod-Token": KEY})
-            try:
-                with urllib.request.urlopen(d, timeout=30):
-                    removed += 1
-            except Exception:
-                pass
+        # A worker that pushed the snapshot to the registry can report it a
+        # second after the local image; sweep twice so a run leaves none.
+        for attempt in range(2):
+            req = urllib.request.Request(API_URL + "/api/v1/snapshots",
+                                         headers={"X-Sandrpod-Token": KEY})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                snapshots = json.loads(r.read() or b"{}").get("snapshots") or []
+            pending = [s for s in snapshots
+                       if s.get("source") == routing or s.get("image") == "cli-e2e-snap:test"]
+            if not pending:
+                break
+            for s in pending:
+                q = urllib.parse.quote(s.get("image", ""), safe="")
+                d = urllib.request.Request(API_URL + "/api/v1/snapshots?image=" + q,
+                                           method="DELETE", headers={"X-Sandrpod-Token": KEY})
+                try:
+                    with urllib.request.urlopen(d, timeout=30):
+                        removed += 1
+                except Exception:
+                    pass
+            time.sleep(1)
         return removed
     check_fn("snapshot images cleanup", cleanup_snapshots)
 
