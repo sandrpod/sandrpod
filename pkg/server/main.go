@@ -967,6 +967,22 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
+				if reason := validateSandboxName(req.Name); reason != "" {
+					http.Error(w, reason, http.StatusBadRequest)
+					return
+				}
+				// This pinned-create path predates tenant-scoped names and used
+				// to keep the display name as the routing key. That made a name
+				// collision across workspaces possible here even though the
+				// scheduled path had already separated them.
+				displayName := req.Name
+				owner := sandboxOwner(who)
+				if _, ok := sandboxStore.GetByName(owner, displayName); ok {
+					http.Error(w, fmt.Sprintf("sandbox name %q is already taken in this workspace", displayName), http.StatusConflict)
+					return
+				}
+				req.DisplayName = displayName
+				req.Name = podpkg.NewRoutingID()
 				// A policy on a worker that cannot enforce it would produce a
 				// sandbox the records call walled and that runs unwalled.
 				if req.Network != nil {
@@ -1021,6 +1037,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				sandbox := &podpkg.SandboxInfo{
 					ID:           poderResp.ID,
 					Name:         req.Name,
+					DisplayName:  displayName,
 					Region:       req.Region,
 					ProviderType: providerType,
 					InstanceType: req.InstanceType,
@@ -1031,7 +1048,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					// Owner scopes access to the creating Identity; without it the
 					// record is world-visible to every authenticated token (see
 					// the agent-connect path). This route is adminOnly.
-					Owner:        IdentityFrom(r).Name,
+					Owner:        owner,
 					Network:      req.Network,
 					Arch:         poderArch,
 					OS:           poderOS,
@@ -1039,7 +1056,13 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					CreatedAt:    time.Now(),
 					LastActivity: time.Now(),
 				}
-				sandboxStore.Add(sandbox)
+				if err := sandboxStore.Add(sandbox); err != nil {
+					// The container exists on the poder; a failed record would
+					// leave it unaddressed. Surface it rather than answering 201.
+					log.Printf("pinned create %s: store.Add: %v", req.Name, err)
+					http.Error(w, fmt.Sprintf("sandbox created but not recorded: %v", err), http.StatusInternalServerError)
+					return
+				}
 				poderStore.UpdateUsage(pID, func(u *podpkg.PoderUsage) { u.Containers++ })
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusCreated)
