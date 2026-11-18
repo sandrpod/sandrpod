@@ -105,6 +105,9 @@ E2B SDK 在**发送请求之前**就在客户端校验密钥：必须是 `e2b_<h
   `SANDRPOD_E2B_PRIVATE_PORTS=1` 可要求所有端口都带 API key；envd、代码解释器和带
   签名的文件 URL 两种情况都照常鉴权。匿名公共端口流量按客户端 IP + 沙箱限速
   （默认 50 请求/秒，突发 100）；`SANDRPOD_E2B_ANON_RATE` 可调整速率，`0` 关闭。
+- `autoPause` 会被接受：闲置超时后停止沙箱并保留 `/workspace`。进程内存不会被保留，
+  因此 `autoPauseMemory=true` 会明确拒绝，而不是悄悄降级。`diskSizeMB` 报告为 2048；
+  toolbox 不可用时 `get_metrics` 回退到这个声明值。
 - 逐端点的状态表在
   [E2B_COMPAT.md](https://github.com/sandrpod/sandrpod/blob/main/docs/E2B_COMPAT.md)。
 

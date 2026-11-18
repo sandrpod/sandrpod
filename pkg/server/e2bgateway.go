@@ -210,7 +210,7 @@ func newE2BGateway(domain string, d e2bDeps) http.Handler {
 func (d e2bDeps) resolveSingleSandbox(ident string) string {
 	var match string
 	for _, sb := range d.sandboxes.List() {
-		if ident != "" && sb.Owner != "" && sb.Owner != ident {
+		if ident != "" && sb.Owner != ident {
 			continue
 		}
 		if !strings.HasPrefix(sb.Name, "e2b") {
@@ -235,7 +235,7 @@ func (d e2bDeps) authorizeSandbox(ident, sandbox string) bool {
 	if !ok {
 		return true
 	}
-	return ident == "" || sb.Owner == "" || sb.Owner == ident
+	return ident == "" || sb.Owner == ident
 }
 
 // e2bCodeBackend implements the stateful run_code surface by proxying to the
@@ -615,6 +615,9 @@ func e2bSubstrate() (provider, region, instanceType string) {
 }
 
 func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompat.NewSandbox) (e2bcompat.SandboxDetail, error) {
+	if req.AutoPauseMemory != nil && *req.AutoPauseMemory {
+		return e2bcompat.SandboxDetail{}, errors.New("autoPauseMemory is not supported: a stopped sandbox preserves /workspace but not process memory")
+	}
 	name := "e2b" + randToken(8)
 	provider, region, instanceType := e2bSubstrate()
 	create := &podpkg.CreateSandboxRequest{
@@ -630,8 +633,15 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 		// E2B has no per-create CPU/memory fields (the template defines them);
 		// this deployment reports 2 vCPU/512 MiB in SandboxDetail, so enforce
 		// the same values instead of silently running unbounded containers.
-		CPUCores: 2,
-		MemoryMB: 512,
+		CPUCores:  2,
+		MemoryMB:  512,
+		StorageMB: int64(e2bcompat.DefaultDiskSizeMB),
+		Labels: map[string]string{
+			// Our idle reaper stops a sandbox and keeps /workspace. That is the
+			// safe half of autoPause; memory is not preserved, so the label
+			// records the client's intent without pretending otherwise.
+			"e2b/auto_pause": strconv.FormatBool(req.AutoPause),
+		},
 	}
 	// An E2B templateID that looks like a container image is used directly.
 	if strings.ContainsAny(req.TemplateID, "/:") {
@@ -708,7 +718,7 @@ func (b *e2bSandboxBackend) ListSandboxes(ident string, filter map[string]string
 		}
 		out = append(out, e2bcompat.ListedSandbox{
 			TemplateID: e2bTemplateFromLabels(sb.Labels), SandboxID: sb.Name, StartedAt: sb.CreatedAt,
-			CPUCount: 2, MemoryMB: 512, State: stateFor(sb),
+			CPUCount: 2, MemoryMB: 512, DiskSizeMB: e2bcompat.DefaultDiskSizeMB, State: stateFor(sb),
 			EnvdVersion: e2bcompat.DefaultEnvdVersion, Metadata: meta,
 		})
 	}
@@ -785,7 +795,19 @@ func (b *e2bSandboxBackend) GetMetrics(ident, sandboxID string) ([]e2bcompat.San
 		DiskUsed   uint64  `json:"disk_used"`
 	}
 	if err := b.d.toolboxJSON(sandboxID, http.MethodGet, "metrics", nil, nil, &m); err != nil {
-		return []e2bcompat.SandboxMetric{}, true // best-effort: empty on error
+		// E2B's get_metrics returns a sample, not an error, while the daemon is
+		// starting. Report the declared size rather than an empty array: the SDK
+		// callers use it to size work, and an empty list looks like "no limit".
+		m.CPUCount, m.MemTotal, m.DiskTotal = 2, 512<<20, 2048<<20
+	}
+	if m.CPUCount == 0 {
+		m.CPUCount = 2
+	}
+	if m.MemTotal == 0 {
+		m.MemTotal = 512 << 20
+	}
+	if m.DiskTotal == 0 {
+		m.DiskTotal = uint64(e2bcompat.DefaultDiskSizeMB) << 20
 	}
 	now := time.Now().UTC()
 	return []e2bcompat.SandboxMetric{{
@@ -797,13 +819,13 @@ func (b *e2bSandboxBackend) GetMetrics(ident, sandboxID string) ([]e2bcompat.San
 }
 
 func (b *e2bSandboxBackend) owns(ident string, sb *podpkg.SandboxInfo) bool {
-	return ident == "" || sb.Owner == "" || sb.Owner == ident
+	return ident == "" || sb.Owner == ident
 }
 
 func (b *e2bSandboxBackend) detailFromInfo(sb *podpkg.SandboxInfo) e2bcompat.SandboxDetail {
 	return e2bcompat.SandboxDetail{
 		TemplateID: e2bTemplateFromLabels(sb.Labels), SandboxID: sb.Name, EnvdVersion: e2bcompat.DefaultEnvdVersion,
-		StartedAt: sb.CreatedAt, CPUCount: 2, MemoryMB: 512, State: stateFor(sb),
+		StartedAt: sb.CreatedAt, CPUCount: 2, MemoryMB: 512, DiskSizeMB: e2bcompat.DefaultDiskSizeMB, State: stateFor(sb),
 		Metadata: e2bMetaFromLabels(sb.Labels),
 		// The SDK authenticates envd calls with this token (Authorization:
 		// Bearer). Return the sandbox's envd token so it round-trips and the

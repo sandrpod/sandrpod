@@ -5,20 +5,20 @@ import (
 	"testing"
 )
 
-func TestTenantNetworkNameIsStableAndTenantScoped(t *testing.T) {
-	a := tenantNetworkName("workspace-a")
-	b := tenantNetworkName("workspace-b")
-	if a != tenantNetworkName("workspace-a") {
-		t.Fatal("tenant network name must be deterministic")
+func TestSandboxNetworkNameIsStableAndSandboxScoped(t *testing.T) {
+	a := sandboxNetworkName("sb-aaaaaaaaaaaaaaaa")
+	b := sandboxNetworkName("sb-bbbbbbbbbbbbbbbb")
+	if a != sandboxNetworkName("sb-aaaaaaaaaaaaaaaa") {
+		t.Fatal("sandbox network name must be deterministic")
 	}
 	if a == b {
-		t.Fatal("different tenants must get different networks")
+		t.Fatal("different sandboxes must get different networks")
 	}
-	if !strings.HasPrefix(a, "sandrpod-t-") || len(a) > 63 {
+	if !strings.HasPrefix(a, "sandrpod-s-") || len(a) > 63 {
 		t.Fatalf("invalid Docker network name %q", a)
 	}
-	if strings.Contains(a, "workspace-a") {
-		t.Fatal("tenant id must not be exposed in the network name")
+	if strings.Contains(a, "sb-aaaaaaaaaaaaaaaa") {
+		t.Fatal("sandbox id must not be exposed in the network name")
 	}
 }
 

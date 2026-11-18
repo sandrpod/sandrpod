@@ -103,6 +103,8 @@ func runSandboxCreate(
 	admission Admission,
 	requester Identity,
 ) (*podpkg.SandboxInfo, string, error) {
+	req.ApplyResourceDefaults()
+
 	failBoth := func(jobID, msg string) {
 		notifyEvent("sandbox.error", map[string]any{
 			"name": displayNameOf(req), "routing_id": req.Name, "provider": req.ProviderType, "error": msg,
@@ -221,8 +223,12 @@ func runSandboxCreate(
 			s.OS = sbOS
 			s.OSVersion = sbOSVersion
 			s.TTLSeconds = req.TTLSeconds
+			if req.Labels != nil {
+				s.Labels = req.Labels
+			}
 			s.CPUCores = req.CPUCores
 			s.MemoryMB = req.MemoryMB
+			s.StorageMB = req.StorageMB
 			// Same-name recreate: the record must describe the image it will run,
 			// or the console loses the desktop button on a sandbox it just made.
 			if req.ImageID != "" {
@@ -255,6 +261,8 @@ func runSandboxCreate(
 			TTLSeconds:   req.TTLSeconds,
 			CPUCores:     req.CPUCores,
 			MemoryMB:     req.MemoryMB,
+			StorageMB:    req.StorageMB,
+			Labels:       req.Labels,
 			Network:      req.Network,
 			PoderID:      schedJob.PoderID,
 			ProxyURL:     "tunnel://" + schedJob.PoderID,

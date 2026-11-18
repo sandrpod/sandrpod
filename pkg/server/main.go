@@ -971,6 +971,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					http.Error(w, reason, http.StatusBadRequest)
 					return
 				}
+				req.ApplyResourceDefaults()
 				// This pinned-create path predates tenant-scoped names and used
 				// to keep the display name as the routing key. That made a name
 				// collision across workspaces possible here even though the
@@ -1049,6 +1050,8 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					// record is world-visible to every authenticated token (see
 					// the agent-connect path). This route is adminOnly.
 					Owner:        owner,
+					StorageMB:    req.StorageMB,
+					Labels:       req.Labels,
 					Network:      req.Network,
 					Arch:         poderArch,
 					OS:           poderOS,
@@ -1414,6 +1417,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				http.Error(w, reason, http.StatusBadRequest)
 				return
 			}
+			req.ApplyResourceDefaults()
 			// The user's name is tenant-scoped; everything below the API uses the
 			// generated routing key so two workspaces can both have "mysandbox".
 			// A client-supplied display_name/routing_id is overwritten here.
@@ -1553,6 +1557,8 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					TTLSeconds:   req.TTLSeconds,
 					CPUCores:     req.CPUCores,
 					MemoryMB:     req.MemoryMB,
+					StorageMB:    req.StorageMB,
+					Labels:       req.Labels,
 					Network:      req.Network,
 					CreatedAt:    time.Now(),
 					LastActivity: time.Now(),

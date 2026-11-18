@@ -184,19 +184,25 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	// the container exists so a sandbox never starts on a network it should
 	// not have had; if it fails, the create fails (see egress.go).
 	containerNetwork := p.networkName
-	// Multi-tenant isolation: a shared bridge lets any sandbox reach every other
-	// sandbox's toolbox on :8080 (the toolbox has no auth by default). Put each
-	// tenant's containers on its own bridge; the poder joins it so the tunnel
-	// proxy still reaches them, while another tenant's containers are on a
-	// different bridge and cannot be addressed. Same-tenant sandboxes remain
-	// mutually reachable (one trust boundary); an egress policy keeps its
-	// existing per-pod network below.
-	if req.Network == nil && req.Tenant != "" {
-		tenantNet, err := p.ensureTenantNetwork(ctx, req.Tenant)
+	// Per-sandbox isolation: a shared bridge lets any sandbox reach every other
+	// sandbox's toolbox on :8080 (the toolbox has no auth by default), including
+	// sandboxes in the same workspace. Put each container on its own bridge; the
+	// poder joins that bridge so the tunnel proxy still reaches it, while no
+	// other sandbox shares the segment. An egress policy keeps its existing
+	// per-pod network below.
+	if req.Network == nil {
+		sandboxNet, err := p.ensureSandboxNetwork(ctx, req.Name)
 		if err != nil {
 			return nil, err
 		}
-		containerNetwork = tenantNet
+		containerNetwork = sandboxNet
+		// A failed create must not leave an unused bridge behind: each one
+		// consumes an address pool slot even with no container on it.
+		defer func() {
+			if retErr != nil {
+				p.removeSandboxNetwork(ctx, req.Name)
+			}
+		}()
 	}
 	// Caller-supplied env first, then the toolbox's own: on a duplicate key the
 	// later entry wins, and internal wiring (API URL, sandbox name) must not be
@@ -281,12 +287,19 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 		hostConfig.NetworkMode = container.NetworkMode(containerNetwork)
 	}
 	// Per-sandbox resource limits (noisy-neighbor isolation). NanoCPUs is CPU
-	// cores × 1e9; Memory is in bytes. Both are ignored by Docker when zero.
+	// cores × 1e9; Memory is in bytes. A zero from an older caller means
+	// "unset", not "unlimited": Docker would otherwise let one sandbox take the
+	// whole host. The server fills these in; this is the belt-and-braces check
+	// for a direct poder create.
 	if req.CPUCores > 0 {
 		hostConfig.NanoCPUs = int64(req.CPUCores * 1e9)
+	} else {
+		hostConfig.NanoCPUs = 1e9
 	}
 	if req.MemoryMB > 0 {
 		hostConfig.Memory = req.MemoryMB * 1024 * 1024
+	} else {
+		hostConfig.Memory = 1024 * 1024 * 1024
 	}
 	// A sandbox is untrusted code. Cap process count even when the caller did
 	// not ask for a resource limit: a fork bomb otherwise takes the whole host
@@ -389,11 +402,15 @@ func (p *DockerPoder) DeletePod(ctx context.Context, podID string) error {
 		egressKey = strings.TrimPrefix(info.Name, "/")
 	}
 
-	// The workspace volume is named after the sandbox, and the sandbox name
-	// lives on the container label — resolve it before the container is gone.
-	wsVol := ""
+	// The workspace volume and the per-sandbox bridge are named after the
+	// sandbox, and the sandbox name lives on the container label — resolve both
+	// before the container is gone.
+	wsVol, sandboxForNet := "", ""
 	if info, err := p.dockerClient.ContainerInspect(ctx, podID); err == nil {
-		wsVol = WorkspaceVolumeName(info.Config.Labels["sandrpod/sandbox-name"])
+		if name := info.Config.Labels["sandrpod/sandbox-name"]; name != "" {
+			wsVol = WorkspaceVolumeName(name)
+			sandboxForNet = name
+		}
 	}
 
 	// Stop the container gracefully
@@ -409,6 +426,9 @@ func (p *DockerPoder) DeletePod(ctx context.Context, podID string) error {
 	}
 
 	p.teardownEgress(ctx, egressKey)
+	if sandboxForNet != "" {
+		p.removeSandboxNetwork(ctx, sandboxForNet)
+	}
 	// An explicit delete removes the data too: a kept volume with no sandbox is
 	// exactly the leak the cloud sweep exists to prevent, one layer down.
 	if wsVol != "" && wsVol != WorkspaceVolumeName("") {
@@ -640,18 +660,18 @@ func (p *DockerPoder) copyVolume(ctx context.Context, from, to string) error {
 	return nil
 }
 
-// tenantNetworkName maps a tenant to a stable, short Docker network name. The
-// tenant id itself is not exposed in the network name.
-func tenantNetworkName(tenant string) string {
-	sum := sha256.Sum256([]byte(tenant))
-	return "sandrpod-t-" + hex.EncodeToString(sum[:6])
+// sandboxNetworkName maps a sandbox to a stable, short Docker network name. The
+// sandbox id itself is not exposed in the network name.
+func sandboxNetworkName(sandbox string) string {
+	sum := sha256.Sum256([]byte(sandbox))
+	return "sandrpod-s-" + hex.EncodeToString(sum[:6])
 }
 
-// ensureTenantNetwork creates (or finds) the tenant's private bridge and makes
+// ensureSandboxNetwork creates (or finds) the sandbox's private bridge and makes
 // sure this poder container is attached to it. A poder running as a host binary
 // (cloud VM) needs no self-attach: the host routes to every bridge.
-func (p *DockerPoder) ensureTenantNetwork(ctx context.Context, tenant string) (string, error) {
-	name := tenantNetworkName(tenant)
+func (p *DockerPoder) ensureSandboxNetwork(ctx context.Context, sandbox string) (string, error) {
+	name := sandboxNetworkName(sandbox)
 	_, err := p.dockerClient.NetworkInspect(ctx, name, network.InspectOptions{})
 	if err != nil {
 		_, createErr := p.dockerClient.NetworkCreate(ctx, name, network.CreateOptions{
@@ -661,7 +681,7 @@ func (p *DockerPoder) ensureTenantNetwork(ctx context.Context, tenant string) (s
 		if createErr != nil {
 			// Another create raced us; if the network exists now, use it.
 			if _, inspectErr := p.dockerClient.NetworkInspect(ctx, name, network.InspectOptions{}); inspectErr != nil {
-				return "", fmt.Errorf("create tenant network %s: %w", name, createErr)
+				return "", fmt.Errorf("create sandbox network %s: %w", name, createErr)
 			}
 		}
 	}
@@ -680,18 +700,33 @@ func (p *DockerPoder) attachSelf(ctx context.Context, networkName string) error 
 	}
 	host, err := os.Hostname()
 	if err != nil {
-		return fmt.Errorf("tenant network %s: resolve self container: %w", networkName, err)
+		return fmt.Errorf("sandbox network %s: resolve self container: %w", networkName, err)
 	}
 	if err := p.dockerClient.NetworkConnect(ctx, networkName, host, nil); err != nil {
 		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "already connected") {
 			return nil
 		}
-		return fmt.Errorf("tenant network %s: attach poder %s: %w", networkName, host, err)
+		return fmt.Errorf("sandbox network %s: attach poder %s: %w", networkName, host, err)
 	}
 	return nil
 }
 
-// reconnectManagedNetworks re-attaches this poder to every tenant network after
+// removeSandboxNetwork detaches this poder and removes the bridge. Docker
+// refuses to remove a network that still has an endpoint, and a leaked bridge
+// consumes one of the daemon's finite address pools.
+func (p *DockerPoder) removeSandboxNetwork(ctx context.Context, sandbox string) {
+	name := sandboxNetworkName(sandbox)
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		if host, herr := os.Hostname(); herr == nil {
+			_ = p.dockerClient.NetworkDisconnect(ctx, name, host, true)
+		}
+	}
+	if err := p.dockerClient.NetworkRemove(ctx, name); err != nil && !os.IsNotExist(err) {
+		log.Printf("poder: remove sandbox network %s: %v", name, err)
+	}
+}
+
+// reconnectManagedNetworks re-attaches this poder to every managed network after
 // a container restart. Without it, existing sandboxes would become unreachable
 // because the poder's extra network attachments live in the container's network
 // namespace, not in the Docker volume.
@@ -703,9 +738,32 @@ func (p *DockerPoder) reconnectManagedNetworks(ctx context.Context) {
 		log.Printf("poder: list tenant networks: %v", err)
 		return
 	}
+	host := ""
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		host, _ = os.Hostname()
+	}
 	for _, n := range nets {
+		// Drop a bridge that survived a crash but has no sandbox endpoint left.
+		// Each one holds an address-pool slot, and per-sandbox bridges make
+		// leaks expensive: the daemon runs out of subnets, not memory.
+		other := false
+		for id := range n.Containers {
+			if host == "" || !(strings.HasPrefix(id, host) || strings.HasPrefix(host, id)) {
+				other = true
+				break
+			}
+		}
+		if !other {
+			if host != "" {
+				_ = p.dockerClient.NetworkDisconnect(ctx, n.ID, host, true)
+			}
+			if err := p.dockerClient.NetworkRemove(ctx, n.ID); err != nil && !os.IsNotExist(err) {
+				log.Printf("poder: remove orphan network %s: %v", n.Name, err)
+			}
+			continue
+		}
 		if err := p.attachSelf(ctx, n.ID); err != nil {
-			log.Printf("poder: reconnect tenant network %s: %v", n.Name, err)
+			log.Printf("poder: reconnect managed network %s: %v", n.Name, err)
 		}
 	}
 }
@@ -808,7 +866,8 @@ func (p *DockerPoder) GetPod(ctx context.Context, podID string) (*PodInfo, error
 			if net, ok := info.NetworkSettings.Networks[p.networkName]; ok {
 				pod.IP = net.IPAddress
 			}
-		} else {
+		}
+		if pod.IP == "" {
 			for _, net := range info.NetworkSettings.Networks {
 				if net.IPAddress != "" {
 					pod.IP = net.IPAddress

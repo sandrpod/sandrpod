@@ -356,3 +356,17 @@ func TestNewRoutingID(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+func TestApplyResourceDefaults(t *testing.T) {
+	var req CreateSandboxRequest
+	req.ApplyResourceDefaults()
+	if req.CPUCores != DefaultCPUCores || req.MemoryMB != DefaultMemoryMB || req.StorageMB != DefaultStorageMB {
+		t.Fatalf("defaults = %+v", req)
+	}
+
+	req = CreateSandboxRequest{CPUCores: 4, MemoryMB: 8192, StorageMB: 10240}
+	req.ApplyResourceDefaults()
+	if req.CPUCores != 4 || req.MemoryMB != 8192 || req.StorageMB != 10240 {
+		t.Fatalf("explicit values were overwritten: %+v", req)
+	}
+}

@@ -16,7 +16,7 @@ import (
 // to decide the outcome is the sandbox's state.
 func storeWith(name string, state podpkg.State) (podpkg.SandboxRepository, *tunnel.TunnelStore) {
 	ss := store.NewMemoryStores().Sandboxes
-	_ = ss.Add(&podpkg.SandboxInfo{Name: name, PoderID: "P", State: state})
+	_ = ss.Add(&podpkg.SandboxInfo{Name: name, Owner: "owner", PoderID: "P", State: state})
 	ts := tunnel.NewTunnelStore()
 	ts.Set("P", nil) // presence is what sandboxTunnel checks; it is never dialled here
 	return ss, ts
@@ -33,7 +33,7 @@ func TestSandboxTunnel_RefusesWhenNotRunning(t *testing.T) {
 	} {
 		ss, ts := storeWith("sb", state)
 		rec := httptest.NewRecorder()
-		_, _, ok := sandboxTunnel("sb", httptest.NewRequest("POST", "/x", nil), ss,
+		_, _, ok := sandboxTunnel("sb", WithIdentity(httptest.NewRequest("POST", "/x", nil), Identity{Name: "owner"}), ss,
 			ts, tunnel.NewDirectTunnelStore(), stubOwners{}, "", rec)
 
 		if ok {
@@ -51,7 +51,7 @@ func TestSandboxTunnel_RefusesWhenNotRunning(t *testing.T) {
 func TestSandboxTunnel_AllowsRunning(t *testing.T) {
 	ss, ts := storeWith("sb", podpkg.StateRunning)
 	rec := httptest.NewRecorder()
-	if _, _, ok := sandboxTunnel("sb", httptest.NewRequest("POST", "/x", nil), ss,
+	if _, _, ok := sandboxTunnel("sb", WithIdentity(httptest.NewRequest("POST", "/x", nil), Identity{Name: "owner"}), ss,
 		ts, tunnel.NewDirectTunnelStore(), stubOwners{}, "", rec); !ok {
 		t.Fatalf("a RUNNING sandbox was refused: %d %s", rec.Code, rec.Body.String())
 	}
@@ -63,7 +63,7 @@ func TestSandboxTunnel_AllowsRunning(t *testing.T) {
 func TestSandboxPoderTunnel_AllowsStopped(t *testing.T) {
 	ss, ts := storeWith("sb", podpkg.StateStopped)
 	rec := httptest.NewRecorder()
-	if _, _, ok := sandboxPoderTunnel("sb", httptest.NewRequest("GET", "/x", nil), ss,
+	if _, _, ok := sandboxPoderTunnel("sb", WithIdentity(httptest.NewRequest("GET", "/x", nil), Identity{Name: "owner"}), ss,
 		ts, tunnel.NewDirectTunnelStore(), stubOwners{}, "", rec); !ok {
 		t.Fatalf("poder-level access to a STOPPED sandbox was refused: %d %s",
 			rec.Code, rec.Body.String())

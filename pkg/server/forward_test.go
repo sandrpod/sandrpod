@@ -25,7 +25,7 @@ func (s stubOwners) NodeFor(string) (string, bool) { return s.node, s.ok }
 
 func newSandbox(name string) podpkg.SandboxRepository {
 	ss := store.NewMemoryStores().Sandboxes
-	_ = ss.Add(&podpkg.SandboxInfo{Name: name, PoderID: "P", State: podpkg.StateRunning})
+	_ = ss.Add(&podpkg.SandboxInfo{Name: name, Owner: "owner", PoderID: "P", State: podpkg.StateRunning})
 	return ss
 }
 
@@ -42,7 +42,7 @@ func TestSandboxTunnel_ForwardsToOwnerNode(t *testing.T) {
 	defer peer.Close()
 
 	ss := newSandbox("sb")
-	req := httptest.NewRequest("POST", "/api/v1/sandboxes/execute?sandbox=sb", nil)
+	req := WithIdentity(httptest.NewRequest("POST", "/api/v1/sandboxes/execute?sandbox=sb", nil), Identity{Name: "owner"})
 	rec := httptest.NewRecorder()
 
 	_, _, ok := sandboxTunnel("sb", req, ss,
@@ -63,7 +63,7 @@ func TestSandboxTunnel_ForwardsToOwnerNode(t *testing.T) {
 // TestSandboxTunnel_LoopGuard: a request already forwarded once is not forwarded
 // again (a stale owner map degrades to a clean 503, not a loop).
 func TestSandboxTunnel_LoopGuard(t *testing.T) {
-	req := httptest.NewRequest("POST", "/x", nil)
+	req := WithIdentity(httptest.NewRequest("POST", "/x", nil), Identity{Name: "owner"})
 	req.Header.Set(forwardedHeader, "1")
 	rec := httptest.NewRecorder()
 
@@ -79,7 +79,7 @@ func TestSandboxTunnel_LoopGuard(t *testing.T) {
 // TestSandboxTunnel_NoForwardToSelf: the owner map names THIS node but the
 // tunnel is gone locally → 503, never forward to self.
 func TestSandboxTunnel_NoForwardToSelf(t *testing.T) {
-	req := httptest.NewRequest("POST", "/x", nil)
+	req := WithIdentity(httptest.NewRequest("POST", "/x", nil), Identity{Name: "owner"})
 	rec := httptest.NewRecorder()
 
 	_, _, ok := sandboxTunnel("sb", req, newSandbox("sb"),
@@ -94,7 +94,7 @@ func TestSandboxTunnel_NoForwardToSelf(t *testing.T) {
 // TestSandboxTunnel_SingleInstanceNoForward: with no node URL configured
 // (single instance), a missing local tunnel is a plain 503 — no owner lookup.
 func TestSandboxTunnel_SingleInstanceNoForward(t *testing.T) {
-	req := httptest.NewRequest("POST", "/x", nil)
+	req := WithIdentity(httptest.NewRequest("POST", "/x", nil), Identity{Name: "owner"})
 	rec := httptest.NewRecorder()
 
 	_, _, ok := sandboxTunnel("sb", req, newSandbox("sb"),

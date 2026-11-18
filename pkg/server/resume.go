@@ -155,6 +155,7 @@ func resumeOnce(d resumeDeps) int {
 				sb.Desktop = req.Desktop || strings.Contains(strings.ToLower(req.ImageID), "desktop")
 				sb.CPUCores = req.CPUCores
 				sb.MemoryMB = req.MemoryMB
+				sb.StorageMB = req.StorageMB
 				sb.TTLSeconds = req.TTLSeconds
 				sb.Region = req.Region
 				sb.ProviderType = req.ProviderType

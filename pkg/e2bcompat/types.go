@@ -137,3 +137,8 @@ const DefaultEnvdVersion = "0.5.2"
 
 // DefaultTimeoutSeconds mirrors E2B's create default.
 const DefaultTimeoutSeconds int32 = 15
+
+// DefaultDiskSizeMB is the disk size this deployment reports for a sandbox.
+// Docker volumes have no portable per-volume quota, so it is a declared size
+// (matching the plan's storage reservation), not a filesystem limit.
+const DefaultDiskSizeMB int32 = 2048

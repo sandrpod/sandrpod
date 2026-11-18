@@ -343,15 +343,17 @@ func WithIdentity(r *http.Request, id Identity) *http.Request {
 }
 
 // canAccessSandbox reports whether an Identity may see/manage a sandbox.
-// Admins see everything; ownerless records (created before multi-token auth,
-// or with auth disabled) stay visible to everyone for upgrade smoothness.
+// Admins see everything; an ownerless record (created before multi-token auth)
+// is legacy state with no tenant to scope it, so only an admin may touch it.
+// Treating it as world-readable let any issued key reach a machine it never
+// created.
 func canAccessSandbox(id Identity, sb *podpkg.SandboxInfo) bool {
-	return id.IsAdmin() || sb.Owner == "" || sb.Owner == id.Name
+	return id.IsAdmin() || (id.Name != "" && sb.Owner == id.Name)
 }
 
 // canAccessJob is the job-record equivalent of canAccessSandbox.
 func canAccessJob(id Identity, j *podpkg.Job) bool {
-	return id.IsAdmin() || j.Owner == "" || j.Owner == id.Name
+	return id.IsAdmin() || (id.Name != "" && j.Owner == id.Name)
 }
 
 // resolveSandboxRef maps what a URL or query says — a routing key, or a display

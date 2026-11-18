@@ -117,6 +117,10 @@ Two failure modes are worth knowing before they cost you an afternoon:
   either way. Anonymous public-port traffic is rate-limited per client IP and
   sandbox (50 req/s, burst 100); `SANDRPOD_E2B_ANON_RATE` changes the rate and
   `0` disables the limit.
+- `autoPause` is accepted: the idle timeout stops the sandbox and keeps
+  `/workspace`. Process memory is not preserved, so `autoPauseMemory=true` is
+  refused rather than silently degraded. `diskSizeMB` is reported as 2048, and
+  `get_metrics` falls back to that declared size if the toolbox is unavailable.
 - The full endpoint-by-endpoint status table is in
   [E2B_COMPAT.md](https://github.com/sandrpod/sandrpod/blob/main/docs/E2B_COMPAT.md).
 

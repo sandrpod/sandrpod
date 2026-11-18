@@ -154,13 +154,13 @@ configured purely by env (`SANDRPOD_E2B_DOMAIN` et al). Full list in
 **A Poder listens on no port at all.** Everything goes through the tunnel it
 dialed out.
 
-When a create request carries a tenant (the hosted/cloud build always does),
-the poder creates or reuses a private `sandrpod-t-<hash>` bridge for that
-tenant and attaches itself to it before starting the container. Sandboxes from
-different tenants are therefore on different bridges and cannot reach each
-other's toolbox; the poder re-attaches to every managed bridge after a restart.
-A container with an egress policy keeps its existing per-pod internal network.
-The `-network` flag applies to unscoped/self-hosted sandboxes.
+Every non-egress sandbox gets its own private `sandrpod-s-<hash>` bridge; the
+poder attaches itself to that bridge so the tunnel still reaches the toolbox,
+then removes the bridge with the sandbox. Sandboxes in the same workspace are
+therefore not on a shared segment and cannot reach each other's toolbox; the
+poder re-attaches to every managed bridge after a restart. A container with an
+egress policy keeps its existing per-pod internal network. The `-network` flag
+is the worker's management network, not the sandbox data path.
 
 ```bash
 docker run -d --name sandrpod-poder \

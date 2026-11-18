@@ -5,8 +5,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sandrpod/sandrpod/pkg/e2bcompat"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/store"
+	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
 
 // TestAnonymousThrottleKeysByIPAndSandbox makes sure one sandbox's preview
@@ -77,5 +79,28 @@ func TestE2BAuthenticator_EnvdToken(t *testing.T) {
 				t.Errorf("auth(%q) = (%q, %v), want (%q, %v)", tc.key, id, ok, tc.wantID, tc.wantOK)
 			}
 		})
+	}
+}
+
+func TestE2BRejectsAutoPauseMemory(t *testing.T) {
+	yes := true
+	b := &e2bSandboxBackend{}
+	if _, err := b.CreateSandbox("u", false, e2bcompat.NewSandbox{AutoPauseMemory: &yes}); err == nil {
+		t.Fatal("autoPauseMemory=true must be refused: process memory is not preserved")
+	}
+}
+
+func TestE2BMetricsFallBackToDeclaredSize(t *testing.T) {
+	stores := store.NewMemoryStores()
+	_ = stores.Sandboxes.Add(&podpkg.SandboxInfo{
+		Name: "sb1", Owner: "u", PoderID: "offline", State: podpkg.StateRunning,
+	})
+	b := &e2bSandboxBackend{d: e2bDeps{sandboxes: stores.Sandboxes, tunnelStore: tunnel.NewTunnelStore()}}
+	metrics, ok := b.GetMetrics("u", "sb1")
+	if !ok || len(metrics) != 1 {
+		t.Fatalf("metrics = %v ok=%v", metrics, ok)
+	}
+	if metrics[0].CPUCount != 2 || metrics[0].MemTotal != 512<<20 || metrics[0].DiskTotal != uint64(e2bcompat.DefaultDiskSizeMB)<<20 {
+		t.Fatalf("unexpected static metrics: %+v", metrics[0])
 	}
 }

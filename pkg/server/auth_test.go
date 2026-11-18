@@ -120,8 +120,11 @@ func TestCanAccessSandbox(t *testing.T) {
 	if canAccessSandbox(bob, owned) {
 		t.Error("other users must not access it")
 	}
-	if !canAccessSandbox(bob, legacy) {
-		t.Error("ownerless legacy records stay visible to all")
+	if canAccessSandbox(bob, legacy) {
+		t.Error("ownerless legacy records must not be visible to an arbitrary tenant")
+	}
+	if !canAccessSandbox(admin, legacy) {
+		t.Error("an admin must still be able to clean up ownerless records")
 	}
 }
 

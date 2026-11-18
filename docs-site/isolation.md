@@ -32,7 +32,17 @@ That matters because a join token ships to a machine you may not fully trust —
 a customer's VM, a contractor's laptop. A compromised worker can run sandboxes;
 it cannot see the rest of your deployment.
 
-## 3. Network egress is a policy, not a hope
+## 3. Sandboxes do not share a bridge
+
+Every non-egress Docker sandbox gets its own private bridge
+(`sandrpod-s-<hash>`), and the worker attaches itself to that bridge so the
+tunnel can still reach the toolbox. Two sandboxes in the same workspace are
+therefore not on a shared segment and cannot address each other's toolbox,
+even though they trust the same tenant. The bridge is removed with the
+sandbox; a worker re-attaches to every managed bridge after a restart. An
+egress sandbox gets a per-sandbox internal network instead (section 4).
+
+## 4. Network egress is a policy, not a hope
 
 A sandbox can be created with an allow-list. On a Docker worker that is enforced
 structurally: a per-sandbox internal network with no route out, plus an egress
@@ -47,7 +57,7 @@ The policy is applied **when the container is created**. Setting it on a running
 sandbox records it for the next creation; it cannot retrofit a network. Details
 and the trade-offs are in [Egress policy](/egress).
 
-## 4. The permission gate (agent and employee-PC mode)
+## 5. The permission gate (agent and employee-PC mode)
 
 In agent mode the sandbox is a real user's machine, so the question is different:
 not "what can this container reach" but "what may this agent do to my files".
@@ -74,9 +84,9 @@ Refusals are features. Each of these is deliberate:
 
 - **Not a VM boundary.** Two sandboxes on one worker share a kernel. If you need
   hardware isolation, give a workspace its own worker (or its own cloud VM).
-- **Not a resource guarantee.** `cpu_cores` and `memory_mb` are scheduler hints;
-  the container limits are Docker's, and a busy worker degrades every sandbox on
-  it.
+- **Not a resource guarantee beyond the cap.** `cpu_cores` and `memory_mb`
+  become Docker limits (1 vCPU and 1 GiB when omitted), so one sandbox cannot
+  take the host, but a busy worker still degrades every sandbox on it.
 - **Not protection from the worker.** The worker runs Docker: it can see every
   container it hosts. That is why the join token is scoped and short-lived, and
   why a customer's own hardware is the strongest tenancy boundary available.

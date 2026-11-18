@@ -44,14 +44,19 @@ type SandboxInfo struct {
 	// substrate's default). Kept on the record because metering and the
 	// lifecycle events have to report what was reserved, and the request is
 	// long gone by the time a sandbox is listed or reaped.
-	CPUCores    float64 `json:"cpu_cores,omitempty"`
-	MemoryMB    int64   `json:"memory_mb,omitempty"`
-	GPU         int     `json:"gpu,omitempty"`
-	PoderID     string  `json:"poder_id,omitempty"`     // owning Poder ID
-	PoderURL    string  `json:"poder_url,omitempty"`    // Poder API URL
-	ContainerID string  `json:"container_id,omitempty"` // actual container ID
-	ProxyURL    string  `json:"proxy_url,omitempty"`    // Toolbox proxy URL
-	APIURL      string  `json:"api_url,omitempty"`
+	CPUCores float64 `json:"cpu_cores,omitempty"`
+	MemoryMB int64   `json:"memory_mb,omitempty"`
+	// StorageMB is the workspace volume this sandbox reserves. It is a plan
+	// budget, not a filesystem-enforced quota: Docker volumes have no portable
+	// size limit, so the control plane accounts for it the same way it accounts
+	// for vCPU and memory and refuses a create that would exceed the plan.
+	StorageMB   int64  `json:"storage_mb,omitempty"`
+	GPU         int    `json:"gpu,omitempty"`
+	PoderID     string `json:"poder_id,omitempty"`     // owning Poder ID
+	PoderURL    string `json:"poder_url,omitempty"`    // Poder API URL
+	ContainerID string `json:"container_id,omitempty"` // actual container ID
+	ProxyURL    string `json:"proxy_url,omitempty"`    // Toolbox proxy URL
+	APIURL      string `json:"api_url,omitempty"`
 	// Runtime environment info (for AI-generated executable scripts)
 	Arch         string            `json:"arch,omitempty"`       // e.g. amd64, arm64 (inherited from Poder host)
 	OS           string            `json:"os,omitempty"`         // e.g. linux
@@ -97,6 +102,15 @@ type CreateSandboxRequest struct {
 	// pass straight through the server → poder forwarding.
 	CPUCores float64 `json:"cpu_cores,omitempty"`
 	MemoryMB int64   `json:"memory_mb,omitempty"`
+	// StorageMB is the workspace volume reservation. 0 means the deployment
+	// default; the hosted build's admission gate adds it to the workspace's
+	// plan budget. It is a reservation (Docker volumes have no portable size
+	// limit), not a promise that a container cannot write past it.
+	StorageMB int64 `json:"storage_mb,omitempty"`
+	// Labels are stored on the record and the container. They are how the
+	// gateway remembers a client's intent (E2B autoPause) and how the console's
+	// metadata filter finds a sandbox.
+	Labels map[string]string `json:"labels,omitempty"`
 	// GPU is how many GPUs the sandbox needs (0 = none). Placement requires a
 	// worker advertising the gpu capability; the container gets DeviceRequests.
 	GPU int `json:"gpu,omitempty"`
@@ -140,6 +154,32 @@ type UpdateJobStatusRequest struct {
 type ExecuteCodeRequest struct {
 	Language string `json:"language"` // language: python, node, bash
 	Code     string `json:"code"`
+}
+
+// Default resource reservations. A create that omits them used to reach Docker
+// as zero, which Docker reads as "unlimited" — one sandbox could then take the
+// whole host. The console already displayed these as the implied defaults, so
+// making them explicit keeps the record, the meter and the container agreeing.
+const (
+	DefaultCPUCores = 1
+	DefaultMemoryMB = 1024
+	// DefaultStorageMB mirrors the E2B diskSizeMB this deployment reports.
+	DefaultStorageMB = 2048
+)
+
+// ApplyResourceDefaults fills unset CPU/memory/storage reservations in place.
+// It is called at every create entry point, including the pinned-worker path
+// that does not go through the scheduler.
+func (r *CreateSandboxRequest) ApplyResourceDefaults() {
+	if r.CPUCores <= 0 {
+		r.CPUCores = DefaultCPUCores
+	}
+	if r.MemoryMB <= 0 {
+		r.MemoryMB = DefaultMemoryMB
+	}
+	if r.StorageMB <= 0 {
+		r.StorageMB = DefaultStorageMB
+	}
 }
 
 // SandboxStore is the in-memory sandbox store.
@@ -307,13 +347,13 @@ func (s *SandboxStore) ListPage(limit, offset int) []*SandboxInfo {
 	return pageSlice(list, limit, offset)
 }
 
-// ListByOwnerPage returns a tenant's page, including legacy ownerless records
-// for upgrade compatibility (they remain readable to every authenticated user).
+// ListByOwnerPage returns a tenant's page. Legacy ownerless records are not
+// included: they belong to no tenant and are admin-only (canAccessSandbox).
 func (s *SandboxStore) ListByOwnerPage(owner string, limit, offset int) []*SandboxInfo {
 	s.mu.RLock()
 	list := make([]*SandboxInfo, 0)
 	for _, sb := range s.sandboxes {
-		if sb.Owner == owner || sb.Owner == "" {
+		if sb.Owner == owner {
 			list = append(list, sb)
 		}
 	}
