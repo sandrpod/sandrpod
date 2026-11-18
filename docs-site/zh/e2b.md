@@ -99,10 +99,11 @@ E2B SDK 在**发送请求之前**就在客户端校验密钥：必须是 `e2b_<h
   继承；单次命令的 `envs=` 仍然只覆盖那一次调用。
 - `download_url`/`upload_url` 带 SDK 生成的签名 URL，不需要额外请求头即可使用，与
   E2B 一致。
-- 普通服务的 `get_host(port)` 默认无凭证可访问（不可猜的主机名就是能力）。桌面
-  （5900/6080/6901）和调试器（9222/9223）端口例外：仍需控制台签发的签名 URL 或
-  API key，因为它们暴露的是整台可交互机器。设置 `SANDRPOD_E2B_PRIVATE_PORTS=1` 可
-  要求所有端口都带 API key；envd、代码解释器和带签名的文件 URL 两种情况都照常鉴权。
+- 普通服务的 `get_host(port)` 默认无凭证可访问（不可猜的主机名就是能力）。toolbox
+  控制端口 **8080 永不代理**。桌面（5900/6080/6901）和调试器（9222/9223）端口例外：
+  仍需控制台签发的签名 URL 或 API key，因为它们暴露的是整台可交互机器。设置
+  `SANDRPOD_E2B_PRIVATE_PORTS=1` 可要求所有端口都带 API key；envd、代码解释器和带
+  签名的文件 URL 两种情况都照常鉴权。
 - 逐端点的状态表在
   [E2B_COMPAT.md](https://github.com/sandrpod/sandrpod/blob/main/docs/E2B_COMPAT.md)。
 

@@ -109,11 +109,12 @@ Two failure modes are worth knowing before they cost you an afternoon:
 - `download_url`/`upload_url` carry the SDK's signed URL and work without an
   extra header, as they do on E2B.
 - `get_host(port)` URLs for ordinary services are fetchable without a credential
-  (the unguessable hostname is the capability). Desktop (5900/6080/6901) and
-  debugger (9222/9223) ports still need the console's signed URL or an API key,
-  since they expose an interactive machine. Set `SANDRPOD_E2B_PRIVATE_PORTS=1`
-  to require a key on every port; envd, code-interpreter and signed file URLs
-  keep authenticating either way.
+  (the unguessable hostname is the capability). The toolbox control port
+  **8080 is never proxied**. Desktop (5900/6080/6901) and debugger (9222/9223)
+  ports still need the console's signed URL or an API key, since they expose an
+  interactive machine. Set `SANDRPOD_E2B_PRIVATE_PORTS=1` to require a key on
+  every port; envd, code-interpreter and signed file URLs keep authenticating
+  either way.
 - The full endpoint-by-endpoint status table is in
   [E2B_COMPAT.md](https://github.com/sandrpod/sandrpod/blob/main/docs/E2B_COMPAT.md).
 

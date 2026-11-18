@@ -145,13 +145,22 @@ configured purely by env (`SANDRPOD_E2B_DOMAIN` et al). Full list in
 | `-region` | `REGION` | `local` | Region label used by the scheduler |
 | `-provider-type` | `PROVIDER_TYPE` | `local` | `local` / `docker` / a cloud name |
 | `-poder-id` | `PODER_ID` | auto | Unique ID (`poder-<container-id-prefix>`) |
-| `-network` | `SANDRPOD_NETWORK` | `""` | Docker network to attach sandboxes to |
+| `-network` | `SANDRPOD_NETWORK` | `""` | Docker network for **unscoped** sandboxes (single-tenant); tenants get their own bridge automatically |
+| — | `SANDRPOD_PIDS_LIMIT` | `2048` | Per-container process/thread cap (`0` disables) |
 | `-token` | `SANDRPOD_TOKEN` | `""` | API token |
 | `-vm-instance-id` | `VM_INSTANCE_ID` | `""` | Cloud instance ID, for VM reclamation |
 | `-heartbeat-interval` | — | `10s` | Heartbeat period |
 
 **A Poder listens on no port at all.** Everything goes through the tunnel it
 dialed out.
+
+When a create request carries a tenant (the hosted/cloud build always does),
+the poder creates or reuses a private `sandrpod-t-<hash>` bridge for that
+tenant and attaches itself to it before starting the container. Sandboxes from
+different tenants are therefore on different bridges and cannot reach each
+other's toolbox; the poder re-attaches to every managed bridge after a restart.
+A container with an egress policy keeps its existing per-pod internal network.
+The `-network` flag applies to unscoped/self-hosted sandboxes.
 
 ```bash
 docker run -d --name sandrpod-poder \
