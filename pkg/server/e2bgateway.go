@@ -712,6 +712,27 @@ func (b *e2bSandboxBackend) GetSandbox(ident, sandboxID string) (e2bcompat.Sandb
 	return b.detailFromInfo(sb), true
 }
 
+func e2bCPU(sb *podpkg.SandboxInfo) int32 {
+	if sb.CPUCores > 0 {
+		return int32(sb.CPUCores)
+	}
+	return 2
+}
+
+func e2bMem(sb *podpkg.SandboxInfo) int32 {
+	if sb.MemoryMB > 0 {
+		return int32(sb.MemoryMB)
+	}
+	return 512
+}
+
+func e2bDisk(sb *podpkg.SandboxInfo) int32 {
+	if sb.StorageMB > 0 {
+		return int32(sb.StorageMB)
+	}
+	return e2bcompat.DefaultDiskSizeMB
+}
+
 func (b *e2bSandboxBackend) ListSandboxes(ident string, filter map[string]string) []e2bcompat.ListedSandbox {
 	var out []e2bcompat.ListedSandbox
 	for _, sb := range b.d.sandboxes.List() {
@@ -724,7 +745,7 @@ func (b *e2bSandboxBackend) ListSandboxes(ident string, filter map[string]string
 		}
 		out = append(out, e2bcompat.ListedSandbox{
 			TemplateID: e2bTemplateFromLabels(sb.Labels), SandboxID: sb.Name, StartedAt: sb.CreatedAt,
-			CPUCount: 2, MemoryMB: 512, DiskSizeMB: e2bcompat.DefaultDiskSizeMB, State: stateFor(sb),
+			CPUCount: e2bCPU(sb), MemoryMB: e2bMem(sb), DiskSizeMB: e2bDisk(sb), State: stateFor(sb),
 			EnvdVersion: e2bcompat.DefaultEnvdVersion, Metadata: meta,
 		})
 	}
@@ -804,18 +825,14 @@ func (b *e2bSandboxBackend) GetMetrics(ident, sandboxID string) ([]e2bcompat.San
 		// E2B's get_metrics returns a sample, not an error, while the daemon is
 		// starting. Report the declared size rather than an empty array: the SDK
 		// callers use it to size work, and an empty list looks like "no limit".
-		m.CPUCount, m.MemTotal, m.DiskTotal = 2, 512<<20, 2048<<20
+		m.CPUCount, m.MemTotal, m.DiskTotal = int(e2bCPU(sb)), uint64(e2bMem(sb))<<20, uint64(e2bDisk(sb))<<20
 	}
-	if m.CPUCount == 0 {
-		m.CPUCount = 2
-	}
-	if m.MemTotal == 0 {
-		m.MemTotal = 512 << 20
-	}
+	m.CPUCount = int(e2bCPU(sb))
+	m.MemTotal = uint64(e2bMem(sb)) << 20
 	// The toolbox's disk numbers describe the host/root filesystem, not the
 	// sandbox's workspace volume. Report the declared size instead: it is what
 	// SandboxDetail says and what the plan reserves.
-	m.DiskTotal = uint64(e2bcompat.DefaultDiskSizeMB) << 20
+	m.DiskTotal = uint64(e2bDisk(sb)) << 20
 	if m.DiskUsed > m.DiskTotal {
 		m.DiskUsed = m.DiskTotal
 	}
@@ -835,7 +852,7 @@ func (b *e2bSandboxBackend) owns(ident string, sb *podpkg.SandboxInfo) bool {
 func (b *e2bSandboxBackend) detailFromInfo(sb *podpkg.SandboxInfo) e2bcompat.SandboxDetail {
 	return e2bcompat.SandboxDetail{
 		TemplateID: e2bTemplateFromLabels(sb.Labels), SandboxID: sb.Name, EnvdVersion: e2bcompat.DefaultEnvdVersion,
-		StartedAt: sb.CreatedAt, CPUCount: 2, MemoryMB: 512, DiskSizeMB: e2bcompat.DefaultDiskSizeMB, State: stateFor(sb),
+		StartedAt: sb.CreatedAt, CPUCount: e2bCPU(sb), MemoryMB: e2bMem(sb), DiskSizeMB: e2bDisk(sb), State: stateFor(sb),
 		Metadata: e2bMetaFromLabels(sb.Labels),
 		// The SDK authenticates envd calls with this token (Authorization:
 		// Bearer). Return the sandbox's envd token so it round-trips and the
