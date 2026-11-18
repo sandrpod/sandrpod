@@ -917,6 +917,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			// means all containers are gone; nil/absent means old Poder version).
 			if req.ContainerNames != nil {
 				reconcileByHeartbeat(pID, req.ContainerNames, sandboxStore)
+				cleanupPendingContainers(r.Context(), pID, req.ContainerNames, tunnelStore, sandboxStore)
 			}
 			// Multi-instance ownership refresh. The claim written when the tunnel
 			// connected expires after ownerTTL (90 s), and the refresher that
@@ -2096,7 +2097,8 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					resp.Body.Close()
 				}
 			} else {
-				log.Printf("sandbox delete: poder tunnel %s unavailable, skipping container cleanup for %s", pID, name)
+				log.Printf("sandbox delete: poder tunnel %s unavailable, deferring container cleanup for %s", pID, name)
+				markPendingContainerCleanup(pID, name)
 			}
 
 			// The record is gone by now — it was removed above — so the event
@@ -3000,6 +3002,96 @@ func reconcileByHeartbeat(poderID string, containerNames []string, ss podpkg.San
 					s.State = podpkg.StateRunning
 				})
 			}
+		}
+	}
+}
+
+// Pending container cleanup covers the one case the normal delete path cannot
+// reach: the sandbox record is gone but the worker's tunnel was down, so the
+// container was left running. The worker heartbeat carries the authoritative
+// container list; when it reappears, delete the named container through the
+// tunnel. Keeping the name (not a blanket "delete everything not in the store")
+// avoids deleting a live container during a transient database error.
+var pendingContainerCleanup = struct {
+	sync.Mutex
+	byPoder map[string]map[string]time.Time
+}{byPoder: make(map[string]map[string]time.Time)}
+
+const pendingCleanupTTL = 24 * time.Hour
+
+func markPendingContainerCleanup(poderID, name string) {
+	pendingContainerCleanup.Lock()
+	defer pendingContainerCleanup.Unlock()
+	m := pendingContainerCleanup.byPoder[poderID]
+	if m == nil {
+		m = make(map[string]time.Time)
+		pendingContainerCleanup.byPoder[poderID] = m
+	}
+	m[name] = time.Now()
+}
+
+func clearPendingContainerCleanup(poderID, name string) {
+	pendingContainerCleanup.Lock()
+	defer pendingContainerCleanup.Unlock()
+	if m := pendingContainerCleanup.byPoder[poderID]; m != nil {
+		delete(m, name)
+		if len(m) == 0 {
+			delete(pendingContainerCleanup.byPoder, poderID)
+		}
+	}
+}
+
+func cleanupPendingContainers(ctx context.Context, poderID string, present []string, tunnels *tunnel.TunnelStore, sandboxes podpkg.SandboxRepository) {
+	pendingContainerCleanup.Lock()
+	names := make(map[string]time.Time)
+	for name, at := range pendingContainerCleanup.byPoder[poderID] {
+		names[name] = at
+	}
+	pendingContainerCleanup.Unlock()
+	if len(names) == 0 {
+		return
+	}
+	alive := make(map[string]struct{}, len(present))
+	for _, name := range present {
+		alive[name] = struct{}{}
+	}
+	t, ok := tunnels.Get(poderID)
+	if !ok {
+		return
+	}
+	for name, at := range names {
+		if time.Since(at) > pendingCleanupTTL {
+			clearPendingContainerCleanup(poderID, name)
+			continue
+		}
+		if _, exists := alive[name]; !exists {
+			// The worker no longer has it: nothing to delete.
+			clearPendingContainerCleanup(poderID, name)
+			continue
+		}
+		if _, exists := sandboxes.Get(name); exists {
+			// The display name was re-created before the worker returned; this
+			// container belongs to the new record, not the deleted one.
+			clearPendingContainerCleanup(poderID, name)
+			continue
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodDelete,
+			"http://poder/sandboxes/"+url.PathEscape(name), nil)
+		if err != nil {
+			continue
+		}
+		resp, err := t.Client.Do(req)
+		if err != nil {
+			log.Printf("orphan cleanup %s/%s: %v", poderID, name, err)
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		if resp.StatusCode < 300 || resp.StatusCode == http.StatusNotFound {
+			clearPendingContainerCleanup(poderID, name)
+			log.Printf("orphan cleanup %s/%s: container removed (status %d)", poderID, name, resp.StatusCode)
+		} else {
+			log.Printf("orphan cleanup %s/%s: status %d, retrying next heartbeat", poderID, name, resp.StatusCode)
 		}
 	}
 }
