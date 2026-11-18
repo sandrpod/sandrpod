@@ -112,16 +112,19 @@ jobs:
             ${{ matrix.build_args }} \
             -f "${{ matrix.dockerfile }}" -t "$IMG:latest" .
           if [ -n "${REGISTRY_HOST:-}" ]; then
-            docker tag "$IMG:latest" "$IMG:main-${GITHUB_SHA:-unknown}"
-            docker push "$IMG:main-${GITHUB_SHA:-unknown}"
+            # Keep a single moving `latest` per image. The platform registry has
+            # no delete/GC in its steady state, so a per-commit `main-<sha>` tag
+            # accumulated forever (19 GB of old desktop images by 2026-11-18).
+            # Rollbacks use the release artifacts and the running nodes' local
+            # image cache; registry history is not the rollback mechanism.
             docker push "$IMG:latest"
             # `runs-on: ubuntu-latest` is the local act_runner on a 40 GB host.
             # Leaving each run's six multi-GB images tagged here filled the disk
             # and broke git receive-pack ("unable to create temporary object
             # directory"). The tags are published, so drop every local ref for
-            # THIS image — not just this run's, or the older main-<sha> tags still
-            # accumulate. Then prune the dangling layers. Only this matrix leg's
-            # repository is touched, and -f never removes the tagged base images.
+            # THIS image — not just this run's, or older tags still accumulate.
+            # Then prune the dangling layers. Only this matrix leg's repository
+            # is touched, and -f never removes the tagged base images.
             docker images --format '{{.Repository}}:{{.Tag}}' "$IMG" \
               | grep -F "${IMG}:" | xargs -r docker rmi >/dev/null 2>&1 || true
             docker image prune -f >/dev/null 2>&1 || true
