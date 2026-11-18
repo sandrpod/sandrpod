@@ -24,11 +24,14 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/mcpbridge"
 )
@@ -53,6 +56,8 @@ func main() {
 	port := flag.Int("port", defaultPort, "MCP Streamable-HTTP listen port")
 	stateDir := flag.String("state-dir", envOr("MCP_GATEWAY_STATE_DIR", defaultStateDir),
 		"directory for the gateway's config + token (default /etc/mcp-gateway; E2B reads .token here)")
+	foreground := flag.Bool("foreground", false, "serve in the foreground (debugging; the SDK expects the default daemon mode)")
+	daemonChild := flag.Bool("daemon-child", false, "internal: this process is the detached server")
 	flag.Parse()
 
 	token := os.Getenv("GATEWAY_ACCESS_TOKEN")
@@ -79,6 +84,18 @@ func main() {
 		}
 	}
 
+	// The E2B SDK starts this command with a foreground `commands.run` and waits
+	// for it to exit before it reads the token and calls getMcpUrl(). A server
+	// that blocks in ListenAndServe makes Sandbox.create({mcp}) hang until the
+	// command timeout, so the default is the same contract as E2B's binary:
+	// write the token/config, detach the server, and exit 0 once :port listens.
+	if !*daemonChild && !*foreground {
+		if err := daemonize(*stateDir); err != nil {
+			log.Fatalf("mcp-gateway: daemonize: %v", err)
+		}
+		return
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
@@ -99,14 +116,67 @@ func main() {
 	}
 
 	srv := &http.Server{Addr: fmt.Sprintf(":%d", *port), Handler: handler}
+	ln, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		log.Fatalf("mcp-gateway: listen %s: %v", srv.Addr, err)
+	}
+	// The parent waits for this file before it exits, so the SDK's very next
+	// request (getMcpToken / an MCP initialize) finds a listening server.
+	if *daemonChild {
+		if err := os.WriteFile(filepath.Join(*stateDir, ".ready"), []byte("ok"), 0o644); err != nil {
+			log.Printf("mcp-gateway: warning: cannot write ready file: %v", err)
+		}
+	}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()
 	}()
 	log.Printf("mcp-gateway: MCP Streamable-HTTP on :%d/mcp (auth=%v, servers=%d)", *port, token != "", len(mgr.Snapshot()))
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("mcp-gateway: serve: %v", err)
 	}
+}
+
+// daemonize re-execs this binary as the detached server and waits until it is
+// listening. The parent has already written config.json and .token, so the SDK
+// can read the token immediately after commands.run returns.
+func daemonize(stateDir string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	readyPath := filepath.Join(stateDir, ".ready")
+	_ = os.Remove(readyPath)
+	logPath := filepath.Join(stateDir, "gateway.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		logPath = "/tmp/mcp-gateway.log"
+		logFile, err = os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+		if err != nil {
+			return fmt.Errorf("open log %s: %w", logPath, err)
+		}
+	}
+	defer logFile.Close()
+
+	args := append(append([]string{}, os.Args[1:]...), "--daemon-child")
+	cmd := exec.Command(exe, args...)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	detach(cmd)
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(readyPath); err == nil {
+			_ = cmd.Process.Release()
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	_ = cmd.Process.Kill()
+	return fmt.Errorf("server did not become ready (see %s)", logPath)
 }
 
 // bearerMiddleware enforces a constant-time Bearer check on every request, matching
