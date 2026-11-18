@@ -87,17 +87,39 @@ func (r *accessRecorder) Flush() {
 	}
 }
 
-// clientIP returns the first X-Forwarded-For hop (behind a load balancer) or the
-// peer address.
+// clientIP returns the client address behind a trusted local/private proxy, or
+// the peer address.
+//
+// X-Forwarded-For is a list that each proxy appends to: when Caddy receives a
+// caller-supplied "X-Forwarded-For: 1.2.3.4" it appends the address it actually
+// saw, so the *last* hop is the trustworthy one. Taking the first (as this did
+// before) let any caller choose its own identity in the access log — and, once
+// anonymous traffic is rate-limited per IP, choose its own bucket too. The
+// header is ignored entirely when the peer is not a loopback/private address,
+// because then nothing guarantees a proxy wrote it.
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			return strings.TrimSpace(xff[:i])
-		}
-		return strings.TrimSpace(xff)
-	}
+	peer := r.RemoteAddr
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+		peer = host
 	}
-	return r.RemoteAddr
+	if !isTrustedPeer(peer) {
+		return peer
+	}
+	xff := r.Header.Get("X-Forwarded-For")
+	if xff == "" {
+		return peer
+	}
+	last := strings.TrimSpace(xff)
+	if i := strings.LastIndexByte(xff, ','); i >= 0 {
+		last = strings.TrimSpace(xff[i+1:])
+	}
+	if last == "" {
+		return peer
+	}
+	return last
+}
+
+func isTrustedPeer(host string) bool {
+	ip := net.ParseIP(host)
+	return ip != nil && (ip.IsLoopback() || ip.IsPrivate())
 }

@@ -103,7 +103,8 @@ E2B SDK 在**发送请求之前**就在客户端校验密钥：必须是 `e2b_<h
   控制端口 **8080 永不代理**。桌面（5900/6080/6901）和调试器（9222/9223）端口例外：
   仍需控制台签发的签名 URL 或 API key，因为它们暴露的是整台可交互机器。设置
   `SANDRPOD_E2B_PRIVATE_PORTS=1` 可要求所有端口都带 API key；envd、代码解释器和带
-  签名的文件 URL 两种情况都照常鉴权。
+  签名的文件 URL 两种情况都照常鉴权。匿名公共端口流量按客户端 IP + 沙箱限速
+  （默认 50 请求/秒，突发 100）；`SANDRPOD_E2B_ANON_RATE` 可调整速率，`0` 关闭。
 - 逐端点的状态表在
   [E2B_COMPAT.md](https://github.com/sandrpod/sandrpod/blob/main/docs/E2B_COMPAT.md)。
 

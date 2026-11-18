@@ -60,9 +60,15 @@ type Config struct {
 	// its own limiter here: this gateway is usually dispatched to ahead of the
 	// host's own middleware, so a limiter installed only there never sees E2B
 	// traffic at all.
-	Throttle  func(identity string, admin bool) bool
-	Sandboxes SandboxBackend
-	Envd      EnvdBackend
+	Throttle func(identity string, admin bool) bool
+	// AnonymousThrottle, when set, limits anonymous traffic on a public in-sandbox
+	// port (the capability-based URLs get_host(port) hands out). Such a request
+	// carries no identity, so Throttle would put every caller in one bucket;
+	// the host keys this by client IP and sandbox instead. Returning false
+	// rejects the request with 429. Authenticated requests do not consult it.
+	AnonymousThrottle func(r *http.Request, sandbox string) bool
+	Sandboxes         SandboxBackend
+	Envd              EnvdBackend
 	// Code, when set, backs the code-interpreter run_code surface reached at
 	// <CodePort>-<sandboxID>.<domain>/execute. CodePort defaults to 49999.
 	Code     CodeInterpreter
@@ -240,6 +246,14 @@ func Handler(cfg Config) http.Handler {
 			anonAllowed := hostScopedCtx || publicPort
 			if !debugCodePath && !anonAllowed {
 				writeErr(w, http.StatusUnauthorized, "unauthorized: missing or invalid API key")
+				return
+			}
+			// A public port is unauthenticated by design, so the only thing
+			// between it and the tunnel is this limiter. Authenticated callers
+			// are handled by Throttle below; debug-mode tolerance is left alone.
+			if publicPort && cfg.AnonymousThrottle != nil && !cfg.AnonymousThrottle(r, sandbox) {
+				w.Header().Set("Retry-After", "1")
+				writeErr(w, http.StatusTooManyRequests, "rate limit exceeded")
 				return
 			}
 			ident, admin = "", false // anonymous; scoped by the resolver or by the Host

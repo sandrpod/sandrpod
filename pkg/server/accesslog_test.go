@@ -69,8 +69,12 @@ func TestAccessRecorder_NonHijackerErrors(t *testing.T) {
 
 func TestClientIP(t *testing.T) {
 	tests := []struct{ name, xff, remote, want string }{
-		{"xff single", "203.0.113.7", "10.0.0.1:5000", "203.0.113.7"},
-		{"xff first hop", "203.0.113.7, 10.0.0.9", "10.0.0.1:5000", "203.0.113.7"},
+		{"xff single from trusted peer", "203.0.113.7", "10.0.0.1:5000", "203.0.113.7"},
+		// Caddy appends the address it saw; the caller-supplied first entry
+		// must not win.
+		{"xff chain from trusted peer uses last hop", "203.0.113.7, 10.0.0.9", "10.0.0.1:5000", "10.0.0.9"},
+		{"xff from a public peer is ignored", "203.0.113.7", "198.51.100.9:5000", "198.51.100.9"},
+		{"xff single from loopback", "203.0.113.7", "127.0.0.1:5000", "203.0.113.7"},
 		{"no xff", "", "10.0.0.1:5000", "10.0.0.1"},
 	}
 	for _, tt := range tests {

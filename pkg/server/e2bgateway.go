@@ -48,6 +48,9 @@ type e2bDeps struct {
 	// admission is the same gate the native API uses; the E2B surface maps its
 	// refusal onto E2B's own error type instead of inventing a second policy.
 	admission Admission
+	// anonymous limits public-port traffic that carries no credential, keyed
+	// by client IP and sandbox. Nil disables the limit.
+	anonymous *rateLimiter
 }
 
 // forwardE2B backs e2bcompat's Forwarder hook. In multi-instance load mode a
@@ -175,6 +178,7 @@ func NewE2BGateway(domain string, cfg Config, stores podpkg.Stores,
 		directStore: directStore,
 		owners:      stores.TunnelOwners,
 		admission:   admissionFor(cfg, stores.Sandboxes),
+		anonymous:   newAnonymousPortLimiter(),
 	})
 }
 
@@ -184,6 +188,7 @@ func newE2BGateway(domain string, d e2bDeps) http.Handler {
 		Auth:                d.authenticator(),
 		Authz:               d.authz(),
 		Throttle:            d.throttle,
+		AnonymousThrottle:   d.anonymousThrottle,
 		Authorize:           d.authorizeSandbox,
 		VerifyFileSignature: d.verifyFileSignature,
 		Sandboxes:           &e2bSandboxBackend{d},
@@ -283,13 +288,48 @@ func (b *e2bCodeBackend) RestartContext(name, contextID string) error {
 // (-rate-limit). e2bHostRouter dispatches to the gateway ahead of the native
 // auth middleware, so without this the limiter does not exist on this surface —
 // which is the one deployments actually expose. Anonymous callers (public
-// sandbox ports) are exempt: they share one Identity, so a bucket would be a
-// single global cap on legitimate preview traffic.
+// sandbox ports) are exempt here because they share one Identity; they are
+// limited separately, per client IP and sandbox, by anonymousThrottle.
 func (d e2bDeps) throttle(ident string, admin bool) bool {
 	if apiRateLimit == nil || admin || ident == "" {
 		return true
 	}
 	return apiRateLimit.allow(ident)
+}
+
+// defaultAnonymousPortRate is requests/second per (client IP, sandbox) on a
+// public in-sandbox port. A browser loads a page's assets in bursts, so the
+// bucket's capacity is twice this; an abuser cannot turn an unauthenticated
+// wildcard hostname into an unbounded request amplifier.
+const defaultAnonymousPortRate = 50
+
+// newAnonymousPortLimiter reads SANDRPOD_E2B_ANON_RATE (requests/second; 0 or
+// negative disables) and otherwise uses defaultAnonymousPortRate.
+func newAnonymousPortLimiter() *rateLimiter {
+	perSecond := float64(defaultAnonymousPortRate)
+	if raw := strings.TrimSpace(os.Getenv("SANDRPOD_E2B_ANON_RATE")); raw != "" {
+		if v, err := strconv.ParseFloat(raw, 64); err == nil {
+			perSecond = v
+		}
+	}
+	if perSecond <= 0 {
+		return nil
+	}
+	return newRateLimiter(perSecond)
+}
+
+// anonymousThrottle keys the public-port bucket by client and sandbox: one
+// noisy preview must not spend another sandbox's budget, and a caller behind a
+// shared NAT still gets its own budget. clientIP ignores a spoofed
+// X-Forwarded-For from a non-proxy peer.
+func (d e2bDeps) anonymousThrottle(r *http.Request, sandbox string) bool {
+	if d.anonymous == nil {
+		return true
+	}
+	if sandbox == "" {
+		sandbox = r.Host
+	}
+	return d.anonymous.allow(clientIP(r) + "|" + sandbox)
 }
 
 // authz is the tenant-aware resolver: when the host supplied one (a hosted

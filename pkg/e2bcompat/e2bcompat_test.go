@@ -724,6 +724,54 @@ func TestPublicSandboxPorts(t *testing.T) {
 	}
 }
 
+// TestAnonymousPublicPortThrottle pins the abuse control on credential-less
+// public ports: the gateway consults the host's per-IP limiter only for
+// anonymous traffic, and an authenticated request is not charged to it.
+func TestAnonymousPublicPortThrottle(t *testing.T) {
+	const domain = "example.com"
+	throttled := 0
+	gw := Handler(Config{
+		Domain:    domain,
+		Auth:      func(k string) (string, bool, bool) { return "user1", false, IsE2BKey(k) },
+		Sandboxes: newFakeSandboxes(),
+		Envd:      newFakeEnvd(),
+		Code:      &fakeCode{},
+		AnonymousThrottle: func(_ *http.Request, sandbox string) bool {
+			throttled++
+			return sandbox == "sb1" && throttled == 1
+		},
+		PortProxy: func(w http.ResponseWriter, _ *http.Request, _ string, _ int) bool {
+			w.WriteHeader(http.StatusOK)
+			return true
+		},
+	})
+	do := func(headers map[string]string) int {
+		req := httptest.NewRequest("GET", "/index.html", nil)
+		req.Host = "8000-sb1." + domain
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		gw.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if code := do(nil); code != http.StatusOK {
+		t.Fatalf("first anonymous request: want 200, got %d", code)
+	}
+	if code := do(nil); code != http.StatusTooManyRequests {
+		t.Fatalf("second anonymous request: want 429, got %d", code)
+	}
+	// A valid API key authenticates the request before the anonymous path, so
+	// the limiter must not see it (or be able to break it).
+	before := throttled
+	if code := do(map[string]string{"X-API-KEY": "e2b_0123456789abcdef"}); code != http.StatusOK {
+		t.Fatalf("authenticated request: want 200, got %d", code)
+	}
+	if throttled != before {
+		t.Fatalf("authenticated request consulted the anonymous limiter")
+	}
+}
+
 // quotaSandboxes records the admin bit it was handed and can refuse.
 type quotaSandboxes struct {
 	*fakeSandboxes

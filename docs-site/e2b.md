@@ -114,7 +114,9 @@ Two failure modes are worth knowing before they cost you an afternoon:
   ports still need the console's signed URL or an API key, since they expose an
   interactive machine. Set `SANDRPOD_E2B_PRIVATE_PORTS=1` to require a key on
   every port; envd, code-interpreter and signed file URLs keep authenticating
-  either way.
+  either way. Anonymous public-port traffic is rate-limited per client IP and
+  sandbox (50 req/s, burst 100); `SANDRPOD_E2B_ANON_RATE` changes the rate and
+  `0` disables the limit.
 - The full endpoint-by-endpoint status table is in
   [E2B_COMPAT.md](https://github.com/sandrpod/sandrpod/blob/main/docs/E2B_COMPAT.md).
 
