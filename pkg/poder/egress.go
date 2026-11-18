@@ -35,6 +35,7 @@ package poder
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -46,6 +47,7 @@ import (
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
+	imagetypes "github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/sandrpod/sandrpod/pkg/egress"
@@ -80,6 +82,32 @@ type podEgress struct {
 func egressNetworkName(podID string) string { return "sandrpod-egress-" + podID }
 func egressSidecarName(podID string) string { return "sandrpod-egress-proxy-" + podID }
 
+// ensureEgressImage pulls the sidecar image when the daemon does not have it.
+// A worker only pulls the *sandbox* image in CreatePod; without this, the first
+// create carrying a policy on a fresh worker fails with "No such image" even
+// though the registry is reachable and configured.
+func (p *DockerPoder) ensureEgressImage(ctx context.Context, image string) error {
+	if _, _, err := p.dockerClient.ImageInspectWithRaw(ctx, image); err == nil {
+		return nil
+	}
+	opts := imagetypes.PullOptions{}
+	if reg := registryFromEnv(); reg.Host != "" && strings.HasPrefix(image, reg.Host) {
+		encoded, _ := json.Marshal(reg.auth())
+		opts.RegistryAuth = base64.URLEncoding.EncodeToString(encoded)
+	}
+	pullCtx, cancel := context.WithTimeout(ctx, pullTimeout)
+	defer cancel()
+	rc, err := p.dockerClient.ImagePull(pullCtx, image, opts)
+	if err != nil {
+		return fmt.Errorf("pull egress image %q: %w", image, err)
+	}
+	defer rc.Close()
+	if _, err := io.Copy(io.Discard, rc); err != nil {
+		return fmt.Errorf("pull egress image %q: %w", image, err)
+	}
+	return nil
+}
+
 // setupEgress creates the internal network and the proxy sidecar, and returns
 // the state plus the environment the sandbox container needs.
 func (p *DockerPoder) setupEgress(ctx context.Context, podID string, policy *egress.Policy) (*podEgress, error) {
@@ -96,6 +124,10 @@ func (p *DockerPoder) setupEgress(ctx context.Context, podID string, policy *egr
 		return nil, err
 	}
 
+	image := egressImage()
+	if err := p.ensureEgressImage(ctx, image); err != nil {
+		return nil, err
+	}
 	netName := egressNetworkName(podID)
 	created, err := p.dockerClient.NetworkCreate(ctx, netName, network.CreateOptions{
 		Driver:   "bridge",
@@ -113,7 +145,7 @@ func (p *DockerPoder) setupEgress(ctx context.Context, podID string, policy *egr
 	sidecarName := egressSidecarName(podID)
 	resp, err := p.dockerClient.ContainerCreate(ctx,
 		&container.Config{
-			Image: egressImage(),
+			Image: image,
 			Cmd: []string{
 				"-listen", fmt.Sprintf("0.0.0.0:%d", egressHTTPPort),
 				"-socks", fmt.Sprintf("0.0.0.0:%d", egressSOCKSPort),
