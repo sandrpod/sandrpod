@@ -134,6 +134,15 @@ not yet exercised by the real SDK.
 | MCP gateway | in-sandbox `mcp-gateway` on `:50005` | ☑ | E2B-style shim over the native bridge; reached via the generic port proxy; verified live over a real TLS vanity domain |
 | cross-node routing | any SDK call on a multi-instance cluster | ☑ | requests are forwarded to the node holding the sandbox's tunnel; verified live with a real cloud poder |
 
+### Re-verified against production (2026-11-18, `e2b` 2.30.0 and 2.64.0)
+
+54/54 checks passed against the hosted deployment with both SDK versions,
+including create-time `envs`, anonymous signed `download_url`/`upload_url`,
+anonymous `get_host(8000)`, PTY, `close_stdin`, pause/`connect`, stateful
+`run_code` and matplotlib charts. The 2.64.0 run exposed one control-plane
+difference: `Sandbox.connect` uses `POST /v2/sandboxes/{id}/connect`, so the
+version prefix is now stripped before dispatching by-ID actions.
+
 ### Re-verified with the current SDK (2026-10-25, `e2b` 2.59.0, `e2b-code-interpreter` 2.11.3)
 
 The variants drift, so the surface was re-run against a live server + a real
