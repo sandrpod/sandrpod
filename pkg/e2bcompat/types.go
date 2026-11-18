@@ -31,6 +31,9 @@ type NewSandbox struct {
 	AllowInternetAccess *bool             `json:"allow_internet_access,omitempty"`
 	Metadata            map[string]string `json:"metadata,omitempty"`
 	EnvVars             map[string]string `json:"envVars,omitempty"`
+	// CPUCount is the 2.64+ per-create CPU request (cpuCount). Older SDKs
+	// leave it unset; the backend then uses its declared default.
+	CPUCount int32 `json:"cpuCount,omitempty"`
 	// Network is the E2B create-time network policy. allow_out/deny_out are
 	// translated to the egress policy; rules (per-method HTTP rules) are not
 	// implemented and are refused rather than silently ignored.
@@ -50,6 +53,45 @@ type E2BNetwork struct {
 	Rules              map[string]json.RawMessage `json:"rules,omitempty"`
 	AllowPublicTraffic *bool                      `json:"allow_public_traffic,omitempty"`
 	MaskRequestHost    string                     `json:"mask_request_host,omitempty"`
+}
+
+// UnmarshalJSON accepts both wire spellings. The generated SDK clients send
+// camelCase (allowOut, denyOut, allowPublicTraffic, maskRequestHost) while the
+// OpenAPI examples and hand-written clients use snake_case. Accepting only one
+// silently dropped the policy: the sandbox was created and reached the open
+// internet, which is the worst possible failure for an allow-list.
+func (n *E2BNetwork) UnmarshalJSON(b []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	pick := func(keys ...string) (json.RawMessage, bool) {
+		for _, k := range keys {
+			if v, ok := raw[k]; ok {
+				return v, true
+			}
+		}
+		return nil, false
+	}
+	if v, ok := pick("allowOut", "allow_out"); ok {
+		_ = json.Unmarshal(v, &n.AllowOut)
+	}
+	if v, ok := pick("denyOut", "deny_out"); ok {
+		_ = json.Unmarshal(v, &n.DenyOut)
+	}
+	if v, ok := pick("rules"); ok {
+		_ = json.Unmarshal(v, &n.Rules)
+	}
+	if v, ok := pick("allowPublicTraffic", "allow_public_traffic"); ok {
+		var b bool
+		if err := json.Unmarshal(v, &b); err == nil {
+			n.AllowPublicTraffic = &b
+		}
+	}
+	if v, ok := pick("maskRequestHost", "mask_request_host"); ok {
+		_ = json.Unmarshal(v, &n.MaskRequestHost)
+	}
+	return nil
 }
 
 // Sandbox is the POST /sandboxes (and resume) response.

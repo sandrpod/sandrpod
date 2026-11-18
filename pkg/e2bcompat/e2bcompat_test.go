@@ -933,3 +933,24 @@ func TestControlPlaneV2Connect(t *testing.T) {
 		t.Fatalf("v2 connect body: %s", rec.Body.String())
 	}
 }
+
+func TestNewSandboxNetworkAcceptsSDKCamelCase(t *testing.T) {
+	var req NewSandbox
+	if err := json.Unmarshal([]byte(`{"network":{"allowOut":["example.com"],"denyOut":["bad.example"]}}`), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Network == nil || len(req.Network.AllowOut) != 1 || req.Network.AllowOut[0] != "example.com" {
+		t.Fatalf("camelCase allowOut was not decoded: %+v", req.Network)
+	}
+	if len(req.Network.DenyOut) != 1 || req.Network.DenyOut[0] != "bad.example" {
+		t.Fatalf("camelCase denyOut was not decoded: %+v", req.Network)
+	}
+
+	var snake NewSandbox
+	if err := json.Unmarshal([]byte(`{"network":{"allow_out":["example.org"]}}`), &snake); err != nil {
+		t.Fatal(err)
+	}
+	if snake.Network == nil || len(snake.Network.AllowOut) != 1 || snake.Network.AllowOut[0] != "example.org" {
+		t.Fatalf("snake_case allow_out broke: %+v", snake.Network)
+	}
+}

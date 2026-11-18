@@ -583,8 +583,11 @@ type e2bSandboxBackend struct{ d e2bDeps }
 // only honest answer, because accepting it would run the sandbox wide open.
 func e2bNetworkPolicy(req e2bcompat.NewSandbox) (*egress.Policy, error) {
 	if req.Network != nil {
-		if len(req.Network.Rules) > 0 || req.Network.MaskRequestHost != "" || req.Network.AllowPublicTraffic != nil {
-			return nil, fmt.Errorf("E2B network rules/mask_request_host/allow_public_traffic are not supported by this deployment; use allow_out/deny_out")
+		if req.Network.AllowPublicTraffic != nil && !*req.Network.AllowPublicTraffic {
+			return nil, fmt.Errorf("allow_public_traffic=false is not supported; use SANDRPOD_E2B_PRIVATE_PORTS to require a key on public ports")
+		}
+		if len(req.Network.Rules) > 0 || req.Network.MaskRequestHost != "" {
+			return nil, fmt.Errorf("E2B per-method network rules and mask_request_host are not supported by this deployment; use allow_out/deny_out")
 		}
 		allow := append([]string(nil), req.Network.AllowOut...)
 		deny := append([]string(nil), req.Network.DenyOut...)
@@ -642,6 +645,9 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 			// records the client's intent without pretending otherwise.
 			"e2b/auto_pause": strconv.FormatBool(req.AutoPause),
 		},
+	}
+	if req.CPUCount > 0 {
+		create.CPUCores = float64(req.CPUCount)
 	}
 	// An E2B templateID that looks like a container image is used directly.
 	if strings.ContainsAny(req.TemplateID, "/:") {
