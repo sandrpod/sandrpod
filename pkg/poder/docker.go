@@ -743,11 +743,19 @@ func (p *DockerPoder) reconnectManagedNetworks(ctx context.Context) {
 		host, _ = os.Hostname()
 	}
 	for _, n := range nets {
+		// List results do not carry endpoints; inspect, or a live bridge looks
+		// empty and we detach the poder from it (breaking every sandbox on it)
+		// before the remove fails.
+		detail, ierr := p.dockerClient.NetworkInspect(ctx, n.ID, network.InspectOptions{})
+		if ierr != nil {
+			log.Printf("poder: inspect managed network %s: %v", n.Name, ierr)
+			continue
+		}
 		// Drop a bridge that survived a crash but has no sandbox endpoint left.
 		// Each one holds an address-pool slot, and per-sandbox bridges make
 		// leaks expensive: the daemon runs out of subnets, not memory.
 		other := false
-		for id := range n.Containers {
+		for id := range detail.Containers {
 			if host == "" || !(strings.HasPrefix(id, host) || strings.HasPrefix(host, id)) {
 				other = true
 				break
@@ -759,6 +767,9 @@ func (p *DockerPoder) reconnectManagedNetworks(ctx context.Context) {
 			}
 			if err := p.dockerClient.NetworkRemove(ctx, n.ID); err != nil && !os.IsNotExist(err) {
 				log.Printf("poder: remove orphan network %s: %v", n.Name, err)
+				// The remove failed (an endpoint we do not control); put the
+				// poder back so the network stays reachable.
+				_ = p.attachSelf(ctx, n.ID)
 			}
 			continue
 		}
