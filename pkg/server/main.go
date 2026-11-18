@@ -401,6 +401,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	// Same reason: without these, a worker that stops heartbeating stays ONLINE
 	// forever and cloud VMs provisioned on demand are never reclaimed.
 	startFleetReapers(context.Background(), stores, tunnelStore)
+	startJobPruner(context.Background(), stores.Jobs)
 	jobStore := stores.Jobs
 	sandboxStore := stores.Sandboxes
 	poderStore := stores.Poders
@@ -1316,18 +1317,50 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		ident := IdentityFrom(r)
 		switch r.Method {
 		case http.MethodGet:
-			sandboxes := sandboxStore.List()
-			if !ident.IsAdmin() {
-				visible := make([]*podpkg.SandboxInfo, 0, len(sandboxes))
-				for _, sb := range sandboxes {
-					if canAccessSandbox(ident, sb) {
-						visible = append(visible, sb)
+			limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+			offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+			if limit < 0 {
+				limit = 0
+			}
+			if limit > 500 {
+				limit = 500
+			}
+			if offset < 0 {
+				offset = 0
+			}
+			type pagedSandboxes interface {
+				ListPage(limit, offset int) []*podpkg.SandboxInfo
+				ListByOwnerPage(owner string, limit, offset int) []*podpkg.SandboxInfo
+			}
+			var sandboxes []*podpkg.SandboxInfo
+			if limit > 0 {
+				if paged, ok := sandboxStore.(pagedSandboxes); ok {
+					if ident.IsAdmin() {
+						sandboxes = paged.ListPage(limit, offset)
+					} else {
+						sandboxes = paged.ListByOwnerPage(ident.Name, limit, offset)
 					}
 				}
-				sandboxes = visible
+			}
+			if sandboxes == nil {
+				sandboxes = sandboxStore.List()
+				if !ident.IsAdmin() {
+					visible := make([]*podpkg.SandboxInfo, 0, len(sandboxes))
+					for _, sb := range sandboxes {
+						if canAccessSandbox(ident, sb) {
+							visible = append(visible, sb)
+						}
+					}
+					sandboxes = visible
+				}
 			}
 			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]any{"sandboxes": sandboxes})
+			json.NewEncoder(w).Encode(map[string]any{
+				"sandboxes": sandboxes,
+				"limit":     limit,
+				"offset":    offset,
+				"has_more":  limit > 0 && len(sandboxes) == limit,
+			})
 
 		case http.MethodPost:
 			r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB
@@ -3094,6 +3127,42 @@ func cleanupPendingContainers(ctx context.Context, poderID string, present []str
 			log.Printf("orphan cleanup %s/%s: status %d, retrying next heartbeat", poderID, name, resp.StatusCode)
 		}
 	}
+}
+
+// startJobPruner removes terminal job records after a retention window. Job
+// rows carry the full create request; without this the table grows forever on
+// every create/delete. Pending/in-progress rows are never touched.
+func startJobPruner(ctx context.Context, jobs podpkg.JobRepository) {
+	pruner, ok := jobs.(interface {
+		PruneJobs(before time.Time) (int64, error)
+	})
+	if !ok {
+		return
+	}
+	hours := 168 // 7 days
+	if raw := strings.TrimSpace(os.Getenv("SANDRPOD_JOB_RETENTION_HOURS")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			hours = n
+		}
+	}
+	retention := time.Duration(hours) * time.Hour
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				n, err := pruner.PruneJobs(time.Now().Add(-retention))
+				if err != nil {
+					log.Printf("job pruner: %v", err)
+				} else if n > 0 {
+					log.Printf("job pruner: removed %d terminal jobs older than %s", n, retention)
+				}
+			}
+		}
+	}()
 }
 
 // cleanupOfflinePoders marks Poder nodes as offline when heartbeats stop.

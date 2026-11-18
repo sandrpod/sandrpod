@@ -152,3 +152,29 @@ func randomString(n int) string {
 	}
 	return string(b)
 }
+
+// PruneJobs removes terminal jobs older than before. Optional interface used by
+// the server's background pruner; pending/in-progress jobs are never removed.
+func (s *JobStore) PruneJobs(before time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var removed int64
+	kept := s.queue[:0]
+	for _, job := range s.queue {
+		if (job.Status == JobStatusCompleted || job.Status == JobStatusFailed) && job.UpdatedAt.Before(before) {
+			delete(s.jobs, job.ID)
+			removed++
+			continue
+		}
+		kept = append(kept, job)
+	}
+	s.queue = kept
+	// A job can be in the map but not the queue (e.g. loaded from a snapshot).
+	for id, job := range s.jobs {
+		if (job.Status == JobStatusCompleted || job.Status == JobStatusFailed) && job.UpdatedAt.Before(before) {
+			delete(s.jobs, id)
+			removed++
+		}
+	}
+	return removed, nil
+}

@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS tunnel_owners (
 CREATE INDEX IF NOT EXISTS idx_jobs_status      ON jobs(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_updated     ON jobs(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_sandboxes_poder  ON sandboxes(poder_id);
+CREATE INDEX IF NOT EXISTS idx_sandboxes_owner_created ON sandboxes(owner, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_poders_state     ON poders(state, region, provider_type);
 CREATE INDEX IF NOT EXISTS idx_api_tokens_prefix ON api_tokens(prefix);
 `

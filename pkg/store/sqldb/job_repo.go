@@ -307,3 +307,14 @@ func (r *jobRepo) ClaimJob(id string, expected, now time.Time) (bool, error) {
 	}
 	return n == 1, nil
 }
+
+// PruneJobs removes terminal jobs older than before. Optional interface used by
+// the server's background pruner.
+func (r *jobRepo) PruneJobs(before time.Time) (int64, error) {
+	res, err := r.db.Exec(`DELETE FROM jobs WHERE updated_at < ? AND status IN ('COMPLETED','FAILED')`,
+		before.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, fmt.Errorf("store/sqldb: prune jobs: %w", err)
+	}
+	return res.RowsAffected()
+}

@@ -282,3 +282,32 @@ func boolInt(b bool) int {
 	}
 	return 0
 }
+
+// ListPage returns one newest-first page across all owners (admin listing).
+func (r *sandboxRepo) ListPage(limit, offset int) []*sandpod.SandboxInfo {
+	if limit <= 0 {
+		return r.List()
+	}
+	rows, err := r.db.Query(`SELECT `+sandboxColumns+` FROM sandboxes ORDER BY created_at DESC LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		log.Printf("store/sqldb: list sandboxes page: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	return scanSandboxes(rows)
+}
+
+// ListByOwnerPage returns a tenant's newest-first page. Ownerless legacy rows
+// are included to preserve the existing canAccessSandbox behaviour.
+func (r *sandboxRepo) ListByOwnerPage(owner string, limit, offset int) []*sandpod.SandboxInfo {
+	if limit <= 0 {
+		return r.List()
+	}
+	rows, err := r.db.Query(`SELECT `+sandboxColumns+` FROM sandboxes WHERE owner=? OR owner='' ORDER BY created_at DESC LIMIT ? OFFSET ?`, owner, limit, offset)
+	if err != nil {
+		log.Printf("store/sqldb: list sandboxes by owner page: %v", err)
+		return nil
+	}
+	defer rows.Close()
+	return scanSandboxes(rows)
+}

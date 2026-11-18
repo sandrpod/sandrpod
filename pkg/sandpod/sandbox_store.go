@@ -5,6 +5,7 @@ package sandpod
 
 import (
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -292,4 +293,45 @@ func (s *SandboxStore) Delete(name string) error {
 		}
 	}
 	return nil
+}
+
+// ListPage returns one page ordered newest-first, for the admin view.
+func (s *SandboxStore) ListPage(limit, offset int) []*SandboxInfo {
+	s.mu.RLock()
+	list := make([]*SandboxInfo, 0, len(s.sandboxes))
+	for _, sb := range s.sandboxes {
+		list = append(list, sb)
+	}
+	s.mu.RUnlock()
+	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt.After(list[j].CreatedAt) })
+	return pageSlice(list, limit, offset)
+}
+
+// ListByOwnerPage returns a tenant's page, including legacy ownerless records
+// for upgrade compatibility (they remain readable to every authenticated user).
+func (s *SandboxStore) ListByOwnerPage(owner string, limit, offset int) []*SandboxInfo {
+	s.mu.RLock()
+	list := make([]*SandboxInfo, 0)
+	for _, sb := range s.sandboxes {
+		if sb.Owner == owner || sb.Owner == "" {
+			list = append(list, sb)
+		}
+	}
+	s.mu.RUnlock()
+	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt.After(list[j].CreatedAt) })
+	return pageSlice(list, limit, offset)
+}
+
+func pageSlice(list []*SandboxInfo, limit, offset int) []*SandboxInfo {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset >= len(list) {
+		return []*SandboxInfo{}
+	}
+	list = list[offset:]
+	if limit > 0 && limit < len(list) {
+		list = list[:limit]
+	}
+	return list
 }
