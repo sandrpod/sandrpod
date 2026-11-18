@@ -584,10 +584,10 @@ type e2bSandboxBackend struct{ d e2bDeps }
 func e2bNetworkPolicy(req e2bcompat.NewSandbox) (*egress.Policy, error) {
 	if req.Network != nil {
 		if req.Network.AllowPublicTraffic != nil && !*req.Network.AllowPublicTraffic {
-			return nil, fmt.Errorf("allow_public_traffic=false is not supported; use SANDRPOD_E2B_PRIVATE_PORTS to require a key on public ports")
+			return nil, e2bcompat.InvalidError{Msg: "allow_public_traffic=false is not supported; use SANDRPOD_E2B_PRIVATE_PORTS to require a key on public ports"}
 		}
 		if len(req.Network.Rules) > 0 || req.Network.MaskRequestHost != "" {
-			return nil, fmt.Errorf("E2B per-method network rules and mask_request_host are not supported by this deployment; use allow_out/deny_out")
+			return nil, e2bcompat.InvalidError{Msg: "E2B per-method network rules and mask_request_host are not supported by this deployment; use allow_out/deny_out"}
 		}
 		allow := append([]string(nil), req.Network.AllowOut...)
 		deny := append([]string(nil), req.Network.DenyOut...)
