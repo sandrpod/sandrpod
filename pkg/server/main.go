@@ -1354,6 +1354,9 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					sandboxes = visible
 				}
 			}
+			if sandboxes == nil {
+				sandboxes = []*podpkg.SandboxInfo{}
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"sandboxes": sandboxes,
