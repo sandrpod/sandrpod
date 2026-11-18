@@ -82,6 +82,25 @@ def test_create_sends_network(monkeypatch):
     assert "network" not in sent
 
 
+def test_snapshot_uses_a_long_timeout(monkeypatch):
+    # A docker commit plus a registry push outlives the 30s ordinary timeout;
+    # the default must leave room, and --timeout must be honoured.
+    client = CLIClient(api_url="http://127.0.0.1:8080")
+    seen = []
+
+    def fake_request(method, path, timeout=None, **kwargs):
+        seen.append((method, path, timeout))
+        return _Resp({"image": "repo/snap:latest"})
+
+    monkeypatch.setattr(client, "_request", fake_request)
+    client.snapshot("s1")
+    client.snapshot("s1", "repo/snap:2", timeout=42)
+    assert seen == [
+        ("POST", "/api/v1/sandboxes/s1/snapshot", 600),
+        ("POST", "/api/v1/sandboxes/s1/snapshot?image=repo%2Fsnap%3A2", 42),
+    ]
+
+
 # ─── routing ids ───────────────────────────────────────────────────────────
 
 

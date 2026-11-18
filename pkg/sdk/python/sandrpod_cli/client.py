@@ -236,12 +236,18 @@ class CLIClient:
         resp = self._request("GET", f"/api/v1/sandboxes/{name}/toolbox/proxy/{port}{path}")
         return resp.content
 
-    def snapshot(self, name: str, image: str = "") -> Dict[str, Any]:
-        """把沙箱当前状态提交为镜像(docker commit),返回 {image, sandbox}"""
+    def snapshot(self, name: str, image: str = "", timeout: int = 600) -> Dict[str, Any]:
+        """把沙箱当前状态提交为镜像(docker commit),返回 {image, sandbox}
+
+        A commit of a large container, followed by the optional registry push,
+        regularly outlives the 30s used for ordinary calls. Giving up here does
+        not cancel the server-side commit — it only makes a successful snapshot
+        look like a failure.
+        """
         path = f"/api/v1/sandboxes/{name}/snapshot"
         if image:
             path += "?image=" + urllib.parse.quote(image, safe="")
-        resp = self._request("POST", path)
+        resp = self._request("POST", path, timeout=timeout)
         return resp.json()
 
     def get_job(self, job_id: str) -> Dict[str, Any]:

@@ -679,12 +679,14 @@ def shell(ctx, name):
 @cli.command()
 @click.argument("name")
 @click.option("--image", default="", help="Target image ref (repo:tag); default sandrpod-snapshot/<name>:latest")
+@click.option("--timeout", default=600, show_default=True,
+              help="Seconds to wait for the commit (and registry push) to finish")
 @click.pass_context
-def snapshot(ctx, name, image):
+def snapshot(ctx, name, image, timeout):
     """Commit the sandbox's current state to a new image (docker commit)"""
     client = ctx.obj["client"]
     try:
-        res = client.snapshot(name, image)
+        res = client.snapshot(name, image, timeout=timeout)
         click.echo(f"Snapshot image: {res.get('image', 'N/A')}")
     except Exception as e:
         click.echo(f"Error: {e}", err=True)
@@ -977,10 +979,19 @@ def fs_grep(ctx, name, pattern, path):
     client = ctx.parent.parent.obj["client"]
     try:
         result = client.find_in_files(name, path if path else "", pattern)
+        # The toolbox answers with a list. Accept a {matches: [...]} envelope
+        # too so a proxy/older server cannot turn a successful search into
+        # "Error: 'str' object has no attribute 'get'".
+        if isinstance(result, dict):
+            result = result.get("matches", [])
+        if not isinstance(result, list):
+            result = []
         if not result:
             click.echo("(no matches)")
             return
         for m in result:
+            if not isinstance(m, dict):
+                continue
             line = m.get("line", "?")
             content = m.get("content", "").strip()
             click.echo(f"{m.get('file')}:{line}: {content}")
