@@ -707,6 +707,17 @@ func TestPublicSandboxPorts(t *testing.T) {
 	if code := get(newGW(false), "49983-sb1."+domain, "/files"); code != http.StatusUnauthorized {
 		t.Errorf("envd /files, no key: want 401, got %d", code)
 	}
+	// A service's own bearer token is not an API key. It must reach the proxy,
+	// not turn into a 401 before the in-sandbox server (the E2B MCP gateway
+	// sends its GATEWAY_ACCESS_TOKEN this way).
+	req := httptest.NewRequest("GET", "/index.html", nil)
+	req.Host = userPort
+	req.Header.Set("Authorization", "Bearer in-sandbox-service-token")
+	rec := httptest.NewRecorder()
+	newGW(false).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Errorf("public port with a service bearer: want 200, got %d", rec.Code)
+	}
 	// Opting in flips only the first case back to requiring a key.
 	if code := get(newGW(true), userPort, "/index.html"); code != http.StatusUnauthorized {
 		t.Errorf("private ports, no key: want 401, got %d", code)

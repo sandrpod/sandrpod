@@ -232,7 +232,12 @@ func Handler(cfg Config) http.Handler {
 			// server; the single-sandbox resolver still scopes execution.
 			debugCodePath := cfg.Domain == "" && key == "" &&
 				(r.URL.Path == "/execute" || codeCtxPath)
-			anonAllowed := key == "" && (hostScopedCtx || publicPort)
+			// A public port is a capability, not an API-key surface. An in-sandbox
+			// service may carry its *own* Bearer token (the E2B MCP gateway does):
+			// treating an unrecognized Authorization header as a failed API key
+			// answers 401 before the proxy, so the service never sees a request
+			// that was meant to be anonymous. Keep the header for the proxy.
+			anonAllowed := hostScopedCtx || publicPort
 			if !debugCodePath && !anonAllowed {
 				writeErr(w, http.StatusUnauthorized, "unauthorized: missing or invalid API key")
 				return
