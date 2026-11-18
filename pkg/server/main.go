@@ -1050,6 +1050,8 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					// record is world-visible to every authenticated token (see
 					// the agent-connect path). This route is adminOnly.
 					Owner:        owner,
+					CPUCores:     req.CPUCores,
+					MemoryMB:     req.MemoryMB,
 					StorageMB:    req.StorageMB,
 					Labels:       req.Labels,
 					Network:      req.Network,
