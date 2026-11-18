@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/store"
@@ -160,6 +162,59 @@ func TestListSandboxesEmpty(t *testing.T) {
 	}
 	if len(slice) != 0 {
 		t.Errorf("expected empty slice, got %d elements", len(slice))
+	}
+}
+
+// TestListSandboxesPaginationHasMore guards the console's paging contract:
+// has_more must mean "a next page has rows", not "this page happened to be
+// full". A full last page used to answer has_more=true and the UI opened a
+// blank page.
+func TestListSandboxesPaginationHasMore(t *testing.T) {
+	stores := store.NewMemoryStores()
+	base := time.Now().Add(-time.Hour)
+	for i := 0; i < 4; i++ {
+		sb := &podpkg.SandboxInfo{
+			Name:        fmt.Sprintf("sb-%d", i),
+			DisplayName: fmt.Sprintf("box-%d", i),
+			CreatedAt:   base.Add(time.Duration(i) * time.Minute),
+		}
+		if err := stores.Sandboxes.Add(sb); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := New(Config{}, stores, tunnel.NewTunnelStore(), tunnel.NewDirectTunnelStore())
+
+	for _, tc := range []struct {
+		name        string
+		query       string
+		wantCount   int
+		wantHasMore bool
+	}{
+		{"first page of four has a next", "?limit=2&offset=0", 2, true},
+		{"second page is exactly the last", "?limit=2&offset=2", 2, false},
+		{"past the end returns an empty page", "?limit=2&offset=4", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/sandboxes"+tc.query, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", w.Code)
+			}
+			var body struct {
+				Sandboxes []json.RawMessage `json:"sandboxes"`
+				HasMore   bool              `json:"has_more"`
+			}
+			if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if len(body.Sandboxes) != tc.wantCount {
+				t.Errorf("got %d sandboxes, want %d", len(body.Sandboxes), tc.wantCount)
+			}
+			if body.HasMore != tc.wantHasMore {
+				t.Errorf("has_more = %v, want %v", body.HasMore, tc.wantHasMore)
+			}
+		})
 	}
 }
 

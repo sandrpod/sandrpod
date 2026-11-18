@@ -1332,13 +1332,21 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				ListPage(limit, offset int) []*podpkg.SandboxInfo
 				ListByOwnerPage(owner string, limit, offset int) []*podpkg.SandboxInfo
 			}
+			// Ask for one row beyond the page: its presence is the only accurate
+			// answer to "is there a next page?". Deriving has_more from
+			// len(page)==limit reports a next page whenever the last page happens
+			// to be full, which shows the console a blank page.
+			fetchLimit := limit
+			if limit > 0 {
+				fetchLimit = limit + 1
+			}
 			var sandboxes []*podpkg.SandboxInfo
 			if limit > 0 {
 				if paged, ok := sandboxStore.(pagedSandboxes); ok {
 					if ident.IsAdmin() {
-						sandboxes = paged.ListPage(limit, offset)
+						sandboxes = paged.ListPage(fetchLimit, offset)
 					} else {
-						sandboxes = paged.ListByOwnerPage(ident.Name, limit, offset)
+						sandboxes = paged.ListByOwnerPage(ident.Name, fetchLimit, offset)
 					}
 				}
 			}
@@ -1357,12 +1365,16 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			if sandboxes == nil {
 				sandboxes = []*podpkg.SandboxInfo{}
 			}
+			hasMore := limit > 0 && len(sandboxes) > limit
+			if hasMore {
+				sandboxes = sandboxes[:limit]
+			}
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(map[string]any{
 				"sandboxes": sandboxes,
 				"limit":     limit,
 				"offset":    offset,
-				"has_more":  limit > 0 && len(sandboxes) == limit,
+				"has_more":  hasMore,
 			})
 
 		case http.MethodPost:
