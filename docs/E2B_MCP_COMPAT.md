@@ -44,6 +44,7 @@ engine the native surface uses.
 ```
 Sandbox.create({ mcp })
   → SDK runs `mcp-gateway --config …` inside the sandbox
+  → shim writes the token, detaches the server, exits once :50005 listens
   → shim listens on :50005, writes /etc/mcp-gateway/.token
 
 getMcpUrl()   → https://50005-<id>.<domain>/mcp
