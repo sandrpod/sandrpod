@@ -6,6 +6,116 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **The quickstart compose keeps the worker's identity.** `docker-compose.yml` and
+  `docker-compose.local.yml` mounted only the Docker socket, so every
+  `docker compose down/up` generated a new poder id; sandboxes still pointed at
+  the dead record and answered `503 sandbox tunnel not available`. Both now mount
+  `/var/lib/sandrpod` as a volume, as the production compose already did.
+- Python SDK examples in the README use `E2B_DOMAIN` instead of the debug-only
+  `E2B_API_URL`/`E2B_SANDBOX_URL` overrides.
+
+## [0.12.1] - 2026-11-19
+
+### Fixed
+
+- **Fork returns to the worker that holds the snapshot.** A pinned create now
+  follows the same tenant rule as normal placement, so an operator-owned sandbox
+  can fork onto its source worker instead of being refused as another workspace's.
+- **Snapshot ids are the tag Docker actually stores.** `create_snapshot` returns
+  the familiar `repo:tag`, which is what `list_snapshots` and `delete_snapshot`
+  see; the two spellings no longer disagree.
+- Snapshot deletion removes both the local tag and the registry copy.
+
+## [0.12.0] - 2026-11-19
+
+The E2B surface became complete enough to run the official SDK without caveats,
+and same-workspace sandboxes stopped sharing a network.
+
+### Added
+
+- **E2B snapshots** — `create_snapshot` / `list_snapshots` / `delete_snapshot`,
+  mapped onto worker images; deletion clears the local tag and the registry copy.
+- **E2B fork** — `fork` snapshots the source and starts the requested children on
+  the worker that holds the image, returning per-child success/error.
+- **E2B network updates** — `PUT /sandboxes/{id}/network` replaces a running
+  sandbox's egress sidecar. Adding a first policy to a sandbox that never had one
+  is refused with `409`, because Docker cannot move a live container.
+- **Private ports** — `allowPublicTraffic=false` makes every public port of that
+  sandbox require a signed URL or API key.
+- E2B `cpuCount`, including reads back from the stored reservation; camelCase
+  `allowOut`/`denyOut`/`allowPublicTraffic` are accepted alongside snake_case.
+- Anonymous public-port traffic is rate-limited per client IP and sandbox
+  (50 req/s, burst 100; `SANDRPOD_E2B_ANON_RATE`).
+
+### Changed
+
+- **Each non-egress sandbox gets its own bridge** (`sandrpod-s-<hash>`); the
+  worker attaches itself and removes it with the sandbox.
+- CPU, memory and storage have explicit defaults (1 vCPU / 1 GiB / 2 GiB) instead
+  of reaching Docker as zero, which Docker reads as unlimited.
+- Ownerless legacy sandbox and job records are admin-only.
+- The egress sidecar image is pulled on demand instead of failing a policy create
+  on a fresh worker.
+
+## [0.11.1] - 2026-11-17
+
+### Fixed
+
+- Routing keys are DNS-label safe (`sb-<hex>`), so a display name can be used as
+  a preview host label without breaking the wildcard hostname.
+
+## [0.11.0] - 2026-11-17
+
+### Added
+
+- **Workspace-scoped sandbox names.** Two workspaces may both create
+  `mysandbox`; every record also carries a global, immutable `routing_id` that
+  preview hosts and API paths address.
+- A racing create of a name that belongs to another workspace is refused before
+  scheduling, not after a container exists.
+
+## [0.10.3] - 2026-11-17
+
+### Added
+
+- **Worker enrolment.** A join token is now an invitation (one hour, one
+  workspace) exchanged once for a per-machine worker key (180 days, revocable
+  per machine). Workers persist the key and use it across restarts.
+- Five desktop image variants, plus a headless toolbox with the Obscura browser
+  MCP.
+- `/install.sh` and `/agent.sh` are published with the docs site.
+
+### Fixed
+
+- Preview URLs are scoped to the sandbox owner.
+- Agent-generated names widened to 32 bits to avoid collisions.
+
+## [0.10.0] - 2026-11-16
+
+### Fixed
+
+- Desktop images survive container restarts, start in `/workspace`, and keep the
+  dock and panel layout when the viewer resizes.
+- MCP sandbox file tools call routes that exist; interactive PTY sessions start in
+  the work tree.
+
+## [0.9.0] - 2026-11-10
+
+### Added
+
+- **Desktop sandboxes**: KasmVNC viewer, CDP access, a desktop tool surface and
+  persistence across container restarts.
+- **GPU sandboxes**: device allocation, a glibc toolbox image, per-owner
+  concurrency caps and an idle-TTL clamp.
+- Snapshots that push to a registry, so a fork works on any worker; snapshot
+  listing and deletion.
+- Desktop, GPU and snapshot documentation pages.
+- Kubernetes feasibility analysis.
+
 ## [0.8.0] - 2026-10-29
 
 A worker no longer authenticates with the invitation a human pasted.

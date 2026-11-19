@@ -1,4 +1,72 @@
-# v0.6.0 → v0.7.0: what changed, who it affects, how to undo it
+# Upgrade breaks by release
+
+A release review needs three answers per change: **what breaks**, **who breaks**,
+and **how to roll back**. The current release is **v0.12.1**; the running list is
+[CHANGELOG.md](../CHANGELOG.md). The first section covers everything since
+v0.8.0, the second preserves the detailed v0.6.0 → v0.7.0 review.
+
+The native HTTP API has stayed additive across these releases. The breaks below
+are credentials, placement/name semantics, and defaults that used to mean
+"unlimited".
+
+## v0.8.0 → v0.12.1
+
+### v0.11.0 — sandbox names are workspace-scoped
+
+`POST /api/v1/sandboxes` still takes the name you choose, but it is no longer a
+global key. Each record also carries an immutable `routing_id` (`sb-<hex>`), and
+that is what preview hosts and the E2B surface address.
+
+**Who breaks:** a client that stored a display name and assumed it was unique
+across the deployment, or that builds `<port>-<name>.<domain>` itself.
+
+**Migrate:** read `routing_id` from create/get/list and use it in bookmarks and
+scripts. Lookups by display name still resolve inside the caller's workspace.
+
+**Roll back:** v0.10.x reads the same rows; display names are still present.
+
+### v0.12.0 — defaults stopped being zero, and ownerless records became private
+
+- A create that omits `cpu_cores`, `memory_mb` or `storage_mb` now reserves
+  1 vCPU / 1 GiB / 2 GiB. Previously the zero reached Docker, which reads zero as
+  **unlimited**. A deployment that relied on unbounded sandboxes must set the
+  fields explicitly.
+- Records with an empty owner (legacy rows from before ownership existed) are
+  visible only to an admin. A member key that used to list them now sees nothing.
+- Every non-egress sandbox gets its own bridge (`sandrpod-s-<hash>`) instead of a
+  shared tenant bridge. Anything that addressed a sandbox by the old shared
+  network name must use the tunnel/toolbox path.
+
+**Roll back:** v0.11.x ignores the new columns and reads the records; containers
+are recreated on the old network model.
+
+### v0.8.0 → v0.10.3 — the join token became an invitation
+
+A join token is now one hour, one workspace, exchanged once for a per-machine
+**worker key** (180 days, revocable per machine). A worker stores the key under
+`/var/lib/sandrpod/worker-key` and ignores the token on its command line after
+enrolment.
+
+**Who breaks:** only a hosted build that issued long-lived join tokens as the
+permanent worker credential. A self-hosted server with a static `-token` keeps
+working unchanged.
+
+**Migrate:** upgrade the control plane first, then let the worker reconnect; it
+enrols automatically and persists the key. Give the worker's `/var/lib/sandrpod`
+a durable volume, or every recreate needs a fresh invitation.
+
+**Roll back:** the previous worker image still accepts the invitation; the worker
+key file is additive and ignored by older builds.
+
+### v0.12.1 — no new breaks
+
+Snapshot ids are now the familiar `repo:tag`, so a client that stored the
+`docker.io/...` spelling returned by v0.12.0 should re-list snapshots once.
+Forks and pinned creates use the same tenant rule as placement.
+
+---
+
+## v0.6.0 → v0.7.0: what changed, who it affects, how to undo it
 
 A release review needs three answers per change: **what breaks**, **who breaks**,
 and **how to roll back**. This is that list. The narrative version is
@@ -9,12 +77,12 @@ Scope: 50 Go files, +3,497 / −2,519. Nothing in this release is on by default.
 
 ---
 
-## 1. Breaking changes
+### 1. Breaking changes
 
 All three are **Go API** changes. No HTTP request or response shape changed, no
 flag or environment variable was removed, and the database only gains columns.
 
-### 1.1 `SelectBestFor` takes a tenant
+#### 1.1 `SelectBestFor` takes a tenant
 
 ```go
 // v0.6.0
@@ -35,7 +103,7 @@ unscoped callers.
 **Why it changed:** a sandbox was placed on any capable worker regardless of who
 owned it. The commercial build runs several tenants on one fleet.
 
-### 1.2 The version ldflags symbol moved
+#### 1.2 The version ldflags symbol moved
 
 ```bash
 # v0.6.0
@@ -51,7 +119,7 @@ the binary reports `dev` instead of erroring — which is why it is listed here.
 **Why it changed:** the API server moved from `package main` into `pkg/server`,
 so there is no `main.version` to set.
 
-### 1.3 `cmd/server` is no longer where the server lives
+#### 1.3 `cmd/server` is no longer where the server lives
 
 `pkg/server` now holds `New`, `Main`, the handlers and the routes. `cmd/server`
 is a thin `main` that calls `Main()`.
@@ -61,12 +129,12 @@ change. Code that read `cmd/server/*.go` for reference now reads `pkg/server`.
 
 ---
 
-## 2. Behaviour changes (same shape, different meaning)
+### 2. Behaviour changes (same shape, different meaning)
 
 These do not break compilation and do not change any JSON field name. They change
 what the values mean.
 
-### 2.1 An unknown resource reading is negative
+#### 2.1 An unknown resource reading is negative
 
 `GET /api/v1/poders` → `usage.cpu_usage` / `usage.memory_usage`.
 
@@ -85,7 +153,7 @@ which is at least obviously wrong; the old `0.5` rendered a confident, healthy
 fails inside a container, so every containerised worker reported `0.5`. A number
 nobody can trust argues against looking at the dashboard at all.
 
-### 2.2 A join-token worker can heartbeat
+#### 2.2 A join-token worker can heartbeat
 
 `POST /api/v1/poders/{id}/heartbeat` now accepts a worker credential for **its
 own** record. Before, it was admin-only, so join-token workers connected and then
@@ -95,7 +163,7 @@ never changed.
 **Who breaks:** nobody. This is a widening. Anything that relied on the `403`
 (an alert on it, say) should be removed.
 
-### 2.3 A refusal at the create choke point fails the record
+#### 2.3 A refusal at the create choke point fails the record
 
 A sandbox blocked by an admission rule is now marked `ERROR` (job and record)
 instead of remaining `PENDING` forever. Anything polling for `PENDING` to
@@ -103,7 +171,7 @@ disappear will now see it resolve.
 
 ---
 
-## 3. New capabilities (additive, off by default)
+### 3. New capabilities (additive, off by default)
 
 | Addition | What it enables |
 |---|---|
@@ -116,7 +184,7 @@ disappear will now see it resolve.
 
 ---
 
-## 4. What is **not** affected
+### 4. What is **not** affected
 
 Verified by diffing the two tags, not by reading the release notes:
 
@@ -131,7 +199,7 @@ Verified by diffing the two tags, not by reading the release notes:
 
 ---
 
-## 5. Upgrade order
+### 5. Upgrade order
 
 1. **Workers first.** A 0.6 worker ignores the tenant header. A 0.7 control plane
    refuses to place a tenant-scoped sandbox onto it — `409 worker capability
@@ -146,7 +214,7 @@ explicitly.
 
 ---
 
-## 6. Verify your own deployment
+### 6. Verify your own deployment
 
 ```bash
 # 1. No removed flags (should print nothing)

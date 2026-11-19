@@ -1,7 +1,7 @@
 # SandrPod Architecture
 
 > **Version**: v0.12.1
-> **Updated**: 2026-08
+> **Updated**: 2026-11
 > 中文版：[ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)
 >
 > This document describes the architecture as **implemented and running**.
@@ -304,6 +304,20 @@ serves a request is decided by **path first, port second**:
   reverse-proxied through the tunnel to Toolbox `/proxy/<port>/`, which dials
   `127.0.0.1:<port>` inside the sandbox. This is how in-sandbox services are
   reached — the MCP gateway on `50005`, a user's dev server, a webhook target.
+  The toolbox control port **8080 is blocked** here on purpose: it has no
+  per-sandbox credential, so proxying it would turn the unguessable hostname
+  into unauthenticated code execution.
+
+The control plane also serves E2B **snapshots** (`/snapshots`), **fork**
+(`/sandboxes/{id}/fork`) and **network updates**
+(`PUT /sandboxes/{id}/network`):
+
+- a snapshot commits the container to a worker image and pushes it to
+  `SANDRPOD_REGISTRY` when configured, so any worker can create from it;
+- fork snapshots the source and pins the children to the worker that holds that
+  image;
+- a network update replaces the egress sidecar in place. A sandbox that never had
+  a sidecar is refused with `409`, because Docker cannot move a live container.
 
 Two authorization details worth knowing:
 

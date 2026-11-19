@@ -197,13 +197,13 @@ the only change is which host it points at. Source: [`assets/e2b-demo.py`](asset
 
 One example of "speak any SDK": already have code on the E2B SDK? Point it at your
 SandrPod and it just works — `Sandbox.create`, `files.*`, `commands.*`
-(foreground/background/PTY), `run_code`, `watch_dir`, `get_metrics`, `pause`/`resume`:
+(foreground/background/PTY), `run_code`, `watch_dir`, `get_metrics`, `pause`/`resume`,
+`create_snapshot`/`fork`, `update_network`:
 
 ```python
 import os
-os.environ["E2B_API_KEY"]     = "e2b_your_key"          # issued by your SandrPod
-os.environ["E2B_API_URL"]     = "https://sandbox.you.com"   # control plane
-os.environ["E2B_SANDBOX_URL"] = "https://sandbox.you.com"   # per-sandbox envd
+os.environ["E2B_API_KEY"] = "e2b_your_key"       # issued by your SandrPod
+os.environ["E2B_DOMAIN"]  = "sandbox.you.com"    # the deployment's E2B domain
 
 from e2b import Sandbox                # the real, unmodified e2b SDK
 sbx = Sandbox.create()
@@ -215,11 +215,14 @@ ci = CI.create()
 print(ci.run_code("import numpy as np; np.arange(6).sum()").text)   # → 15
 ```
 
-For a zero-config drop-in (no env vars, just a domain), run the gateway behind a
-wildcard domain — `SANDRPOD_E2B_DOMAIN=sandbox.you.com` + `*.sandbox.you.com` DNS
-+ TLS. Full surface, wire-protocol details, and the coverage matrix (verified
-against the **real, unmodified** E2B SDK over a real container) are in
-**[docs/E2B_COMPAT.md](docs/E2B_COMPAT.md)**.
+`E2B_API_URL` / `E2B_SANDBOX_URL` are the debug/path-mode overrides; a normal
+deployment sets only `E2B_API_KEY` and `E2B_DOMAIN`.
+
+For a host-routed drop-in, set `SANDRPOD_E2B_DOMAIN=sandbox.you.com` on the server
+plus `*.sandbox.you.com` DNS and TLS; the client needs only `E2B_API_KEY` and
+`E2B_DOMAIN` — no URL overrides, no code changes. Full surface, wire-protocol
+details, and the coverage matrix (verified against the **real, unmodified** E2B SDK
+over a real container) are in **[docs/E2B_COMPAT.md](docs/E2B_COMPAT.md)**.
 
 ---
 
@@ -375,17 +378,24 @@ E2B gateway is enabled — the full E2B control-plane + `envd` protocol.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/sandboxes` | List sandboxes |
-| POST | `/api/v1/sandboxes` | Create sandbox |
+| GET | `/api/v1/sandboxes` | List sandboxes (`limit`/`offset`, `has_more`) |
+| POST | `/api/v1/sandboxes` | Create sandbox (`async:true` returns a job id) |
 | DELETE | `/api/v1/sandboxes/{name}` | Delete sandbox |
 | POST | `/api/v1/sandboxes/execute` | Execute code |
 | GET | `/api/v1/sandboxes/{name}/toolbox/*` | Proxy to Toolbox (file upload/download, etc.) |
+| GET / PUT / DELETE | `/api/v1/sandboxes/{name}/egress` | Read, replace, or clear the egress policy |
+| GET / DELETE | `/api/v1/snapshots` | List or remove snapshot images |
+| GET | `/api/v1/jobs/{id}` | Async-create status, error and result |
 | GET | `/api/v1/poders` | List Poder nodes |
 | DELETE | `/api/v1/poders/{id}` | Delete a Poder record |
 
+The complete surface — sessions, MCP, previews, tokens, worker enrolment — is in
+[docs-site/api](https://docs.sandrpod.com/api) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 **E2B-compatible API** — `POST /sandboxes`, `GET /sandboxes/{id}`,
-`/sandboxes/{id}/{pause,resume,metrics,connect}`, and the `envd`
-Filesystem/Process connect-RPC services. See [docs/E2B_COMPAT.md](docs/E2B_COMPAT.md).
+`/sandboxes/{id}/{pause,resume,metrics,connect,network}`, `/snapshots`,
+`/sandboxes/{id}/fork`, and the `envd` Filesystem/Process connect-RPC services.
+See [docs/E2B_COMPAT.md](docs/E2B_COMPAT.md).
 
 ---
 
@@ -420,7 +430,7 @@ Longer pieces, with the commands and the failures they were measured from:
 
 - [Self-hosting an E2B-compatible sandbox stack, from an empty server](https://blog.sandrpod.com/e2b-compatible-sandbox-api/)
   — one VM, one domain, four containers, and the unmodified E2B SDK checked
-  function by function. 48 of 50 calls pass; the two that do not are named.
+  function by function; the current sweep passes 38/38 against `e2b` 2.64.
 - [Two ways to give a deepagents agent a sandbox you own](https://blog.sandrpod.com/deepagents-sandbox-backends/)
   — `langchain-e2b` and `langchain-sandrpod` down the same twelve assertions.
   Both pass. Testing both surfaced two real defects — both of them mine to fix —

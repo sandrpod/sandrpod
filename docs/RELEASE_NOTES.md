@@ -1,4 +1,38 @@
-# SandrPod 0.7.1
+# SandrPod release notes
+
+The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
+narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
+
+## 0.12.1 (current)
+
+Fixes for the E2B snapshot and fork paths added in 0.12.0:
+
+- a fork is created on the worker that holds the source snapshot, and a pinned
+  create follows the same tenant rule as normal placement;
+- `create_snapshot` returns the familiar `repo:tag` Docker actually stores, so
+  `list_snapshots` and `delete_snapshot` agree with it.
+
+Upgrade order is unchanged: workers first, then the control plane, then agents.
+Nothing in this release changes the native HTTP API or the schema.
+
+## 0.12.0
+
+The E2B surface became complete enough to run the official SDK without caveats,
+and same-workspace sandboxes stopped sharing a network:
+
+- E2B `create_snapshot` / `list_snapshots` / `delete_snapshot`, `fork`, and
+  `PUT /sandboxes/{id}/network`;
+- `allowPublicTraffic=false` maps to per-sandbox private ports, and `cpuCount`
+  is honoured and reported back;
+- every non-egress sandbox gets its own bridge (`sandrpod-s-<hash>`);
+- CPU/memory/storage defaults are explicit (1 vCPU / 1 GiB / 2 GiB), and
+  ownerless legacy records are admin-only;
+- the egress sidecar image is pulled on demand.
+
+The Python CLI is versioned independently; `sandrpod-cli 0.7.2` shipped with the
+matching client fixes.
+
+## Historical: 0.7.1
 
 > The release that made the cloud path real, and the one where a machine you attach
 > stops being a machine you handed over.

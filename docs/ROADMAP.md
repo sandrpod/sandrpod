@@ -5,7 +5,16 @@ infrastructure — fast, secure sandboxes provisioned on demand across eight
 clouds, consumed by AI agents (LangChain deepagents) through a Python SDK and
 CLI. Reference points for feature parity: E2B, Modal, Daytona.
 
-_Last updated: 2026-07-17. Status legend: ☐ open · ◐ partial · ☑ done._
+_Last updated: 2026-11-19. Status legend: ☐ open · ◐ partial · ☑ done._
+
+> **Since the July pass:** v0.9 added desktop sandboxes, GPU sandboxes and
+> registry-backed snapshots; v0.10 added worker enrolment (join token → worker
+> key), the Obscura headless image and five desktop variants; v0.11 made sandbox
+> names workspace-scoped with a global `routing_id`; v0.12 completed the E2B
+> surface (snapshots, fork, live network updates, private ports) and gave every
+> non-egress sandbox its own bridge. The per-release list is
+> [CHANGELOG.md](../CHANGELOG.md); breaks are in
+> [UPSTREAM_CHANGES.md](UPSTREAM_CHANGES.md).
 
 ---
 
@@ -40,21 +49,22 @@ _Last updated: 2026-07-17. Status legend: ☐ open · ◐ partial · ☑ done._
 These block serious external use. All must keep existing deployments working
 (see [Upgrade policy](#upgrade-policy)).
 
-### 1. Authentication & multi-tenancy ◐ → mostly ☑
-Today the control plane has a **single shared bearer token**: anyone holding it
-can delete every sandbox and terminate every VM. Needed, in order:
+### 1. Authentication & multi-tenancy ☑
+Named tokens, ownership, per-owner quotas and a persisted issuance API are in
+place. The legacy single `-token` still works as an implicit admin, so existing
+deployments did not have to migrate.
 - ☑ **Named tokens** (a tokens file: `{name, token, role}`), individually
   issuable/revocable, **hot-reloaded** on change; the legacy single `-token`
   keeps working as an implicit admin.
 - ☑ **Ownership**: sandboxes/jobs carry an `owner`; user-role tokens only
   see/manage their own, admin sees all; infra endpoints are admin-only.
 - ☑ Per-owner quota (`SANDRPOD_MAX_SANDBOXES_PER_OWNER`) + per-identity rate
-  limiting. ☐ Still open: token CRUD API, automated key rotation.
+  limiting. ☑ Token CRUD API (`GET/POST/DELETE /api/v1/tokens`); ☐ automated key
+  rotation remains.
 
 ### 2. Idle reclamation (cost safety) ☑
-Cloud VMs currently run **forever** until a poder is deleted manually. For a
-product that provisions cloud resources on behalf of users, not reclaiming idle
-capacity is a trust problem, not just a feature gap.
+A cloud VM left running is a cost problem, not a feature gap. Both reapers ship
+opt-in and are live-validated.
 - ☑ **Sandbox idle timeout** (opt-in): reap sandboxes whose `last_activity`
   exceeds a configurable TTL.
 - ☑ **Empty-poder reclamation** (opt-in): a cloud poder with zero containers
@@ -66,11 +76,8 @@ capacity is a trust problem, not just a feature gap.
   deterministic unit tests (`reapEmptyPodersOnce`).
 
 ### 3. Async create + job status API ☑
-`POST /sandboxes` for a cloud provider blocks 2–5 minutes; intermediate proxies
-routinely kill the connection (~137 s observed), and the job store has **no
-user-facing read endpoint**, so a failed create is invisible to the caller.
-Provisioning is already detached from the request context (a disconnect no
-longer aborts it), but the right shape is:
+A cloud create can block 2–5 minutes, and intermediate proxies routinely kill
+the connection (~137 s observed). The shipped shape:
 - ☑ `async` create: returns a job id immediately, provisions in the
   background, progress/errors via **`GET /api/v1/jobs/{id}`**.
 - ☑ CLI polls to completion by default (`--no-wait` to just get the job id).
@@ -83,10 +90,11 @@ longer aborts it), but the right shape is:
   MULTI_INSTANCE_DEPLOYMENT.md Part 4.
 
 ### 5. Quotas & rate limiting ☑
-Nothing stops a loop from provisioning unbounded VMs.
+The caps exist and are enforced at the create choke point:
 - ☑ `SANDRPOD_MAX_SANDBOXES_PER_OWNER` cap at create time.
-- ☑ Per-identity request rate limiting (`SANDRPOD_RATE_LIMIT`). ☐ Still open:
-  per-owner VM/cost caps.
+- ☑ Per-identity request rate limiting (`SANDRPOD_RATE_LIMIT`). ◐ Per-owner
+  VM/cost caps: the hosted admission gate enforces concurrency and storage
+  budgets; the engine exposes the hooks, not a billing model.
 
 ---
 
@@ -118,7 +126,12 @@ The server proxies `/sandboxes/{name}/pty` end-to-end over the tunnel and
 ### 10. Snapshot / persistent workspaces ◐
 - ☑ Container-commit snapshots: `POST /sandboxes/{name}/snapshot` →
   `sandrpod-cli snapshot`, producing an image reusable as `image_id`.
-- ☐ Workspace-volume persistence / object-storage sync for cross-host restore.
+- ☑ Snapshots push to a registry (`SANDRPOD_REGISTRY`), so a fork works on any
+  worker; list and delete shipped in v0.9.
+- ☑ `/workspace` persists in a named volume (`persist_data`, default on), so a
+  stopped or restarted sandbox keeps its files.
+- ☐ Cross-host restore of a workspace without the same worker / registry
+  (object-storage sync).
 
 ### 11. SSH key persistence (SSH-backend providers) ☑
 DigitalOcean and Hetzner persist each VM's ephemeral key (PKCS8 PEM, 0600)
@@ -136,8 +149,9 @@ Validated live (ghost records no longer appear).
 ## P2 — maturity & ecosystem
 
 - **Observability** ◐ — ☑ Prometheus `/metrics` (sandbox/poder/job counts,
-  fleet capacity) + lifecycle webhooks. ☐ Still open: structured leveled logging
-  and tracing.
+  fleet capacity), lifecycle webhooks, and structured `slog` access logs in the
+  server. ☐ Still open: distributed tracing and structured logging in the
+  worker/toolbox binaries.
 - **TypeScript SDK** ☑ — `@sandrpod/sdk`, dependency-free fetch client
   mirroring the Python SDK (`pkg/sdk/typescript`).
 - **Web console** ◐ — ☑ embedded SPA at `/console` (sandbox cards, stats,
@@ -157,9 +171,11 @@ Validated live (ghost records no longer appear).
   NDJSON with correct reasons, and the real osascript consent dialog →
   allow-permanent → persisted grant. ☐ Still open: Windows validation with the
   tray.
-- **Horizontal scale** ◐ — ☑ boundary documented in [SCALING.md](SCALING.md)
-  (connection-count / single-writer ceiling, Postgres + multi-instance path).
-  ☐ Still open: multi-instance tunnel affinity/registry.
+- **Horizontal scale** ☑ — ☑ boundary documented in [SCALING.md](SCALING.md)
+  (connection-count / single-writer ceiling); PostgreSQL + multi-instance
+  forwarding, durable create delivery and the `tunnel_owners` registry are
+  implemented and operated. Remaining work is capacity tuning, not a missing
+  mechanism.
 
 ---
 

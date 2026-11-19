@@ -170,13 +170,13 @@ SandrPod 不绑定单一客户端。它同时提供原生 REST API 和 Python/TS
 
 "想说哪套 SDK 就说哪套"的一个例子：已有跑在 E2B SDK 上的代码？把它指向你的 SandrPod
 就能直接用 —— `Sandbox.create`、`files.*`、`commands.*`（前台/后台/PTY）、`run_code`、
-`watch_dir`、`get_metrics`、`pause`/`resume` 全支持：
+`watch_dir`、`get_metrics`、`pause`/`resume`、`create_snapshot`/`fork`、
+`update_network` 全支持：
 
 ```python
 import os
-os.environ["E2B_API_KEY"]     = "e2b_your_key"          # 由你的 SandrPod 签发
-os.environ["E2B_API_URL"]     = "https://sandbox.you.com"   # 控制面
-os.environ["E2B_SANDBOX_URL"] = "https://sandbox.you.com"   # 每沙箱 envd
+os.environ["E2B_API_KEY"] = "e2b_your_key"       # 由你的 SandrPod 签发
+os.environ["E2B_DOMAIN"]  = "sandbox.you.com"    # 部署的 E2B 域名
 
 from e2b import Sandbox                # 真正的、未经修改的 e2b SDK
 sbx = Sandbox.create()
@@ -188,10 +188,13 @@ ci = CI.create()
 print(ci.run_code("import numpy as np; np.arange(6).sum()").text)   # → 15
 ```
 
-想要零配置直连（不用配环境变量，只用域名），把网关跑在泛域名后面即可 ——
-`SANDRPOD_E2B_DOMAIN=sandbox.you.com` 配 `*.sandbox.you.com` 的 DNS + TLS。
-完整接口面、线协议细节，以及对着**真实、未修改**的 E2B SDK + 真容器验证过的覆盖矩阵，
-见 **[docs/E2B_COMPAT.md](docs/E2B_COMPAT.md)**。
+`E2B_API_URL` / `E2B_SANDBOX_URL` 是调试/路径模式的覆盖变量；正常部署只设
+`E2B_API_KEY` 和 `E2B_DOMAIN`。
+
+主机路由式直连：服务端设 `SANDRPOD_E2B_DOMAIN=sandbox.you.com`，配
+`*.sandbox.you.com` 的 DNS + TLS；客户端只需 `E2B_API_KEY` 和 `E2B_DOMAIN`，
+不用覆盖 URL，也不用改代码。完整接口面、线协议细节，以及对着**真实、未修改**的
+E2B SDK + 真容器验证过的覆盖矩阵，见 **[docs/E2B_COMPAT.md](docs/E2B_COMPAT.md)**。
 
 ---
 
@@ -342,17 +345,25 @@ SandrPod 提供**两套** HTTP 接口：自有的原生 REST API，以及（启�
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| GET | `/api/v1/sandboxes` | 列出沙箱 |
-| POST | `/api/v1/sandboxes` | 创建沙箱 |
+| GET | `/api/v1/sandboxes` | 列出沙箱（`limit`/`offset`，返回 `has_more`） |
+| POST | `/api/v1/sandboxes` | 创建沙箱（`async:true` 返回 job id） |
 | DELETE | `/api/v1/sandboxes/{name}` | 删除沙箱 |
 | POST | `/api/v1/sandboxes/execute` | 执行代码 |
 | GET | `/api/v1/sandboxes/{name}/toolbox/*` | 代理到 Toolbox（文件上传/下载等） |
+| GET / PUT / DELETE | `/api/v1/sandboxes/{name}/egress` | 读取、替换或清除出网策略 |
+| GET / DELETE | `/api/v1/snapshots` | 列出或删除快照镜像 |
+| GET | `/api/v1/jobs/{id}` | 异步创建的状态、错误和结果 |
 | GET | `/api/v1/poders` | 列出 Poder 节点 |
 | DELETE | `/api/v1/poders/{id}` | 删除 Poder 记录 |
 
+完整接口面（session、MCP、preview、token、worker 接入）见
+[docs-site/api](https://docs.sandrpod.com/zh/api) 和
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
 **E2B 兼容 API** —— `POST /sandboxes`、`GET /sandboxes/{id}`、
-`/sandboxes/{id}/{pause,resume,metrics,connect}`，以及 `envd` 的
-Filesystem/Process connect-RPC 服务。详见 [docs/E2B_COMPAT.md](docs/E2B_COMPAT.md)。
+`/sandboxes/{id}/{pause,resume,metrics,connect,network}`、`/snapshots`、
+`/sandboxes/{id}/fork`，以及 `envd` 的 Filesystem/Process connect-RPC 服务。
+详见 [docs/E2B_COMPAT.md](docs/E2B_COMPAT.md)。
 
 ---
 

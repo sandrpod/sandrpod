@@ -5,9 +5,10 @@ The **unmodified** official E2B SDKs (`e2b`, `@e2b/code-interpreter`,
 your domain — no code changes, only `E2B_DOMAIN` + an API key ("true drop-in").
 
 Status: **shipped and verified against the real, unmodified E2B SDKs**
-(`e2b` v2.30.0 + `e2b-code-interpreter`, real Docker toolbox container) — see
-the compatibility matrix in §4. The wire contract was reverse-engineered from
-E2B's Apache-2.0 sources (`e2b-dev/E2B`, `e2b-dev/infra`).
+(`e2b` v2.64.0, and v2.30.0 with its two known client gaps, plus
+`e2b-code-interpreter`, real Docker toolbox container, engine v0.12.1) — see the
+compatibility matrix in §4. The wire contract was reverse-engineered from E2B's
+Apache-2.0 sources (`e2b-dev/E2B`, `e2b-dev/infra`).
 
 ---
 
@@ -122,6 +123,11 @@ not yet exercised by the real SDK.
 | Control: set timeout / refresh | `setTimeout` | ☑ | maps to per-sandbox `ttl_seconds` |
 | Control: pause/resume | `pause`/`resume`/`connect` | ☑ | freezes the container via the poder (docker pause); `connect` auto-resumes; verified live |
 | Control: metrics | `get_metrics` | ☑ | toolbox reads `/proc` (cpu/mem) + statfs (disk); verified live |
+| Control: snapshots | `create_snapshot`/`list_snapshots`/`delete_snapshot` | ☑ | maps to worker images; the id is the familiar `repo:tag`; deletion removes the local tag and the registry copy; verified live |
+| Control: fork | `sandbox.fork()` | ☑ | snapshots the source and pins the children to the worker holding that image; per-child success/error; verified live |
+| Control: network update | `sandbox.update_network()` | ☑ | replaces a running sandbox's egress sidecar in place; a sandbox that never had one answers `409`; verified live |
+| Control: CPU | `cpuCount` | ☑ | stored on the record and reported by get/list/metrics; verified live (SDK 2.30 predates it) |
+| Private ports | `allowPublicTraffic=false` | ☑ | every public port of that sandbox requires a signed URL or API key; verified live |
 | envd filesystem | `files.list/stat/makeDir/rename/remove` | ☑ | connect handlers + toolbox mapping; verified live |
 | envd file content | `files.read`/`write`/`write_files` | ☑ | plain-HTTP; batch multipart write. `download_url`/`upload_url` carry the SDK's `v1_` signature over the per-sandbox envd token and are fetchable without a header, like E2B; verified live |
 | envd watch | `files.watch_dir` | ☑ | fsnotify watcher, poll-based CreateWatcher/GetWatcherEvents/RemoveWatcher; verified live |
@@ -134,7 +140,20 @@ not yet exercised by the real SDK.
 | MCP gateway | in-sandbox `mcp-gateway` on `:50005` | ☑ | E2B-style shim over the native bridge; reached via the generic port proxy; verified live over a real TLS vanity domain |
 | cross-node routing | any SDK call on a multi-instance cluster | ☑ | requests are forwarded to the node holding the sandbox's tunnel; verified live with a real cloud poder |
 
-### Re-verified against production (2026-11-18, `e2b` 2.30.0 and 2.64.0)
+### Re-verified against production (2026-11-19, `e2b` 2.30.0 and 2.64.0, engine v0.12.1)
+
+The repeatable baseline lives in [`hack/e2e/e2b_suite.py`](../hack/e2e/e2b_suite.py)
+(and [`hack/e2e/cli_suite.py`](../hack/e2e/cli_suite.py) for the CLI). Against
+v0.12.1, 2.64.0 passes **68/68**; 2.30.0 passes 67 with two SDK-version gaps
+(`cpuCount` and `fork` are not in that client). It includes network policies and
+`allowPublicTraffic=false`, autoPause, live `update_network`, snapshots, fork,
+async SDK, MCP gateway, sensitive-port auth, streaming, gzip, and binary files.
+
+The shorter companion sweep (`e2b_sweep.py` in the examples repo, 38 checks)
+passes **38/38** on 2.64.0; its own snapshot/fork exercise is what caught the two
+0.12.1 fixes.
+
+### Earlier verification (2026-11-18, 54-check sweep)
 
 54/54 checks passed against the hosted deployment with both SDK versions,
 including create-time `envs`, anonymous signed `download_url`/`upload_url`,
@@ -142,13 +161,6 @@ anonymous `get_host(8000)`, PTY, `close_stdin`, pause/`connect`, stateful
 `run_code` and matplotlib charts. The 2.64.0 run exposed one control-plane
 difference: `Sandbox.connect` uses `POST /v2/sandboxes/{id}/connect`, so the
 version prefix is now stripped before dispatching by-ID actions.
-
-The repeatable baseline lives in [`hack/e2e/e2b_suite.py`](../hack/e2e/e2b_suite.py)
-(and [`hack/e2e/cli_suite.py`](../hack/e2e/cli_suite.py) for the CLI). The 2.64.0
-run is 68/68; 2.30.0 is 67 passed with two SDK-version gaps (`cpuCount` and
-`fork` are not in that client). It includes network policies and
-`allowPublicTraffic=false`, autoPause, live `update_network`, snapshots, fork,
-async SDK, MCP gateway, sensitive-port auth, streaming, gzip, and binary files.
 
 ### Re-verified with the current SDK (2026-10-25, `e2b` 2.59.0, `e2b-code-interpreter` 2.11.3)
 

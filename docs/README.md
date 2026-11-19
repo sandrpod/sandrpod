@@ -15,11 +15,12 @@ grouped below. Docs marked **(中文)** are written in Chinese.
 ## Releasing
 
 Every pinned version in the repo — the reference compose file, the eight
-provider guides, the architecture headers, the Python SDK — is rewritten in one
-pass, and CI fails if any of them disagree:
+provider guides, the architecture headers — is rewritten in one pass, and CI
+fails if any of them disagree. The CLI (`pkg/sdk/python/setup.py`) is released
+independently and keeps its own version:
 
 ```bash
-make bump-version VERSION=v0.6.0    # rewrite them all
+make bump-version VERSION=v0.12.1   # rewrite them all
 make check-versions                 # what CI runs
 ```
 
@@ -79,7 +80,7 @@ before you pick one to try first:
 | Doc | What it covers |
 |---|---|
 | [PERMISSION_AND_AUDIT.md](PERMISSION_AND_AUDIT.md) ([中文](PERMISSION_AND_AUDIT.zh.md)) | The consent gate (hardlock → work_dir → permanent → session → ask), native dialogs, `sandrpod-tray`, and the decision-audit upload pipeline |
-| [RELEASE_NOTES.md](RELEASE_NOTES.md) | 0.7.0: what this version adds, the upgrade order (workers → server → agents), the Go API breaks, and the limits it does not hide |
+| [RELEASE_NOTES.md](RELEASE_NOTES.md) | Current release summary (0.12.1), with the 0.7.1 deep dive kept as history; the running list is [CHANGELOG.md](../CHANGELOG.md) |
 | [APP_INTEGRATION.md](APP_INTEGRATION.md) ([中文](APP_INTEGRATION.zh.md)) | What an application team sees after upgrading: the (empty) API diff, the three visible differences inside the sandbox, the four kinds of tool that break by design, and three deployment profiles |
 | [PLAYGROUND.md](PLAYGROUND.md) ([中文](PLAYGROUND.zh.md)) | A manual walkthrough that verifies every layer — gate, kernel, netns, egress, masking — with the real output of each check |
 | [CREDENTIALS.md](CREDENTIALS.md) ([中文](CREDENTIALS.zh.md)) | Letting an agent use a credential it can never read: sentinel values, TLS termination on the proxy, substitution in headers/bodies/files and AWS SigV4 re-signing — with the trust it costs stated plainly, and the excludes that keep mTLS and pinning working |

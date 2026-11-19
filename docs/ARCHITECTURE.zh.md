@@ -1,7 +1,7 @@
 # SandrPod 架构文档
 
 > **版本**: v0.12.1
-> **更新日期**: 2026-08
+> **更新日期**: 2026-11
 > English: [ARCHITECTURE.md](ARCHITECTURE.md)
 >
 > 本文档描述当前**已实现并正常运行**的架构。历史设计规划见
@@ -281,6 +281,17 @@ go run ./cmd/server -db "postgres://…?sslmode=require" # PostgreSQL，多实�
 - **通用端口代理**——其余带端口的请求：经隧道反代到 Toolbox 的
   `/proxy/<port>/`，再由它拨到沙箱内 `127.0.0.1:<port>`。沙箱内的服务就是这样
   被访问到的——`50005` 上的 MCP 网关、用户自己起的 dev server、webhook 回调点。
+  Toolbox 控制端口 **8080 在这里被明确挡住**：它没有按沙箱的凭据，代理它就等于把
+  不可猜的主机名变成无认证的代码执行。
+
+控制面还提供 E2B 的**快照**（`/snapshots`）、**fork**
+（`/sandboxes/{id}/fork`）和**网络更新**（`PUT /sandboxes/{id}/network`）：
+
+- 快照把容器提交成 worker 镜像，配置了 `SANDRPOD_REGISTRY` 时推送到 registry，
+  任何 worker 都能从它创建；
+- fork 先给源沙箱做快照，再把子沙箱固定到持有该镜像的 worker；
+- 网络更新就地替换 egress sidecar。从未有过 sidecar 的沙箱返回 `409`，因为
+  Docker 不能给运行中的容器换网络。
 
 两处授权细节值得留意：
 
