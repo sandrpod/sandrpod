@@ -17,6 +17,19 @@ export SANDRPOD_API_TOKEN=sk_...          # 单租户服务器上也可以用平
 
 下面每一条命令都在引擎 0.12.1、CLI 0.7.2 的部署上实际跑过。
 
+## 配置
+
+| 命令 | 作用 |
+|---|---|
+| `config view` | 显示 API URL、掩码后的 token 和配置文件路径 |
+| `config set-url <url>` | 保存 API URL |
+| `config set-token <token>` | 保存 token（文件权限 `0600`） |
+| `config unset-token` | 移除已保存的 token |
+
+`--api-url` 和环境变量优先于配置文件（`SANDRPOD_API_URL`、
+`SANDRPOD_API_TOKEN`）。CLI 没有 `--token` 参数：token 只从环境或配置文件读，
+不进命令行历史。
+
 ## 两个名字
 
 每个沙箱有一个**显示名**（`web-dev`，你起的、工作区里人认得的标签）和一个
@@ -33,6 +46,7 @@ export SANDRPOD_API_TOKEN=sk_...          # 单租户服务器上也可以用平
 | `create <名字> --no-wait` | 立即返回 job id，用 `job get` 轮询 |
 | `create <名字> --poder <id>` | 跳过调度器，放到指定 worker |
 | `create <名字> --ttl 3600 --cpu 2 --memory 2048` | 闲置 TTL、核数、内存（MiB） |
+| `create <名字> --wait-timeout 300` | 等待 `RUNNING` 的秒数（默认 900） |
 | `create <名字> --allow-domain a.example --deny-domain b.example` | 创建时带出网白名单 |
 | `list` / `get <名字>` / `delete <名字…>` | 清点；`list`/`get` 同时显示两个名字 |
 | `start <名字>` / `stop <名字>` | 恢复 / 暂停 |
@@ -47,7 +61,7 @@ export SANDRPOD_API_TOKEN=sk_...          # 单租户服务器上也可以用平
 | `execute <名字> "<代码>"` | 一次性执行，无状态 |
 | `stream <名字> "<代码>"` | 同上，边执行边输出 |
 | `shell <名字>` | 通过 WebSocket 的交互式 PTY（`Ctrl-]` 退出） |
-| `snapshot <名字> [--image repo:tag]` | 把容器提交成镜像 |
+| `snapshot <名字> [--image repo:tag] [--timeout 600]` | 把容器提交成镜像 |
 | `preview <名字> <端口> [路径]` | 访问沙箱内某个端口上的服务 |
 
 ## 文件
@@ -58,7 +72,8 @@ export SANDRPOD_API_TOKEN=sk_...          # 单租户服务器上也可以用平
 | `fs write <名字> <路径> <内容>` | 内容是一个参数，不是本地文件 |
 | `fs upload <名字> <本地> <远端>` / `fs download <名字> <远端> <本地>` | 二进制安全 |
 | `fs mv <名字> <源> <目标>` / `fs replace <名字> <路径> <旧> <新>` | |
-| `fs search <名字> <模式>` / `fs grep <名字> <模式>` | **只接模式**，不接路径 |
+| `fs search <名字> <模式> [--path 路径]` / `fs grep <名字> <模式> [--path 路径]` | 模式是位置参数；`--path` 缩小搜索范围 |
+| `fs watch <名字> <路径> [--recursive] [--interval 1]` | 实时打印文件事件，`Ctrl-C` 结束 |
 
 ## 出网
 
@@ -71,13 +86,33 @@ export SANDRPOD_API_TOKEN=sk_...          # 单租户服务器上也可以用平
 策略在**容器创建时**生效。对运行中的沙箱设置，只是存下来给下次创建用 —— 见
 [出网策略](/zh/egress)。
 
+## MCP
+
+沙箱自带的原生 MCP bridge（`/mcp`）会聚合 `/workspace/.sandrpod/mcp.json` 里的
+服务器，并在文件变化时热加载。
+
+| 命令 | 作用 |
+|---|---|
+| `mcp ls <名字>` | 查看沙箱 `mcp.json` 里的服务器 |
+| `mcp add <名字> <服务器> <命令>` | 添加 stdio 服务器 |
+| `mcp add <名字> <服务器> --url https://… [--type sse]` | 添加远程服务器 |
+| `mcp add … [--env K=V] [--header K=V]` | 环境变量或请求头（可重复） |
+| `mcp rm <名字> <服务器>` | 移除服务器 |
+| `mcp url <名字>` | 打印 bridge URL 和连接所需的两个鉴权头 |
+| `mcp tools <名字>` | 查看聚合后的服务器与工具数量 |
+
+`--config-path` 可覆盖 `ls`/`add`/`rm` 自动探测的 `mcp.json` 路径。
+
 ## 有状态执行
 
 | 命令 | 作用 |
 |---|---|
 | `run <名字> "<代码>" --context <id>` | 在有状态内核里执行，变量跨调用保留 |
 | `context create\|list\|restart\|rm <名字>` | 管理内核 |
-| `session list\|attach <名字>` | 长驻 shell |
+| `session create <名字> [--session-id id]` | 启动长驻 shell 会话 |
+| `session list <名字>` / `session get <名字> <id>` | 清点与查看 |
+| `session exec <名字> <id> "<命令>"` | 在该会话里执行命令 |
+| `session delete <名字> <id>` | 结束会话 |
 
 上下文依赖代码解释器通路；没有启用的部署上，`run` 退化为无状态执行。
 

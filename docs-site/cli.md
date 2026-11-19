@@ -17,6 +17,19 @@ export SANDRPOD_API_TOKEN=sk_...          # or the platform token on a single-te
 
 Every command below was run against a deployed server at version 0.12.1.
 
+## Configuration
+
+| Command | What it does |
+|---|---|
+| `config view` | show the API URL, a masked token, and the config path |
+| `config set-url <url>` | persist the API URL |
+| `config set-token <token>` | persist a token (file mode `0600`) |
+| `config unset-token` | remove the saved token |
+
+`--api-url` and the environment variables still win over the file
+(`SANDRPOD_API_URL`, `SANDRPOD_API_TOKEN`). There is no `--token` flag: the CLI
+reads the token from the environment or the config file, never from argv.
+
 ## Two names
 
 A sandbox has a **display name** (`web-dev`, what you chose and what other people
@@ -34,6 +47,7 @@ preview hosts, API paths and E2B surface all address.
 | `create <name> --no-wait` | return a job id immediately; poll with `job get` |
 | `create <name> --poder <id>` | skip the scheduler, place on a named worker |
 | `create <name> --ttl 3600 --cpu 2 --memory 2048` | idle TTL, cores, MiB |
+| `create <name> --wait-timeout 300` | how long to wait for `RUNNING` (default 900s) |
 | `create <name> --allow-domain a.example --deny-domain b.example` | egress allow-list at creation |
 | `list` / `get <name>` / `delete <name…>` | inventory; `list` and `get` show both names |
 | `start <name>` / `stop <name>` | resume / pause |
@@ -48,7 +62,7 @@ preview hosts, API paths and E2B surface all address.
 | `execute <name> "<code>"` | one shot, stateless |
 | `stream <name> "<code>"` | same, output as it is produced |
 | `shell <name>` | interactive PTY over WebSocket (`Ctrl-]` to exit) |
-| `snapshot <name> [--image repo:tag]` | commit the container to an image |
+| `snapshot <name> [--image repo:tag] [--timeout 600]` | commit the container to an image |
 | `preview <name> <port> [path]` | fetch a service running inside the sandbox |
 
 ## Files
@@ -59,7 +73,8 @@ preview hosts, API paths and E2B surface all address.
 | `fs write <name> <path> <content>` | content is an argument, not a local file |
 | `fs upload <name> <local> <remote>` / `fs download <name> <remote> <local>` | binary-safe |
 | `fs mv <name> <src> <dst>` / `fs replace <name> <path> <old> <new>` | |
-| `fs search <name> <pattern>` / `fs grep <name> <pattern>` | **pattern only** — no path argument |
+| `fs search <name> <pattern> [--path p]` / `fs grep <name> <pattern> [--path p]` | the pattern is positional; `--path` narrows the search |
+| `fs watch <name> <path> [--recursive] [--interval 1]` | print filesystem events until `Ctrl-C` |
 
 ## Egress
 
@@ -72,13 +87,33 @@ preview hosts, API paths and E2B surface all address.
 The policy applies when the container is created. Setting it on a running sandbox
 stores it for the next creation — see [Egress policy](/egress).
 
+## MCP
+
+The sandbox's native MCP bridge (`/mcp`) aggregates the servers in
+`/workspace/.sandrpod/mcp.json` and hot-reloads when that file changes.
+
+| Command | What it does |
+|---|---|
+| `mcp ls <name>` | servers in the sandbox's `mcp.json` |
+| `mcp add <name> <server> <command>` | add a stdio server |
+| `mcp add <name> <server> --url https://… [--type sse]` | add a remote server |
+| `mcp add … [--env K=V] [--header K=V]` | environment or headers (repeatable) |
+| `mcp rm <name> <server>` | remove a server |
+| `mcp url <name>` | the bridge URL and the two auth headers to send |
+| `mcp tools <name>` | live aggregated servers and tool counts |
+
+`--config-path` overrides the auto-detected `mcp.json` for `ls`/`add`/`rm`.
+
 ## Stateful work
 
 | Command | What it does |
 |---|---|
 | `run <name> "<code>" --context <id>` | execute in a stateful kernel whose variables persist |
 | `context create\|list\|restart\|rm <name>` | manage kernels |
-| `session list\|attach <name>` | long-lived shells |
+| `session create <name> [--session-id id]` | start a long-lived shell session |
+| `session list <name>` / `session get <name> <id>` | inventory and inspect |
+| `session exec <name> <id> "<command>"` | run a command in that session |
+| `session delete <name> <id>` | end it |
 
 Contexts require the code-interpreter path; on a deployment without it, `run`
 executes statelessly.
