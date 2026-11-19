@@ -203,6 +203,7 @@ class CLIClient:
             image: 容器镜像 ID (可选，空则使用 Poder 默认镜像)
             async_: True 时 server 立即返回 job，后台完成开通
                 (轮询 get_job/get_sandbox 跟进；旧版 server 会忽略该字段并同步阻塞)
+            runtime: "runc"（默认）或 "gvisor"（需要 worker 注册了 runsc）
 
         Returns:
             {job_id, status, sandbox} 字典
