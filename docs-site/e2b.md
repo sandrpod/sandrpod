@@ -23,7 +23,7 @@ With that set, two host families answer:
 
 | Host | What it serves |
 |---|---|
-| `api.sandbox.example.com` | E2B control plane: `POST /sandboxes`, list, get, kill, set-timeout, pause/resume, metadata |
+| `api.sandbox.example.com` | E2B control plane: `POST /sandboxes`, list, get, kill, set-timeout, pause/resume, metadata, snapshots, fork, network updates |
 | `<port>-<sandboxID>.sandbox.example.com` | the sandbox itself: envd RPCs (`commands.run`, `files.*`), and any service on that port |
 
 Both need DNS (`api.` and a `*` wildcard) and TLS. A reverse proxy that terminates
@@ -68,14 +68,21 @@ platform token works for both.
 
 ## What is verified
 
-Against a real deployment, with the published `e2b` package and no patches:
+Against a real deployment, with the published `e2b` package and no patches.
+Re-run on **v0.12.1** (2026-11-19): `e2b` 2.64.0 passes **38/38**; 2.30.0 passes
+37/38 because that client predates `Sandbox.fork`.
 
 | Call | Result |
 |---|---|
 | `Sandbox.create()` | sandbox id, `envdAccessToken` |
-| `sb.commands.run("echo …")` | stdout and exit code |
-| `sb.files.write` / `sb.files.read` | round-trip |
+| `sb.commands.run("echo …")` | stdout and exit code, streaming and background |
+| `sb.files.write` / `sb.files.read` | round-trip, batch writes, signed download/upload URLs |
+| `sb.pty.*` | interactive PTY, resize, kill |
 | `sb.kill()` | terminated |
+| `sb.create_snapshot()` / `Sandbox.list_snapshots()` | snapshot id (`repo:tag`), list, delete |
+| `sb.fork()` | N children from a snapshot of the source |
+| `sb.update_network()` | replaces a running sandbox's egress sidecar |
+| `create(network={"allow_public_traffic": False})` | every public port requires a credential |
 | `GET <port>-<id>.…/health` | envd health |
 | `POST /filesystem.Filesystem/Stat` | directory entry |
 
@@ -106,17 +113,30 @@ Two failure modes are worth knowing before they cost you an afternoon:
 - `Sandbox.create(envs={...})` is applied to the sandbox container, so commands,
   PTYs and the code-interpreter kernel inherit it; a per-command `envs=` still
   overrides it for that call.
+- `create_snapshot`, `list_snapshots` and `delete_snapshot` map onto worker
+  snapshot images. The id is the Docker `repo:tag`, and deletion removes both
+  the local tag and the registry copy when one exists.
+- `fork()` snapshots the source, then starts the requested children **on the
+  worker that holds that image**. E2B returns per-child success/error, so one
+  refused child does not hide the rest.
+- `update_network()` replaces the egress sidecar of a running sandbox. Adding a
+  first policy to a sandbox that never had one is refused with `409`: Docker
+  cannot move a live container onto a different network.
+- `cpu_count` is honoured for E2B creates (the default is 2 vCPU); `get_info`,
+  list and `get_metrics` report the values stored on the record.
 - `download_url`/`upload_url` carry the SDK's signed URL and work without an
   extra header, as they do on E2B.
 - `get_host(port)` URLs for ordinary services are fetchable without a credential
   (the unguessable hostname is the capability). The toolbox control port
   **8080 is never proxied**. Desktop (5900/6080/6901) and debugger (9222/9223)
   ports still need the console's signed URL or an API key, since they expose an
-  interactive machine. Set `SANDRPOD_E2B_PRIVATE_PORTS=1` to require a key on
-  every port; envd, code-interpreter and signed file URLs keep authenticating
-  either way. Anonymous public-port traffic is rate-limited per client IP and
-  sandbox (50 req/s, burst 100); `SANDRPOD_E2B_ANON_RATE` changes the rate and
-  `0` disables the limit.
+  interactive machine. `network={"allow_public_traffic": False}` on a create
+  makes **every** port of that sandbox require a credential; the deployment-wide
+  `SANDRPOD_E2B_PRIVATE_PORTS=1` does the same for all sandboxes. envd,
+  code-interpreter and signed file URLs keep authenticating either way.
+  Anonymous public-port traffic is rate-limited per client IP and sandbox
+  (50 req/s, burst 100); `SANDRPOD_E2B_ANON_RATE` changes the rate and `0`
+  disables the limit.
 - `autoPause` is accepted: the idle timeout stops the sandbox and keeps
   `/workspace`. Process memory is not preserved, so `autoPauseMemory=true` is
   refused rather than silently degraded. `diskSizeMB` is reported as 2048, and
