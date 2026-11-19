@@ -35,6 +35,8 @@ services:
     container_name: sandrpod-poder
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # Keep the generated worker id across `down/up`; see docker-compose.yml.
+      - poder-data-dev:/var/lib/sandrpod
     networks:
       - sandrpod
     environment:
@@ -53,6 +55,7 @@ services:
 
 volumes:
   sandrpod-data-dev:
+  poder-data-dev:
 
 networks:
   sandrpod:

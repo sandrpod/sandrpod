@@ -33,6 +33,11 @@ services:
     container_name: sandrpod-poder
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      # The worker writes its generated ID to /var/lib/sandrpod/poder-id and
+      # reuses it on restart. Without a durable volume, every `docker compose
+      # down/up` registers a NEW worker: the sandboxes it owned point at the
+      # dead record and answer "sandbox tunnel not available".
+      - poder-data:/var/lib/sandrpod
     networks:
       - sandrpod
     environment:
@@ -51,6 +56,7 @@ services:
 
 volumes:
   sandrpod-data:
+  poder-data:
 
 networks:
   sandrpod:
