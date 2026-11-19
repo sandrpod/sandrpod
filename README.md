@@ -164,7 +164,8 @@ migrate nothing.
   reverse tunnel — run them behind NAT, in a private subnet, or on a laptop.
 - **Optional gVisor runtime (on `main`; next release).** `--runtime gvisor` places a sandbox on a worker
   with `runsc` registered, adding a user-space kernel between the sandbox and the
-  host kernel. Opt-in; the default stays Docker `runc`. See
+  host kernel. Opt-in; the default stays Docker `runc`.
+  `deploy/node-install.sh` installs and registers it by default. See
   [docs/GVISOR.md](docs/GVISOR.md).
 - **Governance, not just isolation.** Opt-in employee-PC mode adds a per-machine
   permission gate (path consent, command denylist, PTY consent) and a decision

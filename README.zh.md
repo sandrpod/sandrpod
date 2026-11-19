@@ -138,7 +138,8 @@ SandrPod 不绑定单一客户端。它同时提供原生 REST API 和 Python/TS
   可以跑在 NAT 后、内网子网、甚至一台笔记本上。
 - **可选的 gVisor 运行时（`main` 上，下个版本发布）。** `--runtime gvisor` 会把沙箱放到装有 `runsc` 的
   worker 上，在沙箱和宿主内核之间加一层用户态内核。默认仍是 Docker `runc`，
-  按需开启。见 [docs/GVISOR.md](docs/GVISOR.md)。
+  按需开启；`deploy/node-install.sh` 默认会安装并注册它。见
+  [docs/GVISOR.md](docs/GVISOR.md)。
 - **治理，而不只是隔离。** 可选的员工 PC 模式加上每台机器的权限网关（路径同意、
   命令黑名单、PTY 同意）和决策审计管道（NDJSON + 中央 HTTP 上报）—— 把"跑 agent 代码"
   升级成"**管控** agent 在真实机器上能碰什么"。

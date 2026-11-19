@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"sort"
 	"strconv"
@@ -38,11 +39,44 @@ type DockerPoder struct {
 	*BasePoder
 	dockerClient *client.Client
 	networkName  string
+	// gvisorDNS is written into DNS for runsc containers. gVisor's netstack
+	// does not use Docker's embedded resolver at 127.0.0.11, so without a real
+	// upstream resolver remote MCP servers and direct DNS lookups fail inside
+	// the sandbox.
+	gvisorDNS []string
 
 	// Per-pod egress enforcement state (see egress.go). Guarded because
 	// CreatePod and DeletePod can run concurrently on different pods.
 	egressMu sync.Mutex
 	egress   map[string]*podEgress
+
+	// createLocks serialises creates for the same sandbox name. Delivery is
+	// at-least-once: a slow create (image pull, gVisor boot) can outlive the
+	// resumer's claim timeout and be delivered twice. Without this lock both
+	// deliveries passed the "no existing container" check and created two
+	// containers with the same sandbox label.
+	createLocksMu sync.Mutex
+	createLocks   map[string]*sync.Mutex
+}
+
+// lockSandboxCreate serialises CreatePod for one sandbox name. The map is
+// intentionally not pruned on every delete: a lock is tiny, the number of
+// names a worker ever sees is bounded by its lifetime, and pruning races with
+// waiters that already hold the pointer.
+func (p *DockerPoder) lockSandboxCreate(name string) func() {
+	p.createLocksMu.Lock()
+	if p.createLocks == nil {
+		p.createLocks = make(map[string]*sync.Mutex)
+	}
+	l := p.createLocks[name]
+	if l == nil {
+		l = &sync.Mutex{}
+		p.createLocks[name] = l
+	}
+	p.createLocksMu.Unlock()
+
+	l.Lock()
+	return l.Unlock
 }
 
 // NewDockerPoder creates a Docker-backed Poder.
@@ -67,10 +101,16 @@ func NewDockerPoder(region, networkName string) (*DockerPoder, error) {
 	}
 	// networkName is still empty → use Docker's default network, no explicit override
 
+	gvisorDNS := gvisorResolverList()
+	if len(gvisorDNS) == 0 {
+		log.Printf("poder: no usable upstream DNS for gVisor sandboxes; set SANDRPOD_GVISOR_DNS (gVisor does not use Docker's 127.0.0.11 resolver)")
+	}
+
 	pode := &DockerPoder{
 		BasePoder:    base,
 		dockerClient: dockerClient,
 		networkName:  networkName,
+		gvisorDNS:    gvisorDNS,
 	}
 	// Reconnect to tenant networks created before this poder restarted. Do it
 	// off the startup path; a slow Docker daemon must not delay the tunnel.
@@ -120,6 +160,10 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	if runtimeName == "runsc" && !p.HasGVisor(ctx) {
 		return nil, fmt.Errorf("gvisor requested, but the Docker daemon has no %q runtime; install gVisor on this worker and register it with Docker", "runsc")
 	}
+	// A duplicate delivery must not race with the first delivery's container
+	// creation. Hold this through the whole create, including the image pull.
+	unlockCreate := p.lockSandboxCreate(req.Name)
+	defer unlockCreate()
 
 	// Only ensure the network exists when a custom network is specified
 	if p.networkName != "" {
@@ -130,11 +174,14 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 
 	// A create for a sandbox that already has a container is a retry, not a second
 	// sandbox: the delivery promise is at-least-once, so the same request can
-	// arrive twice. Removing the previous container first makes the operation
-	// idempotent — without it each retry leaked a container (and, with an egress
-	// policy, a network), which on a real worker ended in "all predefined address
-	// pools have been fully subnetted".
+	// arrive twice. If the first delivery finished, return the running pod
+	// instead of replacing it (replacing would restart a healthy sandbox on every
+	// retry). If it exists but is not running, remove it and continue.
 	if existing, err := p.findContainerBySandboxName(ctx, req.Name); err == nil && existing != "" {
+		if info, ierr := p.GetPod(ctx, existing); ierr == nil && info != nil && info.State == PodStateRunning {
+			log.Printf("poder: create for %s is a retry; container %s is already running", req.Name, existing)
+			return info, nil
+		}
 		log.Printf("poder: replacing existing container %s for sandbox %s (retry of a create)", existing, req.Name)
 		if err := p.DeletePod(ctx, existing); err != nil {
 			log.Printf("poder: could not remove the previous container %s for %s: %v", existing, req.Name, err)
@@ -279,6 +326,15 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	if runtimeName != "" {
 		hostConfig.Runtime = runtimeName
 	}
+	if runtimeName == "runsc" && len(p.gvisorDNS) > 0 {
+		hostConfig.DNS = append([]string(nil), p.gvisorDNS...)
+	}
+	if enforced := p.getEgress(podID); enforced != nil && enforced.proxyIP != "" && runtimeName == "runsc" {
+		// gVisor's netstack does not implement Docker's embedded DNS at
+		// 127.0.0.11, so the proxy hostname must be resolvable through
+		// /etc/hosts. Docker writes ExtraHosts into that file.
+		hostConfig.ExtraHosts = append(hostConfig.ExtraHosts, egressSidecarName(podID)+":"+enforced.proxyIP)
+	}
 	// A named volume rather than a bind mount: it survives container removal
 	// (image upgrades, create retries) and Docker keeps it out of the host
 	// namespace. The name is derived from the sandbox so a retried create
@@ -357,6 +413,17 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	if err := p.dockerClient.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
 		retErr = fmt.Errorf("failed to start container: %w", err)
 		return nil, retErr
+	}
+
+	// gVisor's netstack does not implement Docker's embedded resolver at
+	// 127.0.0.11. Docker still writes that address into /etc/resolv.conf on a
+	// user-defined network, so remote DNS (MCP servers, direct lookups) fails
+	// until the file names a real upstream. Rewrite it inside the sandbox.
+	if runtimeName == "runsc" && len(p.gvisorDNS) > 0 {
+		if err := p.configureGVisorDNS(ctx, resp.ID, p.gvisorDNS); err != nil {
+			retErr = fmt.Errorf("configure gVisor DNS: %w", err)
+			return nil, retErr
+		}
 	}
 
 	// Inspect the container to get runtime details
@@ -583,6 +650,45 @@ func dockerRuntimeName(raw string) (string, error) {
 	}
 }
 
+// gvisorResolverList returns the DNS servers runsc containers should use.
+// Docker writes 127.0.0.11 into /etc/resolv.conf for ordinary containers; that
+// listener is not reachable through gVisor's netstack. Operators can set
+// SANDRPOD_GVISOR_DNS explicitly; otherwise read the host's real upstream list
+// (systemd-resolved's stub is loopback and is filtered out).
+func gvisorResolverList() []string {
+	if raw := strings.TrimSpace(os.Getenv("SANDRPOD_GVISOR_DNS")); raw != "" {
+		out := make([]string, 0)
+		for _, part := range strings.Split(raw, ",") {
+			if s := strings.TrimSpace(part); s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	for _, path := range []string{"/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		out := make([]string, 0, 2)
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) < 2 || fields[0] != "nameserver" {
+				continue
+			}
+			ns := fields[1]
+			if strings.HasPrefix(ns, "127.") || ns == "::1" {
+				continue
+			}
+			out = append(out, ns)
+		}
+		if len(out) > 0 {
+			return out
+		}
+	}
+	return nil
+}
+
 // registryConfig is the optional image registry snapshots are pushed to. Without
 // it a snapshot is a container-commit on one worker only: usable for a fork on
 // that machine, invisible everywhere else.
@@ -736,16 +842,14 @@ func (p *DockerPoder) ensureSandboxNetwork(ctx context.Context, sandbox string) 
 	return name, nil
 }
 
-// attachSelf connects this poder's own container to the network. In a container
-// the hostname is the container id (Docker's default); in host mode there is no
-// container to attach and the host can already reach the bridge.
+// attachSelf connects this poder's own container to the network. selfContainerID
+// returns "" for a host process and for a host-network container (whose
+// hostname is the machine's, not a container id) — both can already reach the
+// bridge and must not be treated as a container name.
 func (p *DockerPoder) attachSelf(ctx context.Context, networkName string) error {
-	if _, err := os.Stat("/.dockerenv"); err != nil {
+	host := p.selfContainerID(ctx)
+	if host == "" {
 		return nil
-	}
-	host, err := os.Hostname()
-	if err != nil {
-		return fmt.Errorf("sandbox network %s: resolve self container: %w", networkName, err)
 	}
 	if err := p.dockerClient.NetworkConnect(ctx, networkName, host, nil); err != nil {
 		if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "already connected") {
@@ -761,10 +865,8 @@ func (p *DockerPoder) attachSelf(ctx context.Context, networkName string) error 
 // consumes one of the daemon's finite address pools.
 func (p *DockerPoder) removeSandboxNetwork(ctx context.Context, sandbox string) {
 	name := sandboxNetworkName(sandbox)
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		if host, herr := os.Hostname(); herr == nil {
-			_ = p.dockerClient.NetworkDisconnect(ctx, name, host, true)
-		}
+	if self := p.selfContainerID(ctx); self != "" {
+		_ = p.dockerClient.NetworkDisconnect(ctx, name, self, true)
 	}
 	if err := p.dockerClient.NetworkRemove(ctx, name); err != nil && !os.IsNotExist(err) {
 		log.Printf("poder: remove sandbox network %s: %v", name, err)
@@ -783,10 +885,7 @@ func (p *DockerPoder) reconnectManagedNetworks(ctx context.Context) {
 		log.Printf("poder: list tenant networks: %v", err)
 		return
 	}
-	host := ""
-	if _, err := os.Stat("/.dockerenv"); err == nil {
-		host, _ = os.Hostname()
-	}
+	host := p.selfContainerID(ctx)
 	for _, n := range nets {
 		// List results do not carry endpoints; inspect, or a live bridge looks
 		// empty and we detach the poder from it (breaking every sandbox on it)
@@ -852,6 +951,12 @@ func WorkspaceVolumeName(sandboxName string) string {
 func (p *DockerPoder) SnapshotPod(ctx context.Context, podID, imageName string) (string, error) {
 	if imageName == "" {
 		return "", fmt.Errorf("snapshot image name is required")
+	}
+	// Docker commit reads the container's rootfs diff; under runsc the writes
+	// live in gVisor's own overlay and commit silently produces an image
+	// without them. Refuse rather than hand back a snapshot that looks valid.
+	if info, err := p.dockerClient.ContainerInspect(ctx, podID); err == nil && info.HostConfig.Runtime == "runsc" {
+		return "", fmt.Errorf("snapshot is not supported for gVisor containers: docker commit does not capture runsc filesystem writes")
 	}
 	ref, err := reference.ParseNormalizedNamed(imageName)
 	if err != nil {
@@ -1036,6 +1141,30 @@ func (p *DockerPoder) GetPodLogs(ctx context.Context, podID string, tail string)
 	}
 
 	return logs, nil
+}
+
+// configureGVisorDNS replaces the sandbox's resolv.conf with the upstream
+// resolvers. Values are validated as IPs so a malformed SANDRPOD_GVISOR_DNS
+// cannot become shell syntax; the sandbox is already running by this point.
+func (p *DockerPoder) configureGVisorDNS(ctx context.Context, containerID string, dns []string) error {
+	valid := make([]string, 0, len(dns))
+	for _, ns := range dns {
+		if net.ParseIP(ns) != nil {
+			valid = append(valid, ns)
+		}
+	}
+	if len(valid) == 0 {
+		return fmt.Errorf("no valid nameserver in SANDRPOD_GVISOR_DNS")
+	}
+	script := "printf 'nameserver %s\\n' " + strings.Join(valid, " ") + " > /etc/resolv.conf"
+	res, err := p.ExecuteCommand(ctx, containerID, script)
+	if err != nil {
+		return err
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("write /etc/resolv.conf exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	return nil
 }
 
 // ExecuteCommand runs a shell command inside the container and returns the output.

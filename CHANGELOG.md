@@ -15,10 +15,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   `runsc` registered and creates it with that runtime. Workers advertise a
   `gvisor` capability only when `docker info` lists it; a request without a
   capable worker is refused with `409` rather than silently running under
-  `runc`. See [docs/GVISOR.md](docs/GVISOR.md).
+  `runc`. The node installer installs and registers gVisor by default
+  (`--no-gvisor` opts out). See [docs/GVISOR.md](docs/GVISOR.md).
+- gVisor sandboxes get a real upstream resolver (`SANDRPOD_GVISOR_DNS`) and an
+  `/etc/hosts` entry for their egress sidecar; Docker's embedded resolver at
+  `127.0.0.11` is unreachable from netstack. Live egress updates move that
+  entry to the replacement sidecar.
+- **Snapshot/fork under gVisor is refused with `409`** instead of returning a
+  valid-looking image that lacks the sandbox's writes: `docker commit` does not
+  capture runsc filesystem state.
 
 ### Fixed
 
+- **Duplicate containers on a slow create.** Delivery is at-least-once; two
+  deliveries could both pass the "no existing container" check while the first
+  was still pulling an image or booting gVisor. Creates are now serialized per
+  sandbox name, and a retry that finds a running container returns it instead of
+  replacing it.
+- **Host-network workers can create sandboxes again.** `deploy/node-install.sh`
+  runs the worker with `--network host`, where the hostname is the machine's,
+  not a container id; the self-attach path treated it as a container name and
+  failed with `No such container`.
 - **The quickstart compose keeps the worker's identity.** `docker-compose.yml` and
   `docker-compose.local.yml` mounted only the Docker socket, so every
   `docker compose down/up` generated a new poder id; sandboxes still pointed at

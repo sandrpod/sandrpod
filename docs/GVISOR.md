@@ -48,6 +48,7 @@ Use it as defense in depth, not as a formal hardware-isolation claim.
 | seccomp | `systrap` (the default platform) relies on `SECCOMP_RET_TRAP` |
 | cgroups | resource limits continue to work; cgroup v2 recommended |
 | No KVM required | `systrap` runs inside ordinary VMs; the KVM platform is optional and needs `/dev/kvm` (bare metal or nested virtualization) |
+| DNS for sandboxes | set `SANDRPOD_GVISOR_DNS` to one or more upstream resolvers; gVisor's netstack cannot use Docker's embedded `127.0.0.11`. The worker rewrites `/etc/resolv.conf` inside each runsc sandbox |
 | Docker socket | unchanged: the worker already needs it |
 
 The worker does **not** need a different VM shape, a GPU host, or nested
@@ -130,11 +131,17 @@ Must pass before calling a deployment supported:
 
 - `execute` (bash/python/node), PTY, streaming, sessions, contexts;
 - files read/write/upload/download/watch;
-- MCP bridge (stdio and Streamable HTTP);
-- egress allow/deny through the sidecar;
-- snapshots (`docker commit`) and create-from-image;
+- MCP bridge (stdio and Streamable HTTP) **after** the sandbox gets a real
+  resolver via `SANDRPOD_GVISOR_DNS`;
+- egress allow/deny through the sidecar (the sidecar name is mapped in
+  `/etc/hosts`; Docker's embedded DNS is not reachable from netstack);
+- live egress-policy updates (`PUT /sandboxes/{id}/network`), including moving
+  the `/etc/hosts` entry to the replacement sidecar's IP;
+- create-from-image (the image itself must already exist);
+- **not** snapshots: `docker commit` does not capture runsc's filesystem writes,
+  so snapshot and fork are refused with `409` for gVisor sandboxes;
 - `pause`/`start` and persistence;
-- headless browser (Chrome/Obscura) + CDP/MCP.
+- headless browser (Chrome/Obscura) + CDP/MCP (subject to the resolver above).
 
 Expected to be tested but not promised:
 
@@ -198,13 +205,15 @@ because the container runtime is a host-level Docker setting.
 ## Install reference
 
 ```bash
-# On the worker host (not inside the poder container):
-arch=$(uname -m)
+# On the worker host (not inside the poder container). gVisor now publishes a
+# tarball containing runsc, the containerd shim and gvisor-bin — the old bare
+# runsc URL is gone.
+arch=$(uname -m)   # x86_64 or aarch64
 url="https://storage.googleapis.com/gvisor/releases/release/latest/${arch}"
-wget "${url}/runsc" "${url}/runsc.sha512"
-sha512sum -c runsc.sha512
-chmod +x runsc
-sudo mv runsc /usr/local/bin/
+curl -fsSL "${url}/gvisor.tar.zstd" -o /tmp/gvisor.tar.zstd
+curl -fsSL "${url}/gvisor.tar.zstd.sha512" -o /tmp/gvisor.tar.zstd.sha512
+(cd /tmp && sha512sum -c gvisor.tar.zstd.sha512)
+sudo tar --zstd -xf /tmp/gvisor.tar.zstd -C /usr/local/bin
 sudo runsc install
 sudo systemctl reload docker
 docker info --format '{{json .Runtimes}}'   # must contain "runsc"
@@ -212,5 +221,7 @@ docker info --format '{{json .Runtimes}}'   # must contain "runsc"
 # advertises the "gvisor" capability on the next handshake.
 ```
 
-Pin a gVisor release in production instead of `latest`; record the version next
-to the worker image version.
+`deploy/node-install.sh` does this by default (`--no-gvisor` opts out), writes
+the `runsc` entry into `/etc/docker/daemon.json`, and passes upstream DNS to the
+worker as `SANDRPOD_GVISOR_DNS`. Pin a gVisor release in production instead of
+`latest`; record the version next to the worker image version.

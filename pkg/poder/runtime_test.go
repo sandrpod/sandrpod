@@ -34,3 +34,17 @@ func TestDockerRuntimeName(t *testing.T) {
 		}
 	}
 }
+
+func TestGvisorResolverList_Explicit(t *testing.T) {
+	t.Setenv("SANDRPOD_GVISOR_DNS", " 100.100.2.136, 1.1.1.1 ,")
+	got := gvisorResolverList()
+	want := []string{"100.100.2.136", "1.1.1.1"}
+	if len(got) != len(want) {
+		t.Fatalf("resolvers = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("resolvers = %v, want %v", got, want)
+		}
+	}
+}

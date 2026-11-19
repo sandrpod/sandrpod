@@ -40,6 +40,8 @@ ENV = dict(os.environ, HOME=HOME, SANDRPOD_API_URL=API_URL,
            SANDRPOD_API_TOKEN=KEY, NO_COLOR="1", TERM="dumb")
 ADMIN_TOKEN = os.environ.get("SANDRPOD_ADMIN_TOKEN", "")
 PODER_ID = os.environ.get("E2E_PODER_ID", "")
+RUNTIME = os.environ.get("E2E_RUNTIME", "")  # "gvisor" to exercise the opt-in runtime
+RUNTIME_ARGS = ("--runtime", RUNTIME) if RUNTIME else ()
 NAME = "cli-e2e-%d" % int(time.time())
 RESULTS = []
 
@@ -157,7 +159,7 @@ try:
     text = check("create --no-wait", ("create", NAME, "--provider", "local",
                                       "--cpu", "0.5", "--memory", "1024",
                                       "--ttl", "300", "--allow-domain", "example.com",
-                                      "--no-wait"), "job")
+                                      *RUNTIME_ARGS, "--no-wait"), "job")
     m = re.search(r"(job-[A-Za-z0-9-]+)", text)
     if m:
         check("job get", ("job", "get", m.group(1)), "job-")
@@ -288,8 +290,18 @@ try:
     check("start", ("start", NAME), "")
     wait_state("RUNNING")
 
-    # snapshot
-    check("snapshot (--timeout 300)", ("snapshot", NAME, "--image", "cli-e2e-snap:test", "--timeout", "300"), "", timeout=320)
+    # snapshot: supported under runc; deliberately refused under gVisor
+    # (docker commit does not capture runsc writes).
+    if RUNTIME == "gvisor":
+        def _snapshot_refused():
+            p = cli("snapshot", NAME, "--image", "cli-e2e-snap:test", timeout=60)
+            text = out(p)
+            if p.returncode == 0 or "not supported for gVisor" not in text:
+                raise AssertionError("gVisor snapshot should be refused: %s" % text.strip()[:160])
+            return "refused with 409"
+        check_fn("snapshot refused (gvisor)", _snapshot_refused)
+    else:
+        check("snapshot (--timeout 300)", ("snapshot", NAME, "--image", "cli-e2e-snap:test", "--timeout", "300"), "", timeout=320)
 
     def cleanup_snapshots():
         p = cli("get", NAME, timeout=30)
@@ -325,7 +337,7 @@ try:
         admin_env = dict(ENV, SANDRPOD_API_TOKEN=ADMIN_TOKEN)
         pinned = NAME + "-poder"
         def pinned_create():
-            p = cli("create", pinned, "--poder", PODER_ID, "--provider", "local",
+            p = cli("create", pinned, "--poder", PODER_ID, "--provider", "local", *RUNTIME_ARGS,
                     "--ttl", "300", "--wait-timeout", "300", env=admin_env)
             if p.returncode != 0:
                 raise AssertionError("create: " + out(p)[:180])

@@ -51,6 +51,7 @@ Optional:
 | `SANDRPOD_ADMIN_TOKEN` | enables `metrics`, `poder list`, and token-list checks |
 | `E2E_PODER_ID` | also exercises `create --poder` on that worker |
 | `E2E_HOME` | keep the temporary CLI config directory for inspection |
+| `E2E_RUNTIME` | `gvisor` to create every sandbox with `--runtime gvisor`; the snapshot check then asserts the expected 409 refusal |
 
 The CLI suite uses a fresh `HOME`, checks the config file is mode `0600`, and
 covers create/job/list/env, execute/stream, sessions, files (including binary and
@@ -61,6 +62,11 @@ The interactive `shell` check drives a real PTY (`echo` + Ctrl-]) and needs the
 `[shell]` extra (`websocket-client`). `token list` on the hosted build is a
 `GAP`: workspace keys are managed by the portal, and the engine intentionally
 answers 501.
+
+With `E2E_RUNTIME=gvisor`, the suite still passes 69/69 on a worker with `runsc`
+registered; snapshot is expected to be refused (`409`), because `docker commit`
+does not capture gVisor filesystem writes. Egress, MCP, sessions, contexts and
+`fs watch` are covered under the same run.
 
 ## Exit codes
 

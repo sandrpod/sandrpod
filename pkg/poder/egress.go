@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -78,6 +79,10 @@ type podEgress struct {
 	env       []string
 	httpAddr  string
 	socksAddr string
+	// proxyIP is the sidecar's address on the internal network. gVisor's
+	// netstack does not use Docker's embedded DNS (127.0.0.11), so a gVisor
+	// sandbox needs an /etc/hosts entry mapping the sidecar name to this IP.
+	proxyIP string
 }
 
 func egressNetworkName(podID string) string { return "sandrpod-egress-" + podID }
@@ -213,6 +218,13 @@ func (p *DockerPoder) setupEgress(ctx context.Context, podID string, policy *egr
 	}
 
 	host := sidecarName // resolved by the internal network's embedded DNS
+	// Record the sidecar's IP for gVisor sandboxes, which cannot use that DNS.
+	proxyIP := ""
+	if sidecarInfo, ierr := p.dockerClient.ContainerInspect(ctx, resp.ID); ierr == nil {
+		if net, ok := sidecarInfo.NetworkSettings.Networks[netName]; ok {
+			proxyIP = net.IPAddress
+		}
+	}
 	proxyURL := fmt.Sprintf("http://sandbox:%s@%s:%d", token, host, egressHTTPPort)
 	socksURL := fmt.Sprintf("socks5://sandbox:%s@%s:%d", token, host, egressSOCKSPort)
 	env := []string{
@@ -233,6 +245,7 @@ func (p *DockerPoder) setupEgress(ctx context.Context, podID string, policy *egr
 		env:       env,
 		httpAddr:  fmt.Sprintf("%s:%d", host, egressHTTPPort),
 		socksAddr: fmt.Sprintf("%s:%d", host, egressSOCKSPort),
+		proxyIP:   proxyIP,
 	}, nil
 }
 
@@ -322,14 +335,55 @@ func (p *DockerPoder) UpdateEgress(ctx context.Context, containerRef string, pol
 		restore()
 		return err
 	}
+	// gVisor sandboxes resolve the sidecar through /etc/hosts (Docker's embedded
+	// DNS is unreachable from netstack). A replacement gets a new IP, so update
+	// that entry before retiring the old proxy.
+	newIP := old.proxyIP
+	if si, ierr := p.dockerClient.ContainerInspect(ctx, resp.ID); ierr == nil {
+		// old.network stores the network ID, while NetworkSettings.Networks is
+		// keyed by network name; match on NetworkID.
+		for _, net := range si.NetworkSettings.Networks {
+			if net.NetworkID == old.network && net.IPAddress != "" {
+				newIP = net.IPAddress
+			}
+		}
+	}
+	if info.HostConfig.Runtime == "runsc" && newIP != "" {
+		if err := p.setGVisorProxyHost(ctx, info.ID, canonical, newIP); err != nil {
+			removeNew()
+			restore()
+			return fmt.Errorf("update gVisor proxy host entry: %w", err)
+		}
+	}
 	// The replacement is healthy; retire the old sidecar. If that fails the
 	// new one still enforces the new policy, so keep it and report the leak.
 	if err := p.dockerClient.ContainerRemove(ctx, old.sidecar, container.RemoveOptions{Force: true}); err != nil && !client.IsErrNotFound(err) {
 		log.Printf("poder: remove old egress proxy for %s: %v", name, err)
 	}
 	p.putEgress(name, &podEgress{network: old.network, sidecar: resp.ID, token: old.token,
-		env: old.env, httpAddr: old.httpAddr, socksAddr: old.socksAddr})
+		env: old.env, httpAddr: old.httpAddr, socksAddr: old.socksAddr, proxyIP: newIP})
 	log.Printf("poder: egress policy updated for %s (allow=%v)", name, compiled.Policy().AllowedDomains)
+	return nil
+}
+
+// setGVisorProxyHost updates the /etc/hosts entry that lets a gVisor sandbox
+// reach its egress sidecar by name. Host is generated (sandrpod-egress-proxy-…),
+// IP is validated; the sandbox runs as root and owns this file.
+func (p *DockerPoder) setGVisorProxyHost(ctx context.Context, containerID, host, ip string) error {
+	if net.ParseIP(ip) == nil {
+		return fmt.Errorf("invalid proxy IP %q", ip)
+	}
+	// /etc/hosts is a bind mount inside the sandbox; `sed -i` fails with
+	// "Resource busy" because it replaces the file by rename. Truncate in place
+	// through a temp file instead.
+	script := fmt.Sprintf("grep -v sandrpod-egress-proxy- /etc/hosts > /tmp/hosts.new; cat /tmp/hosts.new > /etc/hosts; echo '%s %s' >> /etc/hosts", ip, host)
+	res, err := p.ExecuteCommand(ctx, containerID, script)
+	if err != nil {
+		return err
+	}
+	if res.ExitCode != 0 {
+		return fmt.Errorf("write /etc/hosts exited %d: %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
 	return nil
 }
 
@@ -443,6 +497,12 @@ func (p *DockerPoder) takeEgress(podID string) *podEgress {
 	e := p.egress[podID]
 	delete(p.egress, podID)
 	return e
+}
+
+func (p *DockerPoder) getEgress(podID string) *podEgress {
+	p.egressMu.Lock()
+	defer p.egressMu.Unlock()
+	return p.egress[podID]
 }
 
 func (p *DockerPoder) putEgress(podID string, e *podEgress) {

@@ -20,7 +20,9 @@
 #      172.17/16 bridge;
 #   5. kernel and ulimit settings that sandboxes actually need (inotify watches,
 #      open files, connection backlog);
-#   6. the worker, joined with a join token, plus the two images it will need.
+#   6. gVisor, installed and registered as a Docker runtime (default on) so the
+#      worker can advertise the gvisor capability;
+#   7. the worker, joined with a join token, plus the two images it will need.
 set -euo pipefail
 
 # ─── defaults ───────────────────────────────────────────────────────────────
@@ -34,6 +36,11 @@ TOOLBOX_IMAGE="${SANDRPOD_TOOLBOX_IMAGE:-ghcr.io/sandrpod/toolbox:latest}"
 EGRESS_IMAGE="${SANDRPOD_EGRESS_IMAGE:-ghcr.io/sandrpod/egress-proxy:latest}"
 PODER_IMAGE="${SANDRPOD_PODER_IMAGE:-ghcr.io/sandrpod/poder:latest}"
 SWAP_GB="${SANDRPOD_SWAP_GB:-4}"
+# gVisor is installed and registered by default; --no-gvisor opts out.
+GVISOR="${SANDRPOD_GVISOR:-1}"
+GVISOR_VERSION="${SANDRPOD_GVISOR_VERSION:-latest}"
+GVISOR_URL_BASE="${SANDRPOD_GVISOR_URL_BASE:-https://storage.googleapis.com/gvisor/releases/release}"
+GVISOR_DNS="${SANDRPOD_GVISOR_DNS:-}"
 # Preview URLs and OAuth callbacks need the wildcard domain the control plane
 # serves sandboxes on; without it a desktop/browser sandbox is unreachable.
 E2B_DOMAIN="${SANDRPOD_E2B_DOMAIN:-}"
@@ -70,6 +77,9 @@ Turn a fresh machine into a SandrPod worker.
   --data-root PATH       where Docker keeps its data  (default: the data disk's mount point)
   --worker-name NAME     container name               (default: sandrpod-worker)
   --swap-gb N            swap to create if none       (default: 4, 0 disables)
+  --gvisor               install gVisor and register runsc (default)
+  --no-gvisor            do not install gVisor
+  --gvisor-dns LIST      upstream DNS for gVisor sandboxes, comma-separated
   --toolbox-image IMG    sandbox base image
   --poder-image IMG      worker image
   --egress-image IMG     egress proxy image
@@ -101,6 +111,9 @@ while [ $# -gt 0 ]; do
     --data-root) DATA_ROOT="$2"; shift 2 ;;
     --worker-name) WORKER_NAME="$2"; shift 2 ;;
     --swap-gb) SWAP_GB="$2"; shift 2 ;;
+    --gvisor) GVISOR=1; shift ;;
+    --no-gvisor) GVISOR=0; shift ;;
+    --gvisor-dns) GVISOR_DNS="$2"; shift 2 ;;
     --toolbox-image) TOOLBOX_IMAGE="$2"; shift 2 ;;
     --poder-image) PODER_IMAGE="$2"; shift 2 ;;
     --egress-image) EGRESS_IMAGE="$2"; shift 2 ;;
@@ -278,6 +291,57 @@ fi
 
 run docker info >/dev/null 2>&1 || [ "$DRY_RUN" = "1" ] || die "docker is not answering; check 'systemctl status docker'"
 
+# ─── 3b. gVisor ─────────────────────────────────────────────────────────────
+if [ "$GVISOR" = "1" ]; then
+  step "gVisor"
+  case "$(uname -m)" in
+    x86_64|aarch64) GVISOR_ARCH="$(uname -m)" ;;
+    *) GVISOR_ARCH=""; GVISOR=0; warn "gVisor has no release for $(uname -m); skipping" ;;
+  esac
+  if [ -n "$GVISOR_ARCH" ]; then
+    if ! command -v zstd >/dev/null 2>&1; then
+      if command -v apt-get >/dev/null 2>&1; then
+        run apt-get install -y -qq zstd
+      elif command -v dnf >/dev/null 2>&1; then
+        run dnf install -y -q zstd
+      elif command -v yum >/dev/null 2>&1; then
+        run yum install -y -q zstd
+      else
+        die "zstd is required to unpack gVisor; install it or use --no-gvisor"
+      fi
+    fi
+    if [ "$DRY_RUN" = "1" ]; then
+      info "[dry-run] would download ${GVISOR_URL_BASE}/${GVISOR_VERSION}/${GVISOR_ARCH}/gvisor.tar.zstd"
+      info "[dry-run] would extract runsc + gvisor-bin into /usr/local/bin"
+    else
+      tmp="$(mktemp -d)"
+      info "downloading gVisor ${GVISOR_VERSION} (${GVISOR_ARCH})"
+      if ! curl -fsSL "${GVISOR_URL_BASE}/${GVISOR_VERSION}/${GVISOR_ARCH}/gvisor.tar.zstd" -o "$tmp/gvisor.tar.zstd" ||
+         ! curl -fsSL "${GVISOR_URL_BASE}/${GVISOR_VERSION}/${GVISOR_ARCH}/gvisor.tar.zstd.sha512" -o "$tmp/gvisor.tar.zstd.sha512"; then
+        warn "gVisor download failed (${GVISOR_URL_BASE}); set SANDRPOD_GVISOR_URL_BASE or --no-gvisor"
+        GVISOR=0
+      else
+        ( cd "$tmp" && sha512sum -c gvisor.tar.zstd.sha512 )
+        tar --zstd -xf "$tmp/gvisor.tar.zstd" -C /usr/local/bin
+        [ -x /usr/local/bin/runsc ] || die "gVisor archive did not install /usr/local/bin/runsc"
+        info "installed /usr/local/bin/runsc (sidecar binaries in /usr/local/bin/gvisor-bin)"
+      fi
+      rm -rf "$tmp"
+    fi
+  fi
+  if [ "$GVISOR" = "1" ] && [ -z "$GVISOR_DNS" ]; then
+    for f in /run/systemd/resolve/resolv.conf /etc/resolv.conf; do
+      [ -f "$f" ] || continue
+      GVISOR_DNS="$(awk '$1=="nameserver" && $2 !~ /^127\./ && $2 != "::1" {print $2}' "$f" | paste -sd, -)"
+      [ -n "$GVISOR_DNS" ] && break
+    done
+    [ -n "$GVISOR_DNS" ] || warn "no upstream DNS found; set SANDRPOD_GVISOR_DNS or gVisor sandboxes will not resolve names"
+  fi
+else
+  step "gVisor"
+  info "skipped (--no-gvisor)"
+fi
+
 # ─── 4. daemon.json ─────────────────────────────────────────────────────────
 step "Docker configuration"
 
@@ -295,6 +359,11 @@ if [ -f "$DAEMON_JSON" ] && [ "$DRY_RUN" = "0" ]; then
   cp -a "$DAEMON_JSON" "${DAEMON_JSON}.bak-$(date +%Y%m%d%H%M%S)"
   info "existing daemon.json backed up"
 fi
+RUNTIMES_JSON=""
+if [ "$GVISOR" = "1" ]; then
+  RUNTIMES_JSON=',
+  "runtimes": { "runsc": { "path": "/usr/local/bin/runsc" } }'
+fi
 if [ "$DRY_RUN" = "0" ]; then
   cat > "$DAEMON_JSON" <<JSON
 {
@@ -311,17 +380,21 @@ if [ "$DRY_RUN" = "0" ]; then
   "default-address-pools": [
     { "base": "172.30.0.0/16", "size": 24 },
     { "base": "10.201.0.0/16", "size": 24 }
-  ]
+  ]${RUNTIMES_JSON}
 }
 JSON
   info "wrote ${DAEMON_JSON}"
 else
-  info "[dry-run] would write ${DAEMON_JSON} with data-root ${DATA_ROOT} and registry mirrors"
+  info "[dry-run] would write ${DAEMON_JSON} with data-root ${DATA_ROOT}, registry mirrors and gVisor=${GVISOR}"
 fi
 run systemctl daemon-reload
 run systemctl restart docker
 sleep 2
 run docker info >/dev/null 2>&1 || [ "$DRY_RUN" = "1" ] || die "docker did not come back after the configuration change"
+if [ "$GVISOR" = "1" ] && [ "$DRY_RUN" = "0" ]; then
+  docker info --format '{{json .Runtimes}}' | grep -q 'runsc' || die "gVisor was installed but Docker does not list the runsc runtime"
+  info "gVisor runtime registered"
+fi
 
 # Mount the data disk *after* Docker knows about it, then move an existing
 # data-root onto it. Doing it the other way round means a running daemon holds
@@ -393,6 +466,9 @@ WORKER_ENV=( -e SANDRPOD_TOOLBOX_IMAGE="$TOOLBOX_IMAGE" )
 # and a deployment with a private registry silently runs the wrong (or no)
 # egress-proxy for every policy-bearing sandbox.
 if [ -n "$EGRESS_IMAGE" ]; then WORKER_ENV+=( -e SANDRPOD_EGRESS_IMAGE="$EGRESS_IMAGE" ); fi
+# gVisor's netstack cannot use Docker's 127.0.0.11 resolver; the worker rewrites
+# resolv.conf inside runsc sandboxes from this list.
+if [ "$GVISOR" = "1" ] && [ -n "$GVISOR_DNS" ]; then WORKER_ENV+=( -e SANDRPOD_GVISOR_DNS="$GVISOR_DNS" ); fi
 if [ -n "$E2B_DOMAIN" ]; then WORKER_ENV+=( -e SANDRPOD_E2B_DOMAIN="$E2B_DOMAIN" ); fi
 if [ -n "$REGISTRY" ]; then
   WORKER_ENV+=( -e SANDRPOD_REGISTRY="$REGISTRY" )

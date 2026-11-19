@@ -2082,6 +2082,10 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 			}
 
 			if action == "snapshot" {
+				if sb.Runtime == podpkg.SandboxRuntimeGVisor {
+					http.Error(w, "snapshot is not supported for gVisor sandboxes: Docker commit does not capture the sandbox's writes", http.StatusConflict)
+					return
+				}
 				_, t, ok := sandboxPoderTunnel(name, r, sandboxStore, tunnelStore, directStore, stores.TunnelOwners, cfg.NodeURL, w)
 				if !ok {
 					return
