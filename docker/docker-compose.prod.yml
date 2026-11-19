@@ -90,11 +90,12 @@ services:
       # Set SANDRPOD_E2B_PROVIDER instead to provision real cloud VMs.
       REGION: ${REGION:-local}
       PROVIDER_TYPE: local
-      # Sandbox containers must land on the worker's network so it can reach
-      # their toolbox. This string goes straight to the Docker API, so it must
-      # be the network's REAL name — hence `name:` pinned below. Get it wrong
-      # and sandboxes are created fine but every exec hangs.
+      # The worker's management network and the egress proxy's outbound leg.
+      # Sandboxes get their own per-sandbox bridge, so this is no longer the
+      # sandbox data path; pinning the name below keeps service DNS stable.
       SANDRPOD_NETWORK: sandrpod
+      # Needed inside the sandbox for the MCP/OAuth callback hostname.
+      SANDRPOD_E2B_DOMAIN: ${SANDRPOD_DOMAIN:?set SANDRPOD_DOMAIN}
       SANDRPOD_TOOLBOX_IMAGE: ${SANDRPOD_TOOLBOX_IMAGE:-ghcr.io/sandrpod/toolbox:v0.12.0}
       TZ: Asia/Shanghai
     networks: [sandrpod]

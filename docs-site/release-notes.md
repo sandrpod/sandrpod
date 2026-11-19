@@ -5,6 +5,22 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.12.0
+
+The E2B surface became complete enough to run the SDK without caveats, and
+same-workspace sandboxes stopped sharing a network.
+
+| Area | What changed |
+|---|---|
+| E2B snapshots | `create_snapshot`, `list_snapshots` and `delete_snapshot` map onto worker snapshot images; deletion removes both the local tag and the registry copy |
+| E2B fork | `fork` snapshots the source and starts the requested count, returning per-item success/error |
+| E2B network updates | `PUT /sandboxes/{id}/network` replaces a running sandbox's egress sidecar; adding a policy to a sandbox that never had one is refused because Docker cannot move a live container |
+| Private ports | `allowPublicTraffic=false` makes every public in-sandbox port require a signed URL or API key |
+| Isolation | every non-egress sandbox gets its own bridge (`sandrpod-s-<hash>`); the worker attaches itself and removes it with the sandbox |
+| Limits | CPU/memory/storage have safe defaults instead of reaching Docker as "unlimited"; ownerless legacy records are admin-only |
+| Egress | the sidecar image is pulled on demand instead of failing a policy create on a fresh worker |
+| CLI | `sandrpod-cli` 0.7.2 is released independently (snapshot `--timeout`, `fs grep` envelope handling, 0600 config) |
+
 ## 0.7.1
 
 Fixes for the paths that only exist on a real deployment.

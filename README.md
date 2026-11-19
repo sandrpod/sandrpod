@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/stable-v0.7.0-16a34a" alt="stable v0.7.0"/>
+  <img src="https://img.shields.io/badge/stable-v0.12.0-16a34a" alt="stable v0.12.0"/>
   <img src="https://img.shields.io/badge/deployed%20as-a%20service-0ea5e9" alt="run as a service"/>
 </p>
 
@@ -26,8 +26,7 @@
 
 ## Maturity and support
 
-**v0.7.0 is the stable line.** It is the version the commercial service runs, and
-the version the upgrade notes below are written against. `main` is development.
+**v0.12.0 is the latest tagged release.** `main` is development.
 
 | | |
 |---|---|
@@ -98,15 +97,15 @@ sandrpod-cli --api-url http://localhost:8080 create demo --provider local
 sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
 ```
 
-Real output from a cold run (no cached images) against v0.5.10:
+Real output from a local v0.12.0 stack (no cached sandbox images):
 
 ```
-Sandbox:  demo
-Job ID:   job-1788150453342465216-7j5di2LP
-Status:   provisioning
-State:    PENDING
-State:    RUNNING
-Sandbox 'demo' is ready
+Sandbox:     demo
+Routing ID:  sb-0123456789abcdef
+Job ID:      job-1795053086883715794-8sbTACE4
+Status:      provisioning
+State:       RUNNING
+Sandbox 'demo' is ready (routing id sb-0123456789abcdef)
 hello from SandrPod
 42
 ```

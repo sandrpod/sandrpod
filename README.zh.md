@@ -25,7 +25,7 @@
 
 ## 成熟度与支持
 
-**v0.7.0 是稳定线** —— 商业服务运行的就是这个版本，升级说明也按它写。`main` 是开发线。
+**v0.12.0 是当前最新发布版本。** `main` 是开发线。
 
 | | |
 |---|---|
@@ -76,15 +76,15 @@ sandrpod-cli --api-url http://localhost:8080 create demo --provider local
 sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
 ```
 
-冷启动实录（无缓存镜像，v0.5.10）：
+本地 v0.12.0 栈的实录（无缓存沙箱镜像）：
 
 ```
-Sandbox:  demo
-Job ID:   job-1788150453342465216-7j5di2LP
-Status:   provisioning
-State:    PENDING
-State:    RUNNING
-Sandbox 'demo' is ready
+Sandbox:     demo
+Routing ID:  sb-0123456789abcdef
+Job ID:      job-1795053086883715794-8sbTACE4
+Status:      provisioning
+State:       RUNNING
+Sandbox 'demo' is ready (routing id sb-0123456789abcdef)
 hello from SandrPod
 42
 ```

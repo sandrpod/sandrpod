@@ -5,6 +5,21 @@ description: 每个版本改了什么，其中哪些改动会破坏东西。
 
 # 发布说明
 
+## 0.12.0
+
+E2B 表面补到可以无保留地跑官方 SDK，同工作区沙箱也不再共享网络。
+
+| 领域 | 改了什么 |
+|---|---|
+| E2B 快照 | `create_snapshot` / `list_snapshots` / `delete_snapshot` 映射到 worker 快照镜像；删除时同时清本地 tag 和 registry 副本 |
+| E2B fork | `fork` 先给源沙箱做快照，再启动请求的数量，逐项返回成功/失败 |
+| E2B 网络更新 | `PUT /sandboxes/{id}/network` 替换运行中沙箱的 egress sidecar；给从未有过策略的沙箱新增策略会明确拒绝，因为 Docker 不能给运行中的容器换网络 |
+| 私有端口 | `allowPublicTraffic=false` 让所有公共沙箱端口都要求签名 URL 或 API key |
+| 隔离 | 每个非 egress 沙箱独立网桥（`sandrpod-s-<hash>`）；worker 自己接入，删除沙箱时一并清理 |
+| 限额 | CPU/内存/存储有安全默认值，不再以 0 传给 Docker 变成"无限"；无主历史记录只对 admin 可见 |
+| 出网 | egress sidecar 镜像缺失时会按需拉取，而不是让策略创建失败 |
+| CLI | `sandrpod-cli` 0.7.2 独立发布（snapshot `--timeout`、`fs grep` 响应处理、0600 配置） |
+
 ## 0.7.1
 
 修的是只有真实部署才会遇到的路径。

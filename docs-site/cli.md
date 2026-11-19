@@ -7,7 +7,7 @@ description: The sandrpod-cli reference — every command verified against a liv
 
 ```bash
 pip install sandrpod-cli          # or: uv tool install sandrpod-cli
-sandrpod-cli --version            # 0.7.1
+sandrpod-cli --version            # 0.7.2
 ```
 
 ```bash
@@ -15,7 +15,7 @@ export SANDRPOD_API_URL=https://cloud.example.com
 export SANDRPOD_API_TOKEN=sk_...          # or the platform token on a single-tenant server
 ```
 
-Every command below was run against a deployed server at version 0.7.1.
+Every command below was run against a deployed server at version 0.12.0.
 
 ## Two names
 
