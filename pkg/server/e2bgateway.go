@@ -1064,7 +1064,10 @@ func (b *e2bSandboxBackend) ForkSandbox(ident, sandboxID string, timeout, count 
 	if err != nil {
 		return nil, err
 	}
-	tenant := strings.TrimPrefix(sb.Owner, "workspace:")
+	tenant := ""
+	if strings.HasPrefix(sb.Owner, "workspace:") {
+		tenant = strings.TrimPrefix(sb.Owner, "workspace:")
+	}
 	out := make([]e2bcompat.ForkResult, 0, count)
 	for i := int32(0); i < count; i++ {
 		detail, err := b.CreateSandbox(ident, admin, e2bcompat.NewSandbox{
