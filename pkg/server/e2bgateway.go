@@ -1044,7 +1044,7 @@ func (b *e2bSandboxBackend) DeleteSnapshot(ident, snapshotID string) bool {
 // ForkSandbox snapshots the source and starts count sandboxes from that image.
 // E2B returns per-item failures in-band, so one quota refusal does not hide the
 // successful forks.
-func (b *e2bSandboxBackend) ForkSandbox(ident, sandboxID string, timeout, count int32) ([]e2bcompat.ForkResult, error) {
+func (b *e2bSandboxBackend) ForkSandbox(ident, sandboxID string, timeout, count int32, admin bool) ([]e2bcompat.ForkResult, error) {
 	sb, ok := b.d.sandboxes.Get(sandboxID)
 	if !ok || !b.owns(ident, sb) {
 		return nil, e2bcompat.NotFoundError{Msg: "sandbox not found"}
@@ -1066,7 +1066,7 @@ func (b *e2bSandboxBackend) ForkSandbox(ident, sandboxID string, timeout, count 
 	tenant := strings.TrimPrefix(sb.Owner, "workspace:")
 	out := make([]e2bcompat.ForkResult, 0, count)
 	for i := int32(0); i < count; i++ {
-		detail, err := b.CreateSandbox(ident, false, e2bcompat.NewSandbox{
+		detail, err := b.CreateSandbox(ident, admin, e2bcompat.NewSandbox{
 			TemplateID: got,
 			Timeout:    timeout,
 			Tenant:     tenant,

@@ -83,7 +83,7 @@ func (e ConflictError) Error() string { return e.Msg }
 // sandbox and starts `count` sandboxes from that image; per-item failures are
 // returned in-band, as E2B requires.
 type ForkBackend interface {
-	ForkSandbox(ident, sandboxID string, timeout, count int32) ([]ForkResult, error)
+	ForkSandbox(ident, sandboxID string, timeout, count int32, admin bool) ([]ForkResult, error)
 }
 
 // ForkResult is one element of E2B's fork response.
@@ -339,7 +339,7 @@ func (c *controlPlane) handleSandboxByID(w http.ResponseWriter, r *http.Request)
 		if req.Count > 10 {
 			req.Count = 10
 		}
-		results, err := fb.ForkSandbox(ident, sandboxID, req.Timeout, req.Count)
+		results, err := fb.ForkSandbox(ident, sandboxID, req.Timeout, req.Count, adminOf(r))
 		if err != nil {
 			var nf NotFoundError
 			if errors.As(err, &nf) {
