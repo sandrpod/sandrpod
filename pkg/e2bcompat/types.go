@@ -42,6 +42,9 @@ type NewSandbox struct {
 	// authenticated identity so the backend can scope placement the same way
 	// the native API does; a single-tenant host leaves it empty.
 	Tenant string `json:"-"`
+	// PoderID pins a server-internal create (fork) to the worker holding the
+	// source snapshot image. It is not part of E2B's wire format.
+	PoderID string `json:"-"`
 }
 
 // E2BNetwork is the subset of the SDK's SandboxNetworkOpts this deployment

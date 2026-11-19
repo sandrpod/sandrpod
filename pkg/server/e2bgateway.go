@@ -647,6 +647,7 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 		CPUCores:  2,
 		MemoryMB:  512,
 		StorageMB: int64(e2bcompat.DefaultDiskSizeMB),
+		PoderID:   req.PoderID,
 		Labels: map[string]string{
 			// Our idle reaper stops a sandbox and keeps /workspace. That is the
 			// safe half of autoPause; memory is not preserved, so the label
@@ -1070,6 +1071,7 @@ func (b *e2bSandboxBackend) ForkSandbox(ident, sandboxID string, timeout, count 
 			TemplateID: got,
 			Timeout:    timeout,
 			Tenant:     tenant,
+			PoderID:    sb.PoderID,
 		})
 		if err != nil {
 			code := int32(500)
