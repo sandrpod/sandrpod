@@ -33,7 +33,7 @@ from sandrpod_cli.client import SandrPodClient
 
 client = SandrPodClient(api_url="https://cloud.example.com", token="sk_...")
 
-sb = client.create_sandbox("agent-01", provider="local")
+sb = client.create_sandbox("agent-01", provider_type="local")
 result = client.execute("agent-01", "python3 -c 'print(2**10)'")
 print(result["stdout"], result["exit_code"])
 
@@ -61,10 +61,10 @@ requests.delete(f"{API}/api/v1/sandboxes/agent-01", headers=H)
 ## Files and streaming
 
 ```python
-client.write_file("agent-01", "/workspace/in.txt", b"hello")
-client.read_file("agent-01", "/workspace/in.txt")
-for chunk in client.stream("agent-01", "for i in range(3): print(i)"):
-    print(chunk, end="")
+client.write_file("agent-01", "/workspace/in.txt", "hello")
+data = client.read_file("agent-01", "/workspace/in.txt")   # bytes
+for event in client.stream_execute("agent-01", "bash", "for i in 1 2 3; do echo $i; done"):
+    print(event["data"], end="")
 ```
 
 ## Long-lived work
@@ -74,7 +74,7 @@ hours, create once and reuse it; the filesystem persists between `execute` calls
 so state can live in files even though each call is a new process.
 
 ```python
-sb = client.create_sandbox("work", provider="local", ttl_seconds=4 * 3600)
+sb = client.create_sandbox("work", provider_type="local", ttl_seconds=4 * 3600)
 ```
 
 `ttl_seconds` reaps an idle sandbox; activity resets the clock.

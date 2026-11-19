@@ -42,8 +42,8 @@ sandrpod-cli egress clear agent-01
 
 两个后果：
 
-- worker 必须在**第一个这类沙箱之前**就拥有
-  `ghcr.io/sandrpod/egress-proxy` 镜像；否则创建会在记录写入之后失败。
+- worker 在 0.12+ 缺镜像时会按需拉取 `ghcr.io/sandrpod/egress-proxy`；不想让第一次
+  出网创建多等一次拉取，可以预拉。
 - 只有宣告了 `egress` 能力的 worker 能承载这些沙箱。机队里没有的话，创建返回
   `409 worker capability unavailable`，而不是启动一个没有执行的沙箱。
 
@@ -54,6 +54,10 @@ sandrpod-cli egress clear agent-01
 
 这是故意的 —— 就地重建一个容器的网络，本质上是一次重启加上额外的步骤 —— 但也意味着
 `create --allow-domain` 才是真正重要的路径，`PUT /egress` 服务于这个沙箱的下一世代。
+
+E2B 面是例外：`sandbox.update_network()` 会就地重建运行中沙箱的 egress sidecar
+（沙箱和 token 都保留）。给从未有过策略的沙箱新增第一条策略仍会返回 `409`，因为
+没有 sidecar 可重建。
 
 ## 验证
 

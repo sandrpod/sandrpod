@@ -47,8 +47,9 @@ sandrpod-cli job get <job-id>
 
 ## `create egress proxy container: No such image`
 
-worker 上没有 `ghcr.io/sandrpod/egress-proxy`。拉取之后重建 —— 失败的那次已经写入了
-记录，所以先把它删掉。
+旧版 worker 上没有 `ghcr.io/sandrpod/egress-proxy`。0.12 起 worker 会按需拉取
+sidecar，所以看到这条说明构建早于该版本 —— 升级 worker。失败的那次可能已经写入了
+记录；如果沙箱还在列表里，先删掉它。
 
 ## 删掉的沙箱又回来了
 

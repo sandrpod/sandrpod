@@ -10,14 +10,14 @@ JSON, and every one is reachable from a script, an SDK, or `curl`.
 
 ## Authentication
 
-Two headers are accepted, and they mean different things:
+Credentials are accepted in these forms, and they mean different things:
 
 | Header | Credential | Scope |
 |---|---|---|
 | `X-Sandrpod-Token` | platform token | everything, every workspace |
 | `X-Sandrpod-Token` | `sk_…` workspace key | one workspace |
 | `X-Sandrpod-Token` | `e2b_…` E2B key | one workspace (the E2B spelling of the same key) |
-| `Cookie: sandrpod_session` | browser session | the signed-in workspace |
+| `Cookie: sd_cloud_session` | browser session | the signed-in workspace |
 
 The platform token is the operator credential: it can list every sandbox and
 delete every worker. Do not ship it inside an agent.

@@ -5,13 +5,13 @@ description: sk_ 与 e2b_ 密钥、worker join token，以及各自能碰到什�
 
 # API 密钥
 
-三种凭据，三件事。
+四种凭据，四件事。
 
 | 凭据 | 格式 | 能到达 |
 |---|---|---|
 | 工作区密钥（CLI/API） | `sk_<hex>` | 一个工作区：沙箱、文件、执行 |
 | 工作区密钥（E2B） | `e2b_<hex>` | 同上，走 E2B 兼容面 |
-| Worker join token | `jn_<hex>` | 隧道握手和它自己的心跳 —— 别的都不行 |
+| Worker join token | `jn_<hex>` | 隧道握手、拉取任务和自己的心跳 —— 别的都不行 |
 | 平台 token | 32 位 hex | 全部、所有工作区（仅运维） |
 
 ## 工作区密钥的两种拼写
@@ -23,7 +23,7 @@ description: sk_ 与 e2b_ 密钥、worker join token，以及各自能碰到什�
 
 ```bash
 curl -s -X POST https://cloud.sandrpod.com/portal/v1/api-keys \
-  -H "Cookie: sandrpod_session=…" -H 'Content-Type: application/json' \
+  -H "Cookie: sd_cloud_session=…" -H 'Content-Type: application/json' \
   -d '{"name":"agent-prod","format":"e2b"}'
 ```
 
@@ -42,8 +42,8 @@ curl -s -X POST https://cloud.sandrpod.com/portal/v1/api-keys \
 
 ## Worker join token
 
-join token 让你自己的一台机器加入机队。它是刻意弱的：worker 角色只够隧道握手和自己的
-心跳，别的都不行 —— 不能列沙箱、不能读文件、不能签发密钥。
+join token 让你自己的一台机器加入机队。它是刻意弱的：worker 角色只够隧道握手、拉取任务
+和自己的心跳，别的都不行 —— 不能列沙箱、不能读文件、不能签发密钥。
 
 在 **Worker → 添加 worker** 里签发；控制台会打印一条带 token 的 `docker run` 命令。
 把它当凭据对待（它确实是），机器下线时删掉。

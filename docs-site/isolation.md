@@ -5,7 +5,7 @@ description: Who may run where, what a sandbox can reach, and what the platform 
 
 # Isolation and placement
 
-Four separate controls, each doing one job. Confusing them is how a multi-tenant
+Five separate controls, each doing one job. Confusing them is how a multi-tenant
 deployment ends up with one tenant's sandbox on another tenant's hardware.
 
 ## 1. Placement is scoped to a tenant
@@ -25,8 +25,9 @@ sandbox: the native API, the E2B surface, and a resumed delivery after a crash.
 ## 2. The worker role can do two things
 
 A worker authenticates with a join token (`jn_…`) and gets a role that reaches
-exactly two routes: the tunnel handshake, and its own heartbeat. It cannot list
-the fleet, read a sandbox, or mint anything. Anything else answers `403`.
+exactly three routes: the tunnel handshake, its job poll, and its own heartbeat.
+It cannot list the fleet, read a sandbox, or mint anything. Anything else answers
+`403`.
 
 That matters because a join token ships to a machine you may not fully trust —
 a customer's VM, a contractor's laptop. A compromised worker can run sandboxes;

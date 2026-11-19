@@ -119,7 +119,7 @@ worker 每十秒心跳一次，带上自己的容器列表。这做三件事：�
 |---|---|
 | Docker socket | worker 要创建容器 |
 | `SANDRPOD_TOOLBOX_IMAGE` | 沙箱基础镜像，首次使用时拉取 |
-| 预拉 `ghcr.io/sandrpod/egress-proxy` | 仅带出网策略的沙箱需要；没有它，创建会在**记录已经写入之后**失败 |
+| `ghcr.io/sandrpod/egress-proxy` | 0.12 起缺镜像会按需拉取；预拉只是避免第一次出网创建时多等一次拉取 |
 | 端口：无入站；出站 HTTPS + DNS | worker 要拨控制面、要拉镜像 |
 
 磁盘是最先被吃满的资源：镜像加每个沙箱的可写层。一台 4 vCPU / 8 GB / 100 GB 的机器

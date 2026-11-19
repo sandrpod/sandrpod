@@ -45,8 +45,8 @@ an IP directly, because there is nothing to connect from.
 
 Two consequences:
 
-- The worker must have the `ghcr.io/sandrpod/egress-proxy` image **before** the
-  first such sandbox; creation fails after the record is written otherwise.
+- The worker pulls `ghcr.io/sandrpod/egress-proxy` on demand (0.12+). Pre-pull it
+  if you do not want the first egress create to wait for that pull.
 - Only workers advertising the `egress` capability can host these sandboxes. On a
   fleet without one, creation answers `409 worker capability unavailable` instead
   of starting an unenforced sandbox.
@@ -60,6 +60,11 @@ created. It is not a live firewall.
 This is deliberate — rebuilding a container's network in place is a restart with
 extra steps — but it means `create --allow-domain` is the path that matters, and
 `PUT /egress` is for the next generation of that sandbox.
+
+The E2B surface is the exception: `sandbox.update_network()` rebuilds a running
+sandbox's egress sidecar in place (the token and the container stay). Adding a
+first policy to a sandbox that never had one is still refused with `409`, because
+there is no sidecar to rebuild.
 
 ## Verifying it
 

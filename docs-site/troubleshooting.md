@@ -53,8 +53,10 @@ that with no error is worth investigating.
 
 ## `create egress proxy container: No such image`
 
-The worker does not have `ghcr.io/sandrpod/egress-proxy`. Pull it and recreate —
-the failed attempt already wrote a record, so delete that sandbox first.
+An older worker without `ghcr.io/sandrpod/egress-proxy`. Since 0.12 the worker
+pulls the sidecar on demand, so this means the build predates that — upgrade it.
+The failed attempt may already have written a record; delete that sandbox first
+if it is still listed.
 
 ## A created sandbox comes back after being deleted
 

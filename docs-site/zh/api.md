@@ -9,14 +9,14 @@ description: 原生控制面 API —— 沙箱、worker、执行、出网，以�
 
 ## 鉴权
 
-接受两种头，含义不同：
+接受以下几种凭据，含义不同：
 
 | 头 | 凭据 | 范围 |
 |---|---|---|
 | `X-Sandrpod-Token` | 平台 token | 全部，所有工作区 |
 | `X-Sandrpod-Token` | `sk_…` 工作区 key | 单个工作区 |
 | `X-Sandrpod-Token` | `e2b_…` E2B key | 单个工作区（同一份凭据的 E2B 拼写） |
-| `Cookie: sandrpod_session` | 浏览器会话 | 已登录的工作区 |
+| `Cookie: sd_cloud_session` | 浏览器会话 | 已登录的工作区 |
 
 平台 token 是运维凭据：能列出所有沙箱、删掉所有 worker。**不要把它放进智能体**。
 

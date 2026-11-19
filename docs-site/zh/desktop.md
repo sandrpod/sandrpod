@@ -36,15 +36,16 @@ curl -s $API/api/v1/sandboxes -H "Authorization: Bearer $TOKEN" \
 
 | 入口 | 地址 | 给谁用 |
 |---|---|---|
-| 观看端 | `https://6901-<沙箱>.<预览域>/` | 用眼睛看、用鼠标操作的人 |
-| CDP | `https://9222-<沙箱>.<预览域>/json/version`（需签名 token 或 API Key） | Playwright / chrome-devtools-mcp 驱动**同一个** Chrome |
+| 观看端 | `https://6901-<routing-id>.<预览域>/` | 用眼睛看、用鼠标操作的人 |
+| CDP | `https://9222-<routing-id>.<预览域>/json/version`（需签名 token 或 API Key） | Playwright / chrome-devtools-mcp 驱动**同一个** Chrome |
 | 沙箱 MCP | `/api/v1/sandboxes/<名>/toolbox/mcp` → `desktop_*` | 想要"截图/点击/输入"作为工具调用的 agent |
 
 控制台里的 **桌面** 按钮会签发一个签名 URL 并打开观看端。
 
 ## 预览链接是签名的
 
-通配主机拒绝未签名的请求——它暴露的是一块桌面，不是网页。
+通配主机在**桌面和调试器端口**上拒绝未签名的请求——它暴露的是一块桌面，不是网页。
+普通服务端口仍按主机名即能力的方式匿名可访问。
 
 - `GET /api/v1/sandboxes/{名}/preview/{端口}` 返回绑定"沙箱 + 端口 + 有效期"（2 小时）的 HMAC 签名 URL。
 - 打开它会让页面拿到一个 HttpOnly cookie，页面的子资源和它的 **websocket** 随后都复用它（浏览器无法给 WS 握手加头）。

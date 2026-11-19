@@ -71,7 +71,7 @@ sandrpod-cli mcp add my-sandbox notion \
 
 # Local stdio servers (Claude Desktop config works as-is)
 sandrpod-cli mcp add my-sandbox github \
-  --command npx -- -y @modelcontextprotocol/server-github \
+  "npx -y @modelcontextprotocol/server-github" \
   --env GITHUB_PERSONAL_ACCESS_TOKEN=ghp_…
 ```
 
@@ -98,12 +98,12 @@ sandrpod-cli mcp url my-sandbox          # endpoint + auth headers
 
 ## External endpoints
 
-External MCP clients get two entries:
+External MCP clients reach the native bridge through the authenticated tunnel:
 
-### Tunnel endpoint (authenticated, recommended)
+### Tunnel endpoint (recommended)
 
 ```
-https://cloud.sandrpod.com/api/v1/sandboxes/{name}/mcp
+https://cloud.sandrpod.com/api/v1/sandboxes/{routing-id}/mcp
 ```
 
 ```
@@ -111,15 +111,12 @@ X-Sandrpod-Token: <your API key>         # create one in the console
 Authorization: Bearer <mcp_token>        # optional, see the security model
 ```
 
-### Preview URL (no headers)
-
-```
-https://8080-{sandbox_name}.sandbox.sandrpod.com/mcp
-```
-
-The hostname is the capability (same model as E2B). Convenient for clients
-that cannot attach custom headers; use the tunnel endpoint for sandboxes
-running sensitive tools.
+There is deliberately **no unauthenticated URL** for this bridge: it lives on the
+toolbox's `:8080`, and the public port proxies never expose `:8080` because that
+control plane has no per-sandbox credential. The E2B gateway's own
+`mcp-gateway` is a different endpoint — it listens on `:50005` and is reached at
+`https://50005-<routing-id>.<domain>/mcp` (see
+[E2B MCP compatibility](https://github.com/sandrpod/sandrpod/blob/main/docs/E2B_MCP_COMPAT.md)).
 
 Client configuration (Cursor / Claude Desktop):
 
@@ -127,8 +124,11 @@ Client configuration (Cursor / Claude Desktop):
 {
   "mcpServers": {
     "my-tools": {
-      "url": "https://8080-my-sandbox.sandbox.sandrpod.com/mcp",
-      "transport": "streamable_http"
+      "url": "https://cloud.sandrpod.com/api/v1/sandboxes/{routing-id}/mcp",
+      "transport": "streamable_http",
+      "headers": {
+        "X-Sandrpod-Token": "<your API key>"
+      }
     }
   }
 }

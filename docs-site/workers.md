@@ -135,7 +135,7 @@ reachable, and a create that lands on it fails with a reason rather than hanging
 |---|---|
 | Docker socket | the worker creates containers |
 | `SANDRPOD_TOOLBOX_IMAGE` | the sandbox base image, pulled on first use |
-| `ghcr.io/sandrpod/egress-proxy` pre-pulled | only for sandboxes with an egress policy; without it creation fails **after** the record is written |
+| `ghcr.io/sandrpod/egress-proxy` | pulled on first use (0.12+); pre-pull it to avoid paying that pull on the first egress create |
 | Ports: none inbound; outbound HTTPS + DNS | the worker dials the control plane and pulls images |
 
 Disk is the resource that fills first: images plus per-sandbox writable layers.

@@ -18,8 +18,8 @@ fork with **从快照创建** in the create drawer.
 
 - the **image layers** (what `docker commit` captures: installed packages, files
   outside `/workspace`)
-- the **`/workspace` volume**, which `docker commit` does *not* capture — the engine
-  copies it when the fork is created
+- the **`/workspace` volume**, which `docker commit` does *not* capture — the worker
+  copies it when a sandbox is created from the snapshot
 
 ## Where it lives
 
@@ -47,3 +47,9 @@ curl -s -X DELETE "$API/api/v1/snapshots?image=sandrpod-snapshot/box:v1" \
 
 Deletes every worker's copy of that tag. The worker refuses an image it did not
 commit, and docker refuses one still in use.
+
+## From the E2B SDK
+
+The same images back `create_snapshot`, `list_snapshots` and `delete_snapshot`;
+`sandbox.fork()` snapshots the source and starts the children on the worker that
+holds that image. See [E2B drop-in](/e2b).

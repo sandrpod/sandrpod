@@ -37,9 +37,12 @@ activity: an agent that thinks for an hour between calls looks idle.
 sequential commands; ten parallel agents need ten sandboxes and are refused on
 trial. Parallelism is what you are buying.
 
-**2. Disk is not metered, but it is finite.** A workspace that writes 40 GB into
-`/workspace` fills the worker and every sandbox on it degrades. The console shows
-per-sandbox disk in **Metrics**; nothing stops you from writing that much.
+**2. Disk is reserved, not metered.** Each sandbox reserves `storage_mb` (2 GiB by
+default) against the plan's budget — trial 5 GB, starter 50 GB, team 200 GB — and
+a create that would exceed it is refused. The reservation is a budget, not a
+filesystem quota: Docker volumes have no portable hard limit, so a workspace can
+still write past its reservation and fill the worker. The console shows per-sandbox
+disk in **Metrics**.
 
 ## Rate limits
 

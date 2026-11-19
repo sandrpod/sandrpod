@@ -33,7 +33,7 @@ from sandrpod_cli.client import SandrPodClient
 
 client = SandrPodClient(api_url="https://cloud.example.com", token="sk_...")
 
-sb = client.create_sandbox("agent-01", provider="local")
+sb = client.create_sandbox("agent-01", provider_type="local")
 result = client.execute("agent-01", "python3 -c 'print(2**10)'")
 print(result["stdout"], result["exit_code"])
 
@@ -61,10 +61,10 @@ requests.delete(f"{API}/api/v1/sandboxes/agent-01", headers=H)
 ## 文件与流式输出
 
 ```python
-client.write_file("agent-01", "/workspace/in.txt", b"hello")
-client.read_file("agent-01", "/workspace/in.txt")
-for chunk in client.stream("agent-01", "for i in range(3): print(i)"):
-    print(chunk, end="")
+client.write_file("agent-01", "/workspace/in.txt", "hello")
+data = client.read_file("agent-01", "/workspace/in.txt")   # bytes
+for event in client.stream_execute("agent-01", "bash", "for i in 1 2 3; do echo $i; done"):
+    print(event["data"], end="")
 ```
 
 ## 长时间运行的工作
@@ -73,7 +73,7 @@ for chunk in client.stream("agent-01", "for i in range(3): print(i)"):
 `execute` 之间是保留的，所以即使每次调用都是新进程，状态也可以放在文件里。
 
 ```python
-sb = client.create_sandbox("work", provider="local", ttl_seconds=4 * 3600)
+sb = client.create_sandbox("work", provider_type="local", ttl_seconds=4 * 3600)
 ```
 
 `ttl_seconds` 会回收闲置的沙箱；有活动就重置计时。

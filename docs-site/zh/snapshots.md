@@ -16,7 +16,7 @@ curl -s -X POST "$API/api/v1/sandboxes/box/snapshot?image=sandrpod-snapshot/box:
 ## 快照里有什么
 
 - **镜像层**（`docker commit` 捕获的东西：装过的包、`/workspace` 之外的文件）
-- **`/workspace` 卷**，`docker commit` *不* 捕获它——引擎在创建分叉时复制过来
+- **`/workspace` 卷**，`docker commit` *不* 捕获它——worker 在从快照创建沙箱时复制过来
 
 ## 存在哪里
 
@@ -41,3 +41,9 @@ curl -s -X DELETE "$API/api/v1/snapshots?image=sandrpod-snapshot/box:v1" \
 
 会删掉该 tag 在所有 worker 上的副本。worker 会拒绝删除不是自己提交的镜像，docker 会拒绝
 删除正在使用的镜像。
+
+## 从 E2B SDK 使用
+
+同一批镜像支撑 `create_snapshot`、`list_snapshots` 和 `delete_snapshot`；
+`sandbox.fork()` 会给源沙箱做快照，并把子沙箱启动在持有该镜像的 worker 上。见
+[E2B 直接替换](/zh/e2b)。

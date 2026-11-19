@@ -29,7 +29,7 @@ sandrpod-cli mcp add my-sandbox notion \
 
 # 本地 stdio 服务器（Claude Desktop 配置原样可用）
 sandrpod-cli mcp add my-sandbox github \
-  --command npx -- -y @modelcontextprotocol/server-github \
+  "npx -y @modelcontextprotocol/server-github" \
   --env GITHUB_PERSONAL_ACCESS_TOKEN=ghp_…
 ```
 
@@ -55,12 +55,12 @@ sandrpod-cli mcp url my-sandbox          # 打印对外端点 + 认证头
 
 ## 对外端点
 
-外部 MCP 客户端（Claude Desktop、Cursor、任何 AI）有两个入口：
+外部 MCP 客户端通过带认证的隧道进入原生 bridge：
 
-### 隧道端点（带认证，推荐）
+### 隧道端点（推荐）
 
 ```
-https://cloud.sandrpod.com/api/v1/sandboxes/{name}/mcp
+https://cloud.sandrpod.com/api/v1/sandboxes/{routing-id}/mcp
 ```
 
 ```
@@ -68,14 +68,11 @@ X-Sandrpod-Token: <你的 API Key>          # 控制台 API Key 页创建
 Authorization: Bearer <mcp_token>          # 可选，见下方安全模型
 ```
 
-### Preview URL（无 header，凭主机名）
-
-```
-https://8080-{sandbox_name}.sandbox.sandrpod.com/mcp
-```
-
-主机名即能力凭证（与 E2B 一致）。适合不方便带自定义 header 的客户端；
-跑敏感工具的沙箱建议用隧道端点。
+这个 bridge **故意没有无认证的 URL**：它跑在 toolbox 的 `:8080` 上，而公共端口
+代理永远不会暴露 `:8080`，因为那个控制面没有按沙箱的凭据。E2B 网关自带的
+`mcp-gateway` 是另一个端点：监听 `:50005`，地址是
+`https://50005-<routing-id>.<domain>/mcp`（见
+[E2B MCP 兼容](https://github.com/sandrpod/sandrpod/blob/main/docs/E2B_MCP_COMPAT.md)）。
 
 客户端配置示例（Cursor / Claude Desktop）：
 
@@ -83,8 +80,11 @@ https://8080-{sandbox_name}.sandbox.sandrpod.com/mcp
 {
   "mcpServers": {
     "my-tools": {
-      "url": "https://8080-my-sandbox.sandbox.sandrpod.com/mcp",
-      "transport": "streamable_http"
+      "url": "https://cloud.sandrpod.com/api/v1/sandboxes/{routing-id}/mcp",
+      "transport": "streamable_http",
+      "headers": {
+        "X-Sandrpod-Token": "<你的 API Key>"
+      }
     }
   }
 }

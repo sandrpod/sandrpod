@@ -41,15 +41,17 @@ defaults when you pick a desktop type.
 
 | Entry | URL | Who it is for |
 |---|---|---|
-| Viewer | `https://6901-<sandbox>.<preview-domain>/` | A human watching or driving the screen |
-| CDP | `https://9222-<sandbox>.<preview-domain>/json/version` (signed token or API key) | Playwright / chrome-devtools-mcp driving **the same** Chrome |
+| Viewer | `https://6901-<routing-id>.<preview-domain>/` | A human watching or driving the screen |
+| CDP | `https://9222-<routing-id>.<preview-domain>/json/version` (signed token or API key) | Playwright / chrome-devtools-mcp driving **the same** Chrome |
 | Sandbox MCP | `/api/v1/sandboxes/<name>/toolbox/mcp` → `desktop_*` | An agent that wants screenshot/click/type as tool calls |
 
 The console's row button **桌面** mints a signed URL and opens the viewer.
 
 ## Preview links are signed
 
-The wildcard host refuses an unsigned request — it exposes a desktop, not a web page.
+The wildcard host refuses an unsigned request **on desktop and debugger ports** —
+it exposes a desktop, not a web page. Ordinary service ports stay capability-based
+(the unguessable hostname is the credential).
 
 - `GET /api/v1/sandboxes/{name}/preview/{port}` returns an HMAC-signed URL bound to
   sandbox + port + expiry (2 hours).
