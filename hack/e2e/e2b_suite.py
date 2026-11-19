@@ -694,6 +694,13 @@ for line in sys.stdin:
             if snap_id:
                 try: Sandbox.delete_snapshot(snap_id)
                 except Exception as e: print("snapshot delete failed:", e)
+            # Fork creates a second image; remove it after the forks are gone.
+            try:
+                for x in _all_items(Sandbox.list_snapshots(limit=100)):
+                    if ":fork-" in x.snapshot_id and s.sandbox_id in x.snapshot_id:
+                        Sandbox.delete_snapshot(x.snapshot_id)
+            except Exception as e:
+                print("fork snapshot cleanup failed:", e)
             s.kill()
     check("E2B snapshot create/list/fork/delete", snapshots_and_fork, timeout=240)
 

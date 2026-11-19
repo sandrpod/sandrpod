@@ -25,6 +25,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -1000,36 +1001,41 @@ func (b *e2bSandboxBackend) ListSnapshots(ident, sandboxID string, limit int) []
 
 func (b *e2bSandboxBackend) DeleteSnapshot(ident, snapshotID string) bool {
 	rows := b.snapshotRows(ident)
-	found := false
+	// One snapshot can exist as a local tag and as the registry-pushed copy.
+	// They share a base name, so delete every matching copy rather than leaving
+	// the other one behind under a different repository path.
+	base := path.Base(snapshotID)
+	var images []string
 	for _, r := range rows {
-		if r.Image == snapshotID || strings.TrimSuffix(r.Image, ":latest") == strings.TrimSuffix(snapshotID, ":latest") {
-			found = true
-			break
+		if r.Image == snapshotID || path.Base(r.Image) == base {
+			images = append(images, r.Image)
 		}
 	}
-	if !found {
+	if len(images) == 0 {
 		return false
 	}
 	removed := false
-	for _, p := range b.d.poders.List() {
-		if p.State != podpkg.PoderStateOnline {
-			continue
-		}
-		t, ok := b.d.tunnelStore.Get(p.ID)
-		if !ok {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-		req, _ := http.NewRequestWithContext(ctx, http.MethodDelete,
-			"http://poder/snapshots?image="+url.QueryEscape(snapshotID), nil)
-		resp, err := t.Client.Do(req)
-		cancel()
-		if err != nil {
-			continue
-		}
-		resp.Body.Close()
-		if resp.StatusCode/100 == 2 {
-			removed = true
+	for _, image := range images {
+		for _, p := range b.d.poders.List() {
+			if p.State != podpkg.PoderStateOnline {
+				continue
+			}
+			t, ok := b.d.tunnelStore.Get(p.ID)
+			if !ok {
+				continue
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			req, _ := http.NewRequestWithContext(ctx, http.MethodDelete,
+				"http://poder/snapshots?image="+url.QueryEscape(image), nil)
+			resp, err := t.Client.Do(req)
+			cancel()
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode/100 == 2 {
+				removed = true
+			}
 		}
 	}
 	return removed
