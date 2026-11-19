@@ -5,6 +5,16 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.12.1
+
+Fixes for the E2B snapshot and fork paths added in 0.12.0.
+
+| Area | What changed |
+|---|---|
+| E2B fork | the child is created on the worker that already holds the source snapshot instead of being scheduled somewhere the image does not exist |
+| E2B snapshots | the ID returned by `create_snapshot` is the familiar `repo:tag` Docker actually stores, so `list_snapshots` and `delete_snapshot` see the same value |
+| Placement | a pinned create follows the same tenant rule as normal scheduling; an operator-owned sandbox can fork back onto its source worker |
+
 ## 0.12.0
 
 The E2B surface became complete enough to run the SDK without caveats, and

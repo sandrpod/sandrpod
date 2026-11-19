@@ -15,7 +15,7 @@ export SANDRPOD_API_URL=https://cloud.example.com
 export SANDRPOD_API_TOKEN=sk_...          # or the platform token on a single-tenant server
 ```
 
-Every command below was run against a deployed server at version 0.12.0.
+Every command below was run against a deployed server at version 0.12.1.
 
 ## Two names
 

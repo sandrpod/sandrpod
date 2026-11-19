@@ -5,6 +5,16 @@ description: 每个版本改了什么，其中哪些改动会破坏东西。
 
 # 发布说明
 
+## 0.12.1
+
+修复 0.12.0 新增的 E2B 快照与 fork 路径。
+
+| 领域 | 改了什么 |
+|---|---|
+| E2B fork | 子沙箱创建在持有源快照的 worker 上，不再被调度到没有该镜像的节点 |
+| E2B 快照 | `create_snapshot` 返回的 ID 就是 Docker 实际存储的 `repo:tag`，`list_snapshots` / `delete_snapshot` 看到同一个值 |
+| 放置 | 指定 worker 的创建与正常调度使用同一套租户规则；平台持有的沙箱可以 fork 回源 worker |
+
 ## 0.12.0
 
 E2B 表面补到可以无保留地跑官方 SDK，同工作区沙箱也不再共享网络。

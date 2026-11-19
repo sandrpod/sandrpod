@@ -15,7 +15,7 @@ export SANDRPOD_API_URL=https://cloud.example.com
 export SANDRPOD_API_TOKEN=sk_...          # 单租户服务器上也可以用平台 token
 ```
 
-下面每一条命令都在引擎 0.12.0、CLI 0.7.2 的部署上实际跑过。
+下面每一条命令都在引擎 0.12.1、CLI 0.7.2 的部署上实际跑过。
 
 ## 两个名字
 

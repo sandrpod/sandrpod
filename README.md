@@ -18,7 +18,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/stable-v0.12.0-16a34a" alt="stable v0.12.0"/>
+  <img src="https://img.shields.io/badge/stable-v0.12.1-16a34a" alt="stable v0.12.1"/>
   <img src="https://img.shields.io/badge/deployed%20as-a%20service-0ea5e9" alt="run as a service"/>
 </p>
 
@@ -26,7 +26,7 @@
 
 ## Maturity and support
 
-**v0.12.0 is the latest tagged release.** `main` is development.
+**v0.12.1 is the latest tagged release.** `main` is development.
 
 | | |
 |---|---|
@@ -97,7 +97,7 @@ sandrpod-cli --api-url http://localhost:8080 create demo --provider local
 sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
 ```
 
-Real output from a local v0.12.0 stack (no cached sandbox images):
+Real output from a local v0.12.1 stack (no cached sandbox images):
 
 ```
 Sandbox:     demo
