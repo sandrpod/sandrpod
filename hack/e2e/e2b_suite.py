@@ -267,6 +267,16 @@ try:
 
     api_key = os.environ["E2B_API_KEY"]
 
+    def _status(url, headers=None):
+        req = urllib.request.Request(url, headers=headers or {})
+        try:
+            with urllib.request.urlopen(req, timeout=10, context=ssl.create_default_context()) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except Exception:
+            return 0
+
     def _get(url, headers=None):
         req = urllib.request.Request(url, headers=headers or {})
         try:
@@ -424,6 +434,34 @@ try:
     check("network allow_internet_access=false", deny_all)
     check("network allow_out/deny_out", allow_out)
 
+    def private_ports():
+        s = new_sandbox(template="base", timeout=300,
+                        network={"allow_public_traffic": False})
+        server = None
+        try:
+            server = s.commands.run("python3 -m http.server 8000 --bind 0.0.0.0",
+                                    background=True, cwd="/tmp")
+            host = s.get_host(8000)
+            last = None
+            for _ in range(20):
+                try:
+                    status =_status("https://%s/" % host)
+                    last = status
+                    if status != 0:
+                        break
+                except Exception as e:
+                    last = e
+                time.sleep(1)
+            if last != 401:
+                raise AssertionError("private port without key = %r, want 401" % (last,))
+            return "401"
+        finally:
+            if server is not None:
+                try: s.commands.kill(server.pid)
+                except Exception: pass
+            s.kill()
+    check("allowPublicTraffic=false requires auth", private_ports)
+
     def raw(method, path, body=None):
         data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(API_URL + path, data=data, method=method,
@@ -443,12 +481,7 @@ try:
                              {"method": "GET", "action": "allow"}]}}})
         if status != 400:
             raise AssertionError("rules status = %s, want 400" % status)
-        status, _ = raw("POST", "/sandboxes",
-                        {"templateID": "base", "timeout": 60,
-                         "network": {"allowPublicTraffic": False}})
-        if status != 400:
-            raise AssertionError("allowPublicTraffic=false status = %s, want 400" % status)
-        return "400/400"
+        return "rules=400"
     check("unsupported network options are 400", unsupported_options)
 
     def auto_pause_memory():
@@ -499,22 +532,25 @@ try:
         check("cpuCount=1 is honoured", cpu_count)
 
     def update_network():
-        s = new_sandbox(template="base", timeout=120)
+        s = new_sandbox(template="base", timeout=300,
+                        network={"allow_out": ["example.com"]})
         try:
             try:
-                s.update_network({"allow_out": ["example.com"]})
+                s.update_network({"allow_out": ["example.org"]})
             except Exception as e:
                 msg = str(e)
                 if any(x in msg for x in ("404", "405", "501", "not supported", "Not Found")):
                     gap("update_network", "not implemented: " + msg[:120])
                     return None
                 raise
-            RESULTS.append(("update_network", True, ""))
-            print("PASS  update_network", flush=True)
-            return "accepted"
+            new_host = probe(s, "example.org")
+            old_host = probe(s, "example.com")
+            if new_host != "200" or old_host == "200":
+                raise AssertionError("after update new=%r old=%r" % (new_host, old_host))
+            return "new=200 old=blocked"
         finally:
             s.kill()
-    update_network()
+    check("update_network", update_network)
 
     def async_sdk():
         try:
@@ -629,9 +665,37 @@ for line in sys.stdin:
     else:
         gap("E2B create(mcp=...)", "set E2E_MCP=1 to run the in-sandbox MCP gateway checks")
 
-    # Control-plane features E2B has but this deployment does not implement.
-    gap("E2B create_snapshot/list_snapshots", "not part of the E2B wire surface here; use `sandrpod-cli snapshot`")
-    gap("E2B fork", "not implemented")
+    # ── snapshots + fork ───────────────────────────────────────────────────
+    def snapshots_and_fork():
+        s = new_sandbox(template="base", timeout=300, metadata={"e2e": TAG})
+        snap_id = ""
+        children = []
+        try:
+            info = s.create_snapshot(name="e2e")
+            snap_id = info.snapshot_id
+            listed = [x.snapshot_id for x in _all_items(Sandbox.list_snapshots(limit=100))]
+            if snap_id not in listed:
+                raise AssertionError("snapshot %r not in list %r" % (snap_id, listed[:10]))
+            if hasattr(Sandbox, "fork"):
+                results = s.fork(timeout=120, count=1)
+                for r in results:
+                    if isinstance(r, Exception):
+                        raise AssertionError("fork failed: %s" % r)
+                    children.append(r)
+                    if r.commands.run("echo fork-ok").stdout.strip() != "fork-ok":
+                        raise AssertionError("forked sandbox did not run")
+            else:
+                gap("E2B fork", "not present in this SDK")
+            return snap_id
+        finally:
+            for child in children:
+                try: child.kill()
+                except Exception: pass
+            if snap_id:
+                try: Sandbox.delete_snapshot(snap_id)
+                except Exception as e: print("snapshot delete failed:", e)
+            s.kill()
+    check("E2B snapshot create/list/fork/delete", snapshots_and_fork, timeout=240)
 
 finally:
     for name, obj in (("sdk", sb), ("ci", ci)):

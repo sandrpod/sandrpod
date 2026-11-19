@@ -144,11 +144,11 @@ difference: `Sandbox.connect` uses `POST /v2/sandboxes/{id}/connect`, so the
 version prefix is now stripped before dispatching by-ID actions.
 
 The repeatable baseline lives in [`hack/e2e/e2b_suite.py`](../hack/e2e/e2b_suite.py)
-(and [`hack/e2e/cli_suite.py`](../hack/e2e/cli_suite.py) for the CLI). The E2B
-suite is 68 checks: 2.30.0 reports 64 passed and 4 documented gaps; 2.64.0
-reports 65 passed and 3 gaps. It now includes network policies, autoPause,
-`cpuCount`, async SDK, MCP gateway, sensitive-port auth, streaming, gzip, and
-binary files.
+(and [`hack/e2e/cli_suite.py`](../hack/e2e/cli_suite.py) for the CLI). The 2.64.0
+run is 68/68; 2.30.0 is 67 passed with two SDK-version gaps (`cpuCount` and
+`fork` are not in that client). It includes network policies and
+`allowPublicTraffic=false`, autoPause, live `update_network`, snapshots, fork,
+async SDK, MCP gateway, sensitive-port auth, streaming, gzip, and binary files.
 
 ### Re-verified with the current SDK (2026-10-25, `e2b` 2.59.0, `e2b-code-interpreter` 2.11.3)
 

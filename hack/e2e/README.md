@@ -28,13 +28,12 @@ Run it once per SDK version you support, e.g. in separate virtualenvs for
 
 The suite creates one live sandbox at a time so it also works against a trial
 plan with a one-sandbox cap. It covers control plane, commands, files, PTY,
-signed URLs, ports, metrics, pause/resume, network policy, autoPause,
-`cpuCount`, async SDK, and the MCP gateway. Unsupported E2B control-plane
-features are reported as `GAP`, not failures:
+signed URLs, ports, metrics, pause/resume, network policy (including
+`allowPublicTraffic=false`), autoPause, `cpuCount`, live `update_network`,
+snapshots, fork, async SDK, and the MCP gateway.
 
-- `update_network` (405)
-- `create_snapshot` / `list_snapshots` (use `sandrpod-cli snapshot`)
-- `fork`
+Results: 2.30.0 reports 67 passed and 2 SDK-version gaps (`cpuCount` and
+`fork` are not in that client); 2.64.0 reports 68 passed and 0 gaps.
 
 ## CLI
 
@@ -58,8 +57,10 @@ covers create/job/list/env, execute/stream, sessions, files (including binary an
 watch), contexts, preview/stats/logs, MCP config CRUD, egress, stop/start,
 snapshot with `--timeout`, and the pinned-create path when configured.
 
-`shell` is an interactive TTY flow and is deliberately reported as a `GAP`;
-exercise it manually.
+The interactive `shell` check drives a real PTY (`echo` + Ctrl-]) and needs the
+`[shell]` extra (`websocket-client`). `token list` on the hosted build is a
+`GAP`: workspace keys are managed by the portal, and the engine intentionally
+answers 501.
 
 ## Exit codes
 

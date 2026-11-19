@@ -17,7 +17,9 @@ touch the operator's real ~/.sandrpod-cli.
 """
 import json
 import os
+import pty
 import re
+import select
 import shutil
 import stat
 import subprocess
@@ -336,8 +338,49 @@ try:
     else:
         gap("create --poder direct", "set SANDRPOD_ADMIN_TOKEN and E2E_PODER_ID to run")
 
-    # interactive PTY is a TTY flow; it is exercised manually, not here
-    gap("shell interactive PTY", "not automated (requires a TTY); run `sandrpod-cli shell` manually")
+    def shell_interactive():
+        master, slave = pty.openpty()
+        proc = subprocess.Popen([CLI_BIN, "shell", NAME], stdin=slave, stdout=slave,
+                                stderr=slave, env=ENV, close_fds=True)
+        os.close(slave)
+        os.set_blocking(master, False)
+        output = b""
+        try:
+            time.sleep(1.5)
+            os.write(master, b"echo shell-ok\n")
+            deadline = time.time() + 15
+            while time.time() < deadline:
+                ready, _, _ = select.select([master], [], [], 0.25)
+                if ready:
+                    try:
+                        chunk = os.read(master, 4096)
+                    except OSError:
+                        break
+                    if not chunk:
+                        break
+                    output += chunk
+                    if b"shell-ok" in output:
+                        break
+                if proc.poll() is not None:
+                    break
+            os.write(master, b"\x1d")  # Ctrl-] exits the CLI shell
+            time.sleep(0.5)
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            os.close(master)
+        if b"shell-ok" not in output:
+            text = output.decode(errors="replace")
+            if "websocket" in text.lower():
+                gap("shell interactive PTY", "install sandrpod-cli[shell]")
+                return
+            raise AssertionError("shell output: %r" % text[-300:])
+        return "PTY round-trip"
+    check_fn("shell interactive PTY", shell_interactive)
 
     # admin-only surfaces: run with the admin token when provided, otherwise
     # record the gap instead of pretending a user key should be allowed.
