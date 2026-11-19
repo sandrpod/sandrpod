@@ -20,6 +20,7 @@ type mockPoderRepo struct {
 	selectBestFn    func(region, providerType string) (*PoderInfo, error)
 	selectBestForFn func(region, providerType string, require []string, tenant string) (*PoderInfo, error)
 	listFn          func() []*PoderInfo
+	getFn           func(id string) (*PoderInfo, bool)
 }
 
 func (m *mockPoderRepo) Register(req *RegisterPoderRequest) (*PoderInfo, error) {
@@ -31,6 +32,9 @@ func (m *mockPoderRepo) Heartbeat(id string, usage *HeartbeatRequest) error {
 }
 
 func (m *mockPoderRepo) Get(id string) (*PoderInfo, bool) {
+	if m.getFn != nil {
+		return m.getFn(id)
+	}
 	return nil, false
 }
 
@@ -598,5 +602,47 @@ func TestSchedule_TenantScopedPlacement(t *testing.T) {
 	}
 	if job.PoderID == "theirs" {
 		t.Fatal("an unscoped request was placed on a scoped worker")
+	}
+}
+
+// A pinned create follows the same tenant rule as placement. The operator
+// (empty tenant) may pin any worker — this is how a fork returns to the node
+// that holds its source snapshot. A tenant may pin its own or an unscoped
+// worker and nothing else.
+func TestSchedule_PinnedPlacementTenantRule(t *testing.T) {
+	mine := &PoderInfo{ID: "mine", State: PoderStateOnline, ProviderType: "local", Workspace: "acme"}
+	theirs := &PoderInfo{ID: "theirs", State: PoderStateOnline, ProviderType: "local", Workspace: "other"}
+	shared := &PoderInfo{ID: "shared", State: PoderStateOnline, ProviderType: "local"}
+	byID := map[string]*PoderInfo{"mine": mine, "theirs": theirs, "shared": shared}
+
+	repo := &mockPoderRepo{getFn: func(id string) (*PoderInfo, bool) {
+		p, ok := byID[id]
+		return p, ok
+	}}
+	s := NewScheduler(repo, "", "")
+
+	cases := []struct {
+		name    string
+		tenant  string
+		poder   string
+		wantErr bool
+	}{
+		{"operator pins a tenant worker", "", "theirs", false},
+		{"tenant pins its own worker", "acme", "mine", false},
+		{"tenant pins an unscoped worker", "acme", "shared", false},
+		{"tenant pins another tenant's worker", "acme", "theirs", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := s.ScheduleSandboxCreation(context.Background(), &CreateSandboxRequest{
+				Name: "pinned", ProviderType: "local", Workspace: tc.tenant, PoderID: tc.poder,
+			})
+			if tc.wantErr && err == nil {
+				t.Fatalf("pinned to %q as tenant %q must be refused", tc.poder, tc.tenant)
+			}
+			if !tc.wantErr && err != nil {
+				t.Fatalf("pinned to %q as tenant %q: %v", tc.poder, tc.tenant, err)
+			}
+		})
 	}
 }

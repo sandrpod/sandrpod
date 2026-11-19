@@ -88,7 +88,11 @@ func (s *Scheduler) ScheduleSandboxCreation(ctx context.Context, req *CreateSand
 		if !ok {
 			return nil, fmt.Errorf("worker %q does not exist — check the node id or pick another node", req.PoderID)
 		}
-		if poder.Workspace != "" && poder.Workspace != req.Workspace {
+		// Same rule as SelectBestFor: an empty tenant is the operator, who may
+		// use any worker; a tenant may use its own worker or an unscoped one.
+		// A stricter check here would refuse to pin a fork back onto the worker
+		// that already holds the source snapshot.
+		if req.Workspace != "" && poder.Workspace != "" && poder.Workspace != req.Workspace {
 			return nil, fmt.Errorf("worker %q belongs to another workspace", req.PoderID)
 		}
 		for _, cap := range capabilityRequirement(req) {
