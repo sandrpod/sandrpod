@@ -813,6 +813,11 @@ func (p *DockerPoder) SnapshotPod(ctx context.Context, podID, imageName string) 
 		return "", fmt.Errorf("invalid snapshot image name %q: %w", imageName, err)
 	}
 	ref = reference.TagNameOnly(ref)
+	// Docker stores a namespace-qualified Docker Hub name without the
+	// "docker.io/" prefix. Committing with ref.String() creates an image whose
+	// familiar tag the daemon can list but not resolve for a later create; use
+	// the familiar spelling consistently.
+	localRef := reference.FamiliarString(ref)
 	// Record which sandbox this image came from: docker commit does not include
 	// mounted volumes, so a fork from this image starts with an EMPTY /workspace
 	// unless the create path copies the source volume across. The label is how
@@ -824,7 +829,7 @@ func (p *DockerPoder) SnapshotPod(ctx context.Context, podID, imageName string) 
 		}
 	}
 	if _, err := p.dockerClient.ContainerCommit(ctx, podID, container.CommitOptions{
-		Reference: ref.String(),
+		Reference: localRef,
 		Comment:   "sandrpod snapshot",
 		Changes:   changes,
 	}); err != nil {
@@ -842,17 +847,17 @@ func (p *DockerPoder) SnapshotPod(ctx context.Context, podID, imageName string) 
 		sandbox = info.Config.Labels["sandrpod/sandbox-name"]
 	}
 	if sandbox != "" {
-		pushed, perr := p.pushSnapshot(ctx, ref.String(), sandbox, tag)
+		pushed, perr := p.pushSnapshot(ctx, localRef, sandbox, tag)
 		if perr != nil {
 			log.Printf("poder: snapshot %s stays local (push failed): %v", ref.String(), perr)
-			return ref.String(), nil
+			return localRef, nil
 		}
-		if pushed != ref.String() {
+		if pushed != localRef {
 			log.Printf("poder: snapshot pushed to %s", pushed)
 			return pushed, nil
 		}
 	}
-	return ref.String(), nil
+	return localRef, nil
 }
 
 // GetPod returns information about a pod, consulting the internal registry first
