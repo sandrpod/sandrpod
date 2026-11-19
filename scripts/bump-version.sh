@@ -21,7 +21,9 @@ if sed --version >/dev/null 2>&1; then inplace=(-i); else inplace=(-i ''); fi
 
 command -v git >/dev/null || { echo "bump-version needs git (it rewrites tracked files only)" >&2; exit 1; }
 
-files=$(git ls-files '*.md' '*.yml' '*.yaml' 'setup.py' '**/setup.py' | grep -v '^media/')
+files=$(git ls-files '*.md' '*.yml' '*.yaml' 'setup.py' '**/setup.py' \
+  | grep -v '^media/' \
+  | grep -v '^pkg/sdk/python/setup.py$')
 
 # shellcheck disable=SC2086
 sed "${inplace[@]}" -E \

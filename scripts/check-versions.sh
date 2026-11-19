@@ -30,9 +30,10 @@ grep -rn --include='*.md' -E '^> \*\*(Version|版本)\*\*: v[0-9]' . 2>/dev/null
   | grep -Ev '^\./(\.git|media)/' \
   | sed 's/.*: v\([0-9][0-9.]*\).*/\1|&/' >> "$tmp" || true
 
-# The Python SDK, which pins without the leading v.
+# The CLI is released independently from the engine and carries its own
+# version; it must not make the engine's pinned versions disagree.
 grep -rn --include='setup.py' -E 'version="[0-9]' . 2>/dev/null \
-  | grep -Ev '^\./(\.git|media)/' \
+  | grep -Ev '^\./(\.git|media|pkg/sdk/python/setup\.py)' \
   | sed 's/.*version="\([0-9][0-9.]*\)".*/\1|&/' >> "$tmp" || true
 
 if [ ! -s "$tmp" ]; then
