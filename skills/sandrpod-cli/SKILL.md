@@ -33,6 +33,7 @@ sandrpod-cli job get <job-id>               # poll async create
 sandrpod-cli start|stop|delete <name>
 sandrpod-cli logs <name> [--tail N]
 sandrpod-cli stats <name>                   # per-sandbox CPU/mem/disk
+sandrpod-cli create <name> --runtime gvisor    # requires a worker with runsc
 sandrpod-cli snapshot <name> [--image repo:tag]
 sandrpod-cli preview <name> <port> [path]   # reach a web service inside
 ```

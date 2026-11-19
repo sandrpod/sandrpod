@@ -33,6 +33,7 @@ func TestSandboxRepo_CRUD(t *testing.T) {
 		PoderID:      "poder-001",
 		PoderURL:     "tunnel://poder-001",
 		Labels:       map[string]string{"env": "test"},
+		Runtime:      "gvisor",
 		CreatedAt:    now,
 		LastActivity: now,
 	}
@@ -55,6 +56,9 @@ func TestSandboxRepo_CRUD(t *testing.T) {
 	}
 	if got.Labels["env"] != "test" {
 		t.Errorf("Labels[env]: got %q, want %q", got.Labels["env"], "test")
+	}
+	if got.Runtime != "gvisor" {
+		t.Errorf("Runtime: got %q, want gvisor", got.Runtime)
 	}
 
 	// Get missing

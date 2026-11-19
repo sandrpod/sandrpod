@@ -23,6 +23,7 @@ export interface Sandbox {
   arch?: string;
   os?: string;
   os_version?: string;
+  runtime?: "runc" | "gvisor" | "";
   created_at: string;
   last_activity?: string;
 }
@@ -55,6 +56,8 @@ export interface CreateSandboxOptions {
    * `{}` = a wall that allows nothing. Those are different requests.
    */
   network?: EgressPolicy;
+  /** "runc" (default) or "gvisor"; requires a worker with runsc registered. */
+  runtime?: "runc" | "gvisor";
 }
 
 export interface Job {
@@ -243,6 +246,7 @@ export class SandrPodClient {
     if (opts.cpuCores) body["cpu_cores"] = opts.cpuCores;
     if (opts.memoryMB) body["memory_mb"] = opts.memoryMB;
     if (opts.network !== undefined) body["network"] = opts.network;
+    if (opts.runtime) body["runtime"] = opts.runtime;
     if (opts.async ?? waitUntilRunning) body["async"] = true;
 
     const resp = await this.request<{ job_id?: string; status?: string; sandbox: Sandbox }>(

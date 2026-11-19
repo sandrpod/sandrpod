@@ -6,6 +6,7 @@ package sandpod
 import (
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,13 +55,17 @@ type SandboxInfo struct {
 	// PrivatePorts requires the signed preview URL or an API key on every
 	// public in-sandbox port, not only the desktop/debugger ones. E2B's
 	// allowPublicTraffic=false maps here.
-	PrivatePorts bool   `json:"private_ports,omitempty"`
-	GPU          int    `json:"gpu,omitempty"`
-	PoderID      string `json:"poder_id,omitempty"`     // owning Poder ID
-	PoderURL     string `json:"poder_url,omitempty"`    // Poder API URL
-	ContainerID  string `json:"container_id,omitempty"` // actual container ID
-	ProxyURL     string `json:"proxy_url,omitempty"`    // Toolbox proxy URL
-	APIURL       string `json:"api_url,omitempty"`
+	PrivatePorts bool `json:"private_ports,omitempty"`
+	GPU          int  `json:"gpu,omitempty"`
+	// Runtime is the container runtime that was requested at create time:
+	// "runc" (the default) or "gvisor". Empty on records created before the
+	// field existed, which means the deployment default.
+	Runtime     string `json:"runtime,omitempty"`
+	PoderID     string `json:"poder_id,omitempty"`     // owning Poder ID
+	PoderURL    string `json:"poder_url,omitempty"`    // Poder API URL
+	ContainerID string `json:"container_id,omitempty"` // actual container ID
+	ProxyURL    string `json:"proxy_url,omitempty"`    // Toolbox proxy URL
+	APIURL      string `json:"api_url,omitempty"`
 	// Runtime environment info (for AI-generated executable scripts)
 	Arch         string            `json:"arch,omitempty"`       // e.g. amd64, arm64 (inherited from Poder host)
 	OS           string            `json:"os,omitempty"`         // e.g. linux
@@ -121,6 +126,11 @@ type CreateSandboxRequest struct {
 	// GPU is how many GPUs the sandbox needs (0 = none). Placement requires a
 	// worker advertising the gpu capability; the container gets DeviceRequests.
 	GPU int `json:"gpu,omitempty"`
+	// Runtime selects the container runtime: "" or "runc" for Docker's default,
+	// "gvisor" for runsc. A gVisor sandbox is only placed on a worker that
+	// advertises the gvisor capability, because a worker without runsc would
+	// otherwise run it unwrapped while the record claimed otherwise.
+	Runtime string `json:"runtime,omitempty"`
 	// Workspace is the tenant this sandbox belongs to. It is NOT part of the
 	// wire format: the control plane fills it from the caller's identity and
 	// uses it only to choose a worker. Empty means "no placement scoping".
@@ -173,6 +183,45 @@ const (
 	// DefaultStorageMB mirrors the E2B diskSizeMB this deployment reports.
 	DefaultStorageMB = 2048
 )
+
+// Container runtimes a sandbox may request. Empty means "the deployment
+// default", which is Docker's runc.
+const (
+	SandboxRuntimeRunc   = "runc"
+	SandboxRuntimeGVisor = "gvisor"
+)
+
+// NormalizeSandboxRuntime canonicalizes the user-facing runtime spelling.
+// "runsc" is accepted as an alias because that is the Docker runtime name a
+// worker operator sees in `docker info`; the API and the store use "gvisor".
+func NormalizeSandboxRuntime(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "":
+		return "", nil
+	case SandboxRuntimeRunc:
+		return SandboxRuntimeRunc, nil
+	case SandboxRuntimeGVisor, "runsc":
+		return SandboxRuntimeGVisor, nil
+	default:
+		return "", fmt.Errorf("unsupported runtime %q: use %q or %q", raw, SandboxRuntimeRunc, SandboxRuntimeGVisor)
+	}
+}
+
+// ValidateRuntime canonicalizes the request's runtime and rejects combinations
+// this iteration cannot support. GPU passthrough under gVisor is not part of
+// the supported surface; accepting it would produce a sandbox that fails deep
+// inside the driver rather than at the API.
+func (r *CreateSandboxRequest) ValidateRuntime() error {
+	rt, err := NormalizeSandboxRuntime(r.Runtime)
+	if err != nil {
+		return err
+	}
+	r.Runtime = rt
+	if r.Runtime == SandboxRuntimeGVisor && r.GPU > 0 {
+		return fmt.Errorf("GPU sandboxes cannot use the gVisor runtime in this release; create the sandbox with runtime=runc")
+	}
+	return nil
+}
 
 // ApplyResourceDefaults fills unset CPU/memory/storage reservations in place.
 // It is called at every create entry point, including the pinned-worker path

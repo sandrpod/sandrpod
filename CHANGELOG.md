@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+
+- **Opt-in gVisor runtime.** `runtime: "gvisor"` on a create (CLI
+  `--runtime gvisor`) places the sandbox on a worker whose Docker daemon has
+  `runsc` registered and creates it with that runtime. Workers advertise a
+  `gvisor` capability only when `docker info` lists it; a request without a
+  capable worker is refused with `409` rather than silently running under
+  `runc`. See [docs/GVISOR.md](docs/GVISOR.md).
+
 ### Fixed
 
 - **The quickstart compose keeps the worker's identity.** `docker-compose.yml` and

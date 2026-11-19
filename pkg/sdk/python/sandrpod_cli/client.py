@@ -190,6 +190,7 @@ class CLIClient:
         cpu_cores: float = 0,
         memory_mb: int = 0,
         network: Optional[Dict[str, Any]] = None,
+        runtime: str = "",
     ) -> Dict[str, Any]:
         """
         创建 Sandbox
@@ -226,6 +227,10 @@ class CLIClient:
         if network is not None:
             # Egress allow-list, as the same JSON shape PUT /egress takes.
             data["network"] = network
+        if runtime:
+            # "runc" (default) or "gvisor"; the server refuses a worker that
+            # does not advertise the runtime capability.
+            data["runtime"] = runtime
         resp = self._request("POST", "/api/v1/sandboxes", json=data)
         return resp.json()
 
@@ -622,6 +627,7 @@ class CLIClient:
         instance_type: str = "",
         image: str = "",
         network: Optional[Dict[str, Any]] = None,
+        runtime: str = "",
     ) -> Dict[str, Any]:
         """
         在指定 Poder 上直接创建 Sandbox（跳过调度器），返回 sandbox 记录。
@@ -637,6 +643,8 @@ class CLIClient:
             data["image_id"] = image
         if network is not None:
             data["network"] = network
+        if runtime:
+            data["runtime"] = runtime
         resp = self._request("POST", f"/api/v1/poders/{poder_id}/sandboxes", json=data)
         return resp.json()
 

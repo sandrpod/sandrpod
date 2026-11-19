@@ -110,6 +110,17 @@ func (p *DockerPoder) EnsureNetwork(ctx context.Context) error {
 
 // CreatePod creates a new sandbox container pod.
 func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod *PodInfo, retErr error) {
+	// Resolve the runtime before creating networks or pulling images: a gVisor
+	// request on a host without runsc must fail without leaving resources
+	// behind, and must never silently fall back to runc.
+	runtimeName, rtErr := dockerRuntimeName(req.Runtime)
+	if rtErr != nil {
+		return nil, rtErr
+	}
+	if runtimeName == "runsc" && !p.HasGVisor(ctx) {
+		return nil, fmt.Errorf("gvisor requested, but the Docker daemon has no %q runtime; install gVisor on this worker and register it with Docker", "runsc")
+	}
+
 	// Only ensure the network exists when a custom network is specified
 	if p.networkName != "" {
 		if err := p.EnsureNetwork(ctx); err != nil {
@@ -148,6 +159,11 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 		labels = make(map[string]string)
 	}
 	labels["sandrpod/sandbox-name"] = req.Name
+	if runtimeName == "runsc" {
+		labels["sandrpod/runtime"] = "gvisor"
+	} else {
+		labels["sandrpod/runtime"] = "runc"
+	}
 
 	// ContainerCreate (unlike `docker run`) does not pull a missing image, so a
 	// fresh host needs an explicit pull — but only then. Calling ImagePull
@@ -260,6 +276,9 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 	}
 
 	hostConfig := &container.HostConfig{}
+	if runtimeName != "" {
+		hostConfig.Runtime = runtimeName
+	}
 	// A named volume rather than a bind mount: it survives container removal
 	// (image upgrades, create retries) and Docker keeps it out of the host
 	// namespace. The name is derived from the sandbox so a retried create
@@ -536,6 +555,32 @@ func (p *DockerPoder) HasGPU(ctx context.Context) bool {
 	}
 	_, ok := info.Runtimes["nvidia"]
 	return ok
+}
+
+// HasGVisor reports whether the daemon has the runsc runtime registered. This
+// is the same view an operator gets from `docker info`; /proc or a binary on
+// the PATH is not enough because Docker daemon configuration decides whether
+// HostConfig.Runtime="runsc" works.
+func (p *DockerPoder) HasGVisor(ctx context.Context) bool {
+	info, err := p.dockerClient.Info(ctx)
+	if err != nil || info.Runtimes == nil {
+		return false
+	}
+	_, ok := info.Runtimes["runsc"]
+	return ok
+}
+
+// dockerRuntimeName maps the API's runtime spelling to the Docker runtime name.
+// Empty means "leave HostConfig.Runtime alone" (Docker's default).
+func dockerRuntimeName(raw string) (string, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", "runc":
+		return "", nil
+	case "gvisor", "runsc":
+		return "runsc", nil
+	default:
+		return "", fmt.Errorf("unsupported container runtime %q: use runc or gvisor", raw)
+	}
 }
 
 // registryConfig is the optional image registry snapshots are pushed to. Without

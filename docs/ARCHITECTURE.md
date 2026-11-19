@@ -154,6 +154,13 @@ configured purely by env (`SANDRPOD_E2B_DOMAIN` et al). Full list in
 **A Poder listens on no port at all.** Everything goes through the tunnel it
 dialed out.
 
+A sandbox may ask for `runtime: "gvisor"`. The Poder sets Docker's
+`HostConfig.Runtime` to `runsc` for that container, but only after querying
+`docker info` for the registered runtime; it advertises the `gvisor` capability
+on the handshake only when `runsc` is present. A worker without it refuses the
+create rather than running the sandbox under `runc` while the record says
+gVisor. See [GVISOR.md](GVISOR.md).
+
 Every non-egress sandbox gets its own private `sandrpod-s-<hash>` bridge; the
 poder attaches itself to that bridge so the tunnel still reaches the toolbox,
 then removes the bridge with the sandbox. Sandboxes in the same workspace are

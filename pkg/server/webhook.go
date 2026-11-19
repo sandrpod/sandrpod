@@ -86,6 +86,10 @@ func sandboxEvent(sb *podpkg.SandboxInfo, extra map[string]any) map[string]any {
 		"region":     sb.Region,
 		"cpu_cores":  sb.CPUCores,
 		"memory_mb":  sb.MemoryMB,
+		// The runtime is part of the security posture the lifecycle event is
+		// reporting; a gVisor sandbox should not be indistinguishable from a
+		// runc one in metering/audit consumers.
+		"runtime": sb.Runtime,
 		// gpu rides along for metering: a GPU sandbox costs an order of magnitude
 		// more than the vCPU numbers suggest.
 		"gpu":        sb.GPU,

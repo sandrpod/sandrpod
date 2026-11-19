@@ -972,6 +972,10 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					return
 				}
 				req.ApplyResourceDefaults()
+				if err := req.ValidateRuntime(); err != nil {
+					http.Error(w, err.Error(), http.StatusBadRequest)
+					return
+				}
 				// This pinned-create path predates tenant-scoped names and used
 				// to keep the display name as the routing key. That made a name
 				// collision across workspaces possible here even though the
@@ -992,6 +996,15 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 							"poder %s does not support an egress policy (it does not advertise %q); "+
 								"upgrade it or create the sandbox without a policy",
 							pID, podpkg.CapabilityEgress), http.StatusConflict)
+						return
+					}
+				}
+				if req.Runtime == podpkg.SandboxRuntimeGVisor {
+					if pi, ok := poderStore.Get(pID); ok && !pi.HasCapability(podpkg.CapabilityGVisor) {
+						http.Error(w, fmt.Sprintf(
+							"poder %s does not support the gVisor runtime (it does not advertise %q); "+
+								"install runsc on it or create the sandbox without --runtime=gvisor",
+							pID, podpkg.CapabilityGVisor), http.StatusConflict)
 						return
 					}
 				}
@@ -1054,6 +1067,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					MemoryMB:     req.MemoryMB,
 					StorageMB:    req.StorageMB,
 					PrivatePorts: req.PrivatePorts,
+					Runtime:      req.Runtime,
 					Labels:       req.Labels,
 					Network:      req.Network,
 					Arch:         poderArch,
@@ -1421,6 +1435,10 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				return
 			}
 			req.ApplyResourceDefaults()
+			if err := req.ValidateRuntime(); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
 			// The user's name is tenant-scoped; everything below the API uses the
 			// generated routing key so two workspaces can both have "mysandbox".
 			// A client-supplied display_name/routing_id is overwritten here.
@@ -1562,6 +1580,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					MemoryMB:     req.MemoryMB,
 					StorageMB:    req.StorageMB,
 					PrivatePorts: req.PrivatePorts,
+					Runtime:      req.Runtime,
 					Labels:       req.Labels,
 					Network:      req.Network,
 					CreatedAt:    time.Now(),

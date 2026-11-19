@@ -45,8 +45,9 @@ func TestCreatePodRequestJSONTags(t *testing.T) {
 				APIURL:       "http://toolbox:8080",
 				PoderVersion: "1.0.0",
 				LogLevel:     "info",
+				Runtime:      "gvisor",
 			},
-			wantJSON: `{"name":"d-full-fxgh","region":"cn-north-1","instance_type":"small","image_id":"alpine:3.19","env_vars":{"E2E_ENV":"value"},"provider":"local","labels":{"k":"v"},"api_url":"http://toolbox:8080","poder_version":"1.0.0","log_level":"info"}`,
+			wantJSON: `{"name":"d-full-fxgh","region":"cn-north-1","instance_type":"small","image_id":"alpine:3.19","env_vars":{"E2E_ENV":"value"},"provider":"local","labels":{"k":"v"},"runtime":"gvisor","api_url":"http://toolbox:8080","poder_version":"1.0.0","log_level":"info"}`,
 		},
 		{
 			name:     "empty struct produces only required name",
@@ -87,6 +88,7 @@ func TestCreatePodRequestRoundTrip(t *testing.T) {
 		"image_id":     "example/sandrpod-toolbox:test",
 		"env_vars":     {"E2E_ENV": "value-from-create"},
 		"provider":     "local",
+		"runtime":      "gvisor",
 		"api_url":      "http://toolbox:8080",
 		"poder_version": "1.2.3",
 		"log_level":    "debug"
@@ -108,6 +110,9 @@ func TestCreatePodRequestRoundTrip(t *testing.T) {
 	}
 	if got := req.EnvVars["E2E_ENV"]; got != "value-from-create" {
 		t.Errorf("EnvVars lost in round-trip: got %q", got)
+	}
+	if got := req.Runtime; got != "gvisor" {
+		t.Errorf("Runtime lost in round-trip: got %q", got)
 	}
 
 	// Sanity-check the rest of the fields too — broken tags on any one

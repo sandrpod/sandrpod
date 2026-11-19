@@ -104,6 +104,9 @@ func runSandboxCreate(
 	requester Identity,
 ) (*podpkg.SandboxInfo, string, error) {
 	req.ApplyResourceDefaults()
+	if err := req.ValidateRuntime(); err != nil {
+		return nil, "", err
+	}
 
 	failBoth := func(jobID, msg string) {
 		notifyEvent("sandbox.error", map[string]any{
@@ -230,6 +233,7 @@ func runSandboxCreate(
 			s.MemoryMB = req.MemoryMB
 			s.StorageMB = req.StorageMB
 			s.PrivatePorts = req.PrivatePorts
+			s.Runtime = req.Runtime
 			// Same-name recreate: the record must describe the image it will run,
 			// or the console loses the desktop button on a sandbox it just made.
 			if req.ImageID != "" {
@@ -264,6 +268,7 @@ func runSandboxCreate(
 			MemoryMB:     req.MemoryMB,
 			StorageMB:    req.StorageMB,
 			PrivatePorts: req.PrivatePorts,
+			Runtime:      req.Runtime,
 			Labels:       req.Labels,
 			Network:      req.Network,
 			PoderID:      schedJob.PoderID,

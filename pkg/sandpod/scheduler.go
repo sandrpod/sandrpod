@@ -671,6 +671,8 @@ func capabilityDescription(require []string) string {
 			parts = append(parts, "a GPU")
 		case CapabilityEgress:
 			parts = append(parts, "an egress policy")
+		case CapabilityGVisor:
+			parts = append(parts, "the gVisor runtime")
 		default:
 			parts = append(parts, c)
 		}
@@ -697,6 +699,12 @@ func capabilityRequirement(req *CreateSandboxRequest) []string {
 	// let placement answer "no capable worker" instead.
 	if req.GPU > 0 {
 		require = append(require, CapabilityGPU)
+	}
+	// A worker without runsc would run the sandbox under runc while the record
+	// says gvisor. Demand the capability up front so placement can answer
+	// "no capable worker" instead of silently weakening the boundary.
+	if req.Runtime == SandboxRuntimeGVisor {
+		require = append(require, CapabilityGVisor)
 	}
 	return require
 }

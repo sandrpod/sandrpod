@@ -261,6 +261,8 @@ def list_sandboxes(ctx):
 @click.option("--ttl", default=0, help="Idle TTL in seconds; sandbox is auto-reaped after this much inactivity (0 = server default)")
 @click.option("--cpu", default=0.0, help="CPU cores limit for the sandbox container (local/docker poders; 0 = unlimited)")
 @click.option("--memory", default=0, help="Memory limit in MiB for the sandbox container (local/docker poders; 0 = unlimited)")
+@click.option("--runtime", default="", type=click.Choice(["", "runc", "gvisor"]),
+              help="Container runtime: runc (default) or gvisor (runsc; requires a capable worker)")
 @click.option("--no-wait", is_flag=True, help="Return immediately with the job id instead of waiting for RUNNING")
 @click.option("--egress-policy", metavar="FILE", default=None,
               help="Egress allow-list JSON (path, or - for stdin). Schema: allowed_domains, "
@@ -272,7 +274,7 @@ def list_sandboxes(ctx):
 @click.option("--wait-timeout", default=900, help="Seconds to wait for the sandbox to reach RUNNING (default 900)")
 @click.pass_context
 def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, cpu, memory,
-           no_wait, wait_timeout, egress_policy, allow_domains, deny_domains):
+           runtime, no_wait, wait_timeout, egress_policy, allow_domains, deny_domains):
     """Create a sandbox (waits for it to reach RUNNING; cloud provisioning can take minutes)"""
     import time as _time
     client = ctx.obj["client"]
@@ -282,7 +284,8 @@ def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, c
         # record, not a scheduler job).
         if poder:
             sb = client.create_sandbox_on_poder(
-                poder, name, region, provider_type, instance_type, image, network=network
+                poder, name, region, provider_type, instance_type, image,
+                network=network, runtime=runtime
             )
             click.echo(f"Sandbox:    {sb.get('name', name)}")
             if sb.get("routing_id"):
@@ -304,7 +307,7 @@ def create(ctx, name, region, provider_type, instance_type, image, poder, ttl, c
     try:
         resp = client.create_sandbox(name, region, provider_type, instance_type, image,
                                      async_=True, ttl_seconds=ttl, cpu_cores=cpu,
-                                     memory_mb=memory, network=network)
+                                     memory_mb=memory, network=network, runtime=runtime)
         job_id = resp.get("job_id")
         created = resp.get("sandbox", {}) or {}
         routing_id = created.get("routing_id") or name
@@ -369,6 +372,8 @@ def get_sandbox(ctx, name):
         click.echo(f"Provider Type: {sandbox.get('provider_type')}")
         click.echo(f"Instance Type: {sandbox.get('instance_type')}")
         click.echo(f"Poder ID:      {sandbox.get('poder_id')}")
+        if sandbox.get("runtime"):
+            click.echo(f"Runtime:       {sandbox.get('runtime')}")
         click.echo(f"IP:            {sandbox.get('ip', 'N/A')}")
         if sandbox.get("arch"):
             click.echo(f"Arch:          {sandbox.get('arch')}")

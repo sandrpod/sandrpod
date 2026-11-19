@@ -75,6 +75,11 @@ type CreatePodRequest struct {
 	// DeviceRequests; a driver without that support rejects the create instead of
 	// silently running CPU-only.
 	GPU int `json:"gpu,omitempty"`
+	// Runtime is the requested container runtime: "" or "runc" (Docker's
+	// default), or "gvisor" (runsc). The docker driver refuses gvisor when the
+	// daemon has no runsc registered rather than silently creating a runc
+	// container under a gvisor record.
+	Runtime string `json:"runtime,omitempty"`
 	// PersistData mounts a docker volume at /workspace so the sandbox's files
 	// survive the container: an idle sandbox is stopped (not deleted) to release
 	// CPU and memory, and resumed later with its data intact. Drivers that

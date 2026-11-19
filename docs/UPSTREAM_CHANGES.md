@@ -9,6 +9,15 @@ The native HTTP API has stayed additive across these releases. The breaks below
 are credentials, placement/name semantics, and defaults that used to mean
 "unlimited".
 
+## Unreleased — gVisor runtime (additive)
+
+`POST /api/v1/sandboxes` and the pinned-create route accept an optional
+`runtime` (`runc` or `gvisor`). Omitted means the existing default. A gVisor
+request is refused with `409` when no online worker advertises the `gvisor`
+capability, and `runtime=gvisor` plus `gpu>0` is a `400` in this iteration.
+No existing request or response field changed; `SandboxInfo` gains
+`runtime` (empty for rows created before this build).
+
 ## v0.8.0 → v0.12.1
 
 ### v0.11.0 — sandbox names are workspace-scoped

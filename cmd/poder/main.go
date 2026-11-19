@@ -138,6 +138,13 @@ func main() {
 		poderCapabilities = append(poderCapabilities, podpkg.CapabilityGPU)
 		log.Printf("GPU support detected (nvidia container runtime registered)")
 	}
+	// gVisor is advertised only when the daemon actually has runsc registered:
+	// a sandbox that asks for it must not be placed on a worker that would run
+	// it under runc while the record says gvisor.
+	if p.HasGVisor(ctx) {
+		poderCapabilities = append(poderCapabilities, podpkg.CapabilityGVisor)
+		log.Printf("gVisor support detected (runsc container runtime registered)")
+	}
 
 	poderID, err := resolvePoderID(*poderIDFlag)
 	if err != nil {

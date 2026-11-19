@@ -95,6 +95,12 @@ const CapabilityEgress = "egress"
 // a CUDA job that fails confusingly on a CPU host.
 const CapabilityGPU = "gpu"
 
+// CapabilityGVisor means the worker's Docker daemon has the runsc runtime
+// registered. A sandbox that asks for runtime=gvisor is only placed on a worker
+// that advertises this; running it under runc while the record says gvisor
+// would be a security claim the sandbox does not meet.
+const CapabilityGVisor = "gvisor"
+
 // Control-plane capabilities, advertised by GET /api/v1/capabilities. They are
 // separate names from the worker's because they describe different halves of
 // the same feature (the rules the server stores, the decisions it makes).

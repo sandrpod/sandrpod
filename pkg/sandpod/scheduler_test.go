@@ -605,6 +605,36 @@ func TestSchedule_TenantScopedPlacement(t *testing.T) {
 	}
 }
 
+// A pinned create still checks the worker's capabilities: a worker without
+// runsc must not accept a gVisor sandbox and run it under runc.
+func TestSchedule_PinnedGVisorRequiresCapability(t *testing.T) {
+	plain := &PoderInfo{ID: "plain", State: PoderStateOnline, ProviderType: "local"}
+	gvisor := &PoderInfo{ID: "gvisor", State: PoderStateOnline, ProviderType: "local",
+		Capabilities: []string{CapabilityGVisor}}
+	byID := map[string]*PoderInfo{"plain": plain, "gvisor": gvisor}
+	repo := &mockPoderRepo{getFn: func(id string) (*PoderInfo, bool) {
+		p, ok := byID[id]
+		return p, ok
+	}}
+	s := NewScheduler(repo, "", "")
+
+	if _, err := s.ScheduleSandboxCreation(context.Background(), &CreateSandboxRequest{
+		Name: "no-gvisor", ProviderType: "local", PoderID: "plain", Runtime: SandboxRuntimeGVisor,
+	}); err == nil || !strings.Contains(err.Error(), CapabilityGVisor) {
+		t.Fatalf("pinned gVisor on an incapable worker must refuse and name the capability, got %v", err)
+	}
+
+	job, err := s.ScheduleSandboxCreation(context.Background(), &CreateSandboxRequest{
+		Name: "yes-gvisor", ProviderType: "local", PoderID: "gvisor", Runtime: SandboxRuntimeGVisor,
+	})
+	if err != nil {
+		t.Fatalf("pinned gVisor on a capable worker: %v", err)
+	}
+	if job.PoderID != "gvisor" {
+		t.Fatalf("placed on %q, want gvisor", job.PoderID)
+	}
+}
+
 // A pinned create follows the same tenant rule as placement. The operator
 // (empty tenant) may pin any worker — this is how a fork returns to the node
 // that holds its source snapshot. A tenant may pin its own or an unscoped

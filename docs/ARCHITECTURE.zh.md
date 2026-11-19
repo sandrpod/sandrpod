@@ -147,6 +147,11 @@ Client / SDK / CLI                    E2B SDK（未经修改）
 
 **Poder 不监听任何端口**，全部通信走它自己拨出的隧道。
 
+沙箱可以请求 `runtime: "gvisor"`。Poder 会先查 `docker info` 里是否注册了
+`runsc`，确认后才把该容器的 `HostConfig.Runtime` 设为 `runsc`；只有存在
+`runsc` 时才在握手里宣告 `gvisor` 能力。没有该运行时的 worker 会拒绝创建，
+而不是用 `runc` 跑一个记录上写着 gVisor 的沙箱。见 [GVISOR.md](GVISOR.md)。
+
 ```bash
 docker run -d --name sandrpod-poder \
   -v /var/run/docker.sock:/var/run/docker.sock \
