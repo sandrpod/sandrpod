@@ -74,6 +74,7 @@ func egressImage() string {
 type podEgress struct {
 	network   string // internal network ID
 	sidecar   string // sidecar container ID
+	token     string // proxy token, reused across policy updates
 	env       []string
 	httpAddr  string
 	socksAddr string
@@ -228,10 +229,108 @@ func (p *DockerPoder) setupEgress(ctx context.Context, podID string, policy *egr
 	return &podEgress{
 		network:   created.ID,
 		sidecar:   resp.ID,
+		token:     token,
 		env:       env,
 		httpAddr:  fmt.Sprintf("%s:%d", host, egressHTTPPort),
 		socksAddr: fmt.Sprintf("%s:%d", host, egressSOCKSPort),
 	}, nil
+}
+
+// UpdateEgress replaces the sidecar with one carrying a new policy while
+// keeping the sandbox container and its proxy token. Existing connections are
+// cut when the old sidecar is removed; new ones use the new policy. The old
+// sidecar is renamed back if the replacement cannot start, so a failed update
+// leaves the previous policy in force rather than an unreachable sandbox.
+func (p *DockerPoder) UpdateEgress(ctx context.Context, containerRef string, policy *egress.Policy) error {
+	if policy == nil {
+		return fmt.Errorf("egress: UpdateEgress needs a policy")
+	}
+	compiled, err := egress.Parse(*policy)
+	if err != nil {
+		return fmt.Errorf("egress policy: %w", err)
+	}
+	policyJSON, err := json.Marshal(compiled.Policy())
+	if err != nil {
+		return fmt.Errorf("marshal egress policy: %w", err)
+	}
+	info, err := p.dockerClient.ContainerInspect(ctx, containerRef)
+	if err != nil {
+		return fmt.Errorf("inspect sandbox %s: %w", containerRef, err)
+	}
+	name := strings.TrimPrefix(info.Name, "/")
+	p.egressMu.Lock()
+	old := p.egress[name]
+	p.egressMu.Unlock()
+	if old == nil || old.sidecar == "" {
+		return fmt.Errorf("sandbox has no egress proxy; recreate it with the new policy")
+	}
+	if old.token == "" {
+		return fmt.Errorf("egress proxy token is unavailable after a poder restart; recreate the sandbox")
+	}
+	image := egressImage()
+	if err := p.ensureEgressImage(ctx, image); err != nil {
+		return err
+	}
+	canonical := egressSidecarName(name)
+	oldName := canonical + "-old-" + randomString(6)
+	if err := p.dockerClient.ContainerRename(ctx, old.sidecar, oldName); err != nil {
+		return fmt.Errorf("park old egress proxy: %w", err)
+	}
+	restore := func() { _ = p.dockerClient.ContainerRename(ctx, old.sidecar, canonical) }
+
+	resp, err := p.dockerClient.ContainerCreate(ctx,
+		&container.Config{
+			Image: image,
+			Cmd: []string{
+				"-listen", fmt.Sprintf("0.0.0.0:%d", egressHTTPPort),
+				"-socks", fmt.Sprintf("0.0.0.0:%d", egressSOCKSPort),
+				"-token", old.token,
+				"-policy-json", string(policyJSON),
+			},
+			Labels: map[string]string{
+				"sandrpod/egress":      "true",
+				"sandrpod/sandbox-pod": name,
+			},
+		},
+		&container.HostConfig{
+			NetworkMode:   container.NetworkMode(old.network),
+			RestartPolicy: container.RestartPolicy{Name: "no"},
+		}, nil, nil, canonical)
+	if err != nil {
+		restore()
+		return fmt.Errorf("create replacement egress proxy: %w", err)
+	}
+	removeNew := func() {
+		_ = p.dockerClient.ContainerRemove(ctx, resp.ID, container.RemoveOptions{Force: true})
+	}
+	outside := p.networkName
+	if outside == "" {
+		outside = "bridge"
+	}
+	if err := p.dockerClient.NetworkConnect(ctx, outside, resp.ID, nil); err != nil {
+		removeNew()
+		restore()
+		return fmt.Errorf("attach replacement egress proxy: %w", err)
+	}
+	if err := p.dockerClient.ContainerStart(ctx, resp.ID, container.StartOptions{}); err != nil {
+		removeNew()
+		restore()
+		return fmt.Errorf("start replacement egress proxy: %w", err)
+	}
+	if err := p.waitForEgressReady(ctx, resp.ID, canonical, 15*time.Second); err != nil {
+		removeNew()
+		restore()
+		return err
+	}
+	// The replacement is healthy; retire the old sidecar. If that fails the
+	// new one still enforces the new policy, so keep it and report the leak.
+	if err := p.dockerClient.ContainerRemove(ctx, old.sidecar, container.RemoveOptions{Force: true}); err != nil && !client.IsErrNotFound(err) {
+		log.Printf("poder: remove old egress proxy for %s: %v", name, err)
+	}
+	p.putEgress(name, &podEgress{network: old.network, sidecar: resp.ID, token: old.token,
+		env: old.env, httpAddr: old.httpAddr, socksAddr: old.socksAddr})
+	log.Printf("poder: egress policy updated for %s (allow=%v)", name, compiled.Policy().AllowedDomains)
+	return nil
 }
 
 // waitForEgressReady polls the sidecar's log for its ready line.

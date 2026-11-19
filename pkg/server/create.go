@@ -229,6 +229,7 @@ func runSandboxCreate(
 			s.CPUCores = req.CPUCores
 			s.MemoryMB = req.MemoryMB
 			s.StorageMB = req.StorageMB
+			s.PrivatePorts = req.PrivatePorts
 			// Same-name recreate: the record must describe the image it will run,
 			// or the console loses the desktop button on a sandbox it just made.
 			if req.ImageID != "" {
@@ -262,6 +263,7 @@ func runSandboxCreate(
 			CPUCores:     req.CPUCores,
 			MemoryMB:     req.MemoryMB,
 			StorageMB:    req.StorageMB,
+			PrivatePorts: req.PrivatePorts,
 			Labels:       req.Labels,
 			Network:      req.Network,
 			PoderID:      schedJob.PoderID,

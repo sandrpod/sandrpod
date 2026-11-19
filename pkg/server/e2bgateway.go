@@ -107,7 +107,11 @@ func (d e2bDeps) portProxy(w http.ResponseWriter, r *http.Request, sandbox strin
 	// whole interactive machine, so those ports still need the console's signed
 	// URL or an API key. Config.PrivateSandboxPorts remains the opt-in that
 	// requires a key on every port.
-	if e2bSensitivePort(port) && !d.previewAuthorized(w, r, sandbox, port) {
+	private := false
+	if sb, ok := d.sandboxes.Get(sandbox); ok {
+		private = sb.PrivatePorts
+	}
+	if (e2bSensitivePort(port) || private) && !d.previewAuthorized(w, r, sandbox, port) {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.WriteHeader(http.StatusUnauthorized)
 		fmt.Fprintf(w, "this port exposes a desktop or debugger and requires a signed URL token.\n\n"+
@@ -581,13 +585,16 @@ type e2bSandboxBackend struct{ d e2bDeps }
 // AllowedDomains; deny_out alone becomes "*" minus the denied entries. The
 // per-method `rules` shape has no SandrPod equivalent yet — refusing it is the
 // only honest answer, because accepting it would run the sandbox wide open.
-func e2bNetworkPolicy(req e2bcompat.NewSandbox) (*egress.Policy, error) {
+func e2bNetworkPolicy(req e2bcompat.NewSandbox) (*egress.Policy, bool, error) {
+	privatePorts := false
 	if req.Network != nil {
 		if req.Network.AllowPublicTraffic != nil && !*req.Network.AllowPublicTraffic {
-			return nil, e2bcompat.InvalidError{Msg: "allow_public_traffic=false is not supported; use SANDRPOD_E2B_PRIVATE_PORTS to require a key on public ports"}
+			// E2B's allowPublicTraffic=false means every public port needs
+			// authentication, not just the desktop/debugger set.
+			privatePorts = true
 		}
 		if len(req.Network.Rules) > 0 || req.Network.MaskRequestHost != "" {
-			return nil, e2bcompat.InvalidError{Msg: "E2B per-method network rules and mask_request_host are not supported by this deployment; use allow_out/deny_out"}
+			return nil, privatePorts, e2bcompat.InvalidError{Msg: "E2B per-method network rules and mask_request_host are not supported by this deployment; use allow_out/deny_out"}
 		}
 		allow := append([]string(nil), req.Network.AllowOut...)
 		deny := append([]string(nil), req.Network.DenyOut...)
@@ -595,14 +602,14 @@ func e2bNetworkPolicy(req e2bcompat.NewSandbox) (*egress.Policy, error) {
 			allow = []string{"*"}
 		}
 		if len(allow) == 0 && len(deny) == 0 {
-			return nil, nil // an empty network object means "no restriction"
+			return nil, privatePorts, nil // an empty network object means "no restriction"
 		}
-		return &egress.Policy{AllowedDomains: allow, DeniedDomains: deny, StrictAllowlist: true}, nil
+		return &egress.Policy{AllowedDomains: allow, DeniedDomains: deny, StrictAllowlist: true}, privatePorts, nil
 	}
 	if req.AllowInternetAccess != nil && !*req.AllowInternetAccess {
-		return &egress.Policy{}, nil // allow-list empty = no egress
+		return &egress.Policy{}, privatePorts, nil // allow-list empty = no egress
 	}
-	return nil, nil
+	return nil, privatePorts, nil
 }
 
 func e2bSubstrate() (provider, region, instanceType string) {
@@ -653,11 +660,12 @@ func (b *e2bSandboxBackend) CreateSandbox(ident string, admin bool, req e2bcompa
 	if strings.ContainsAny(req.TemplateID, "/:") {
 		create.ImageID = req.TemplateID
 	}
-	policy, err := e2bNetworkPolicy(req)
+	policy, privatePorts, err := e2bNetworkPolicy(req)
 	if err != nil {
 		return e2bcompat.SandboxDetail{}, err
 	}
 	create.Network = policy
+	create.PrivatePorts = privatePorts
 	// The E2B client is identified by a name plus an admin flag; the admission
 	// gate takes an Identity, so build the equivalent one.
 	requester := Identity{Name: ident, Role: RoleUser, Tenant: req.Tenant}
@@ -843,6 +851,294 @@ func (b *e2bSandboxBackend) GetMetrics(ident, sandboxID string) ([]e2bcompat.San
 		DiskTotal: m.DiskTotal, DiskUsed: m.DiskUsed,
 		Timestamp: now.Format(time.RFC3339), TimestampUnix: now.Unix(),
 	}}, true
+}
+
+// ── E2B snapshots ───────────────────────────────────────────────────────────
+
+func sanitizeSnapshotName(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "latest"
+	}
+	return strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-' {
+			return r
+		}
+		return '-'
+	}, s)
+}
+
+// snapshotSandbox commits a sandbox on its worker and returns the image name.
+func (d e2bDeps) snapshotSandbox(sb *podpkg.SandboxInfo, image string) (string, error) {
+	if strings.HasPrefix(sb.ProxyURL, "direct://") {
+		return "", fmt.Errorf("snapshots are not supported for a directly-connected agent")
+	}
+	t, ok := d.tunnelStore.Get(sb.PoderID)
+	if !ok {
+		return "", fmt.Errorf("worker %s is offline", sb.PoderID)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+	defer cancel()
+	url := "http://poder/sandboxes/" + url.PathEscape(sb.Name) + "/snapshot?image=" + url.QueryEscape(image)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := t.Client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode/100 != 2 {
+		return "", fmt.Errorf("worker snapshot failed: %s", strings.TrimSpace(string(body)))
+	}
+	var out struct {
+		Image string `json:"image"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.Image == "" {
+		return image, nil
+	}
+	return out.Image, nil
+}
+
+// ownedSnapshotSources returns the routing keys of sandboxes this identity may
+// snapshot. An unknown source (an image left by a deleted sandbox) is visible
+// to an admin/operator identity only.
+func (b *e2bSandboxBackend) ownsSource(ident, source string) bool {
+	sb, ok := b.d.sandboxes.Get(source)
+	if !ok {
+		return ident == ""
+	}
+	return b.owns(ident, sb)
+}
+
+type e2bSnapshotRow struct {
+	Image     string `json:"image"`
+	Source    string `json:"source"`
+	PoderID   string `json:"poder_id"`
+	CreatedAt int64  `json:"created_at"`
+}
+
+func (b *e2bSandboxBackend) snapshotRows(ident string) []e2bSnapshotRow {
+	var rows []e2bSnapshotRow
+	seen := map[string]bool{}
+	for _, p := range b.d.poders.List() {
+		if p.State != podpkg.PoderStateOnline {
+			continue
+		}
+		t, ok := b.d.tunnelStore.Get(p.ID)
+		if !ok {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "http://poder/snapshots", nil)
+		resp, err := t.Client.Do(req)
+		if err != nil {
+			cancel()
+			continue
+		}
+		var payload struct {
+			Snapshots []struct {
+				Image     string `json:"image"`
+				Source    string `json:"source"`
+				CreatedAt int64  `json:"created_at"`
+			} `json:"snapshots"`
+		}
+		err = json.NewDecoder(resp.Body).Decode(&payload)
+		resp.Body.Close()
+		cancel()
+		if err != nil {
+			continue
+		}
+		for _, s := range payload.Snapshots {
+			if !b.ownsSource(ident, s.Source) || seen[s.Image] {
+				continue
+			}
+			seen[s.Image] = true
+			rows = append(rows, e2bSnapshotRow{Image: s.Image, Source: s.Source,
+				PoderID: p.ID, CreatedAt: s.CreatedAt})
+		}
+	}
+	return rows
+}
+
+func (b *e2bSandboxBackend) CreateSnapshot(ident, sandboxID, name string) (e2bcompat.SnapshotInfo, error) {
+	sb, ok := b.d.sandboxes.Get(sandboxID)
+	if !ok || !b.owns(ident, sb) {
+		return e2bcompat.SnapshotInfo{}, e2bcompat.NotFoundError{Msg: "sandbox not found"}
+	}
+	image := "sandrpod-snapshot/" + sanitizeSnapshotName(sb.Name) + ":" + sanitizeSnapshotName(name)
+	got, err := b.d.snapshotSandbox(sb, image)
+	if err != nil {
+		return e2bcompat.SnapshotInfo{}, err
+	}
+	return e2bcompat.SnapshotInfo{SnapshotID: got, Names: []string{got}}, nil
+}
+
+func (b *e2bSandboxBackend) ListSnapshots(ident, sandboxID string, limit int) []e2bcompat.SnapshotInfo {
+	if sandboxID != "" {
+		sb, ok := b.d.sandboxes.Get(sandboxID)
+		if !ok || !b.owns(ident, sb) {
+			return []e2bcompat.SnapshotInfo{}
+		}
+	}
+	rows := b.snapshotRows(ident)
+	out := make([]e2bcompat.SnapshotInfo, 0, len(rows))
+	for _, r := range rows {
+		if sandboxID != "" && r.Source != sandboxID {
+			continue
+		}
+		out = append(out, e2bcompat.SnapshotInfo{SnapshotID: r.Image, Names: []string{r.Image}})
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out
+}
+
+func (b *e2bSandboxBackend) DeleteSnapshot(ident, snapshotID string) bool {
+	rows := b.snapshotRows(ident)
+	found := false
+	for _, r := range rows {
+		if r.Image == snapshotID || strings.TrimSuffix(r.Image, ":latest") == strings.TrimSuffix(snapshotID, ":latest") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return false
+	}
+	removed := false
+	for _, p := range b.d.poders.List() {
+		if p.State != podpkg.PoderStateOnline {
+			continue
+		}
+		t, ok := b.d.tunnelStore.Get(p.ID)
+		if !ok {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		req, _ := http.NewRequestWithContext(ctx, http.MethodDelete,
+			"http://poder/snapshots?image="+url.QueryEscape(snapshotID), nil)
+		resp, err := t.Client.Do(req)
+		cancel()
+		if err != nil {
+			continue
+		}
+		resp.Body.Close()
+		if resp.StatusCode/100 == 2 {
+			removed = true
+		}
+	}
+	return removed
+}
+
+// ForkSandbox snapshots the source and starts count sandboxes from that image.
+// E2B returns per-item failures in-band, so one quota refusal does not hide the
+// successful forks.
+func (b *e2bSandboxBackend) ForkSandbox(ident, sandboxID string, timeout, count int32) ([]e2bcompat.ForkResult, error) {
+	sb, ok := b.d.sandboxes.Get(sandboxID)
+	if !ok || !b.owns(ident, sb) {
+		return nil, e2bcompat.NotFoundError{Msg: "sandbox not found"}
+	}
+	if timeout <= 0 {
+		timeout = e2bcompat.DefaultTimeoutSeconds
+	}
+	if count <= 0 {
+		count = 1
+	}
+	if count > 10 {
+		count = 10
+	}
+	image := "sandrpod-snapshot/" + sanitizeSnapshotName(sb.Name) + ":fork-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	got, err := b.d.snapshotSandbox(sb, image)
+	if err != nil {
+		return nil, err
+	}
+	tenant := strings.TrimPrefix(sb.Owner, "workspace:")
+	out := make([]e2bcompat.ForkResult, 0, count)
+	for i := int32(0); i < count; i++ {
+		detail, err := b.CreateSandbox(ident, false, e2bcompat.NewSandbox{
+			TemplateID: got,
+			Timeout:    timeout,
+			Tenant:     tenant,
+		})
+		if err != nil {
+			code := int32(500)
+			if errors.Is(err, e2bcompat.ErrQuotaExceeded) {
+				code = 429
+			}
+			out = append(out, e2bcompat.ForkResult{Error: &e2bcompat.ForkError{Code: code, Message: err.Error()}})
+			continue
+		}
+		resp := e2bcompat.SandboxFromDetail(detail)
+		out = append(out, e2bcompat.ForkResult{Sandbox: &resp})
+	}
+	return out, nil
+}
+
+// updateEgress pushes a new policy to a running sandbox's sidecar.
+func (d e2bDeps) updateEgress(sb *podpkg.SandboxInfo, policy *egress.Policy) error {
+	if strings.HasPrefix(sb.ProxyURL, "direct://") {
+		return e2bcompat.ConflictError{Msg: "a directly-connected agent cannot change its egress policy at runtime"}
+	}
+	t, ok := d.tunnelStore.Get(sb.PoderID)
+	if !ok {
+		return e2bcompat.ConflictError{Msg: "worker is offline"}
+	}
+	body, err := json.Marshal(policy)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut,
+		"http://poder/sandboxes/"+url.PathEscape(sb.Name)+"/egress", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := t.Client.Do(req)
+	if err != nil {
+		return e2bcompat.ConflictError{Msg: "worker update failed: " + err.Error()}
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		msg, _ := io.ReadAll(resp.Body)
+		return e2bcompat.ConflictError{Msg: strings.TrimSpace(string(msg))}
+	}
+	return nil
+}
+
+// UpdateNetwork applies E2B's PUT /sandboxes/{id}/network to a running
+// sandbox. Adding an egress policy to a sandbox that never had one would
+// require recreating its container (Docker cannot change a live container's
+// network); the poder answers 409 and the SDK sees a clear refusal.
+func (b *e2bSandboxBackend) UpdateNetwork(ident, sandboxID string, network *e2bcompat.E2BNetwork, allowInternet *bool) error {
+	sb, ok := b.d.sandboxes.Get(sandboxID)
+	if !ok || !b.owns(ident, sb) {
+		return e2bcompat.NotFoundError{Msg: "sandbox not found"}
+	}
+	policy, private, err := e2bNetworkPolicy(e2bcompat.NewSandbox{
+		Network:             network,
+		AllowInternetAccess: allowInternet,
+	})
+	if err != nil {
+		return err
+	}
+	if policy == nil {
+		return e2bcompat.InvalidError{Msg: "removing an egress policy requires recreating the sandbox"}
+	}
+	if err := b.d.updateEgress(sb, policy); err != nil {
+		return err
+	}
+	b.d.sandboxes.Update(sandboxID, func(s *podpkg.SandboxInfo) {
+		s.Network = policy
+		s.PrivatePorts = private
+	})
+	return nil
 }
 
 func (b *e2bSandboxBackend) owns(ident string, sb *podpkg.SandboxInfo) bool {

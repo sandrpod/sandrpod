@@ -30,6 +30,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
+	"github.com/sandrpod/sandrpod/pkg/egress"
 	"github.com/sandrpod/sandrpod/pkg/poder"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/tunnel"
@@ -316,6 +317,24 @@ func main() {
 				}
 				w.Header().Set("Content-Type", "application/json")
 				json.NewEncoder(w).Encode(map[string]any{"image": ref, "sandbox": sandboxName})
+				return
+			}
+			if action == "egress" && r.Method == http.MethodPut {
+				pod, err := p.FindPodByName(ctx, sandboxName)
+				if err != nil {
+					http.Error(w, fmt.Sprintf("Sandbox %s not found", sandboxName), http.StatusNotFound)
+					return
+				}
+				var policy egress.Policy
+				if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&policy); err != nil {
+					http.Error(w, "invalid egress policy: "+err.Error(), http.StatusBadRequest)
+					return
+				}
+				if err := p.UpdateEgress(ctx, pod.ID, &policy); err != nil {
+					http.Error(w, err.Error(), http.StatusConflict)
+					return
+				}
+				w.WriteHeader(http.StatusNoContent)
 				return
 			}
 			if action == "stop" {

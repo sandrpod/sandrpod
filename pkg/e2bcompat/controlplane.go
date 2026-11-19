@@ -8,7 +8,10 @@ package e2bcompat
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -47,6 +50,54 @@ type SandboxBackend interface {
 	GetMetrics(ident, sandboxID string) ([]SandboxMetric, bool)
 }
 
+// SnapshotBackend is the optional E2B snapshot/template surface. A deployment
+// that does not implement it answers 501 rather than pretending the call
+// succeeded; the SDK surfaces that as a clear compatibility gap.
+type SnapshotBackend interface {
+	CreateSnapshot(ident, sandboxID, name string) (SnapshotInfo, error)
+	ListSnapshots(ident, sandboxID string, limit int) []SnapshotInfo
+	DeleteSnapshot(ident, snapshotID string) bool
+}
+
+// SnapshotInfo is E2B's snapshot template shape.
+type SnapshotInfo struct {
+	SnapshotID string   `json:"snapshotID"`
+	Names      []string `json:"names"`
+}
+
+// NetworkUpdateBackend is the optional live egress-policy surface. A backend
+// that cannot change a running sandbox's network returns an error; the gateway
+// reports it as a conflict rather than pretending the update landed.
+type NetworkUpdateBackend interface {
+	UpdateNetwork(ident, sandboxID string, network *E2BNetwork, allowInternet *bool) error
+}
+
+// ConflictError is a request that is valid but cannot be applied to the
+// current sandbox state (for example, removing an egress policy from a running
+// sandbox). The control plane maps it to 409.
+type ConflictError struct{ Msg string }
+
+func (e ConflictError) Error() string { return e.Msg }
+
+// ForkBackend is the optional E2B fork surface. A fork snapshots the source
+// sandbox and starts `count` sandboxes from that image; per-item failures are
+// returned in-band, as E2B requires.
+type ForkBackend interface {
+	ForkSandbox(ident, sandboxID string, timeout, count int32) ([]ForkResult, error)
+}
+
+// ForkResult is one element of E2B's fork response.
+type ForkResult struct {
+	Sandbox *Sandbox   `json:"sandbox,omitempty"`
+	Error   *ForkError `json:"error,omitempty"`
+}
+
+// ForkError is E2B's per-fork error shape.
+type ForkError struct {
+	Code    int32  `json:"code"`
+	Message string `json:"message"`
+}
+
 // SandboxMetric is one resource-usage sample (E2B SandboxMetric shape).
 type SandboxMetric struct {
 	CPUCount      int     `json:"cpuCount"`
@@ -70,6 +121,8 @@ func (c *controlPlane) routes(mux *http.ServeMux) {
 	for _, prefix := range []string{"", "/v2"} {
 		mux.HandleFunc(prefix+"/sandboxes", c.handleSandboxes)
 		mux.HandleFunc(prefix+"/sandboxes/", c.handleSandboxByID)
+		mux.HandleFunc(prefix+"/snapshots", c.handleSnapshots)
+		mux.HandleFunc(prefix+"/templates/", c.handleTemplateByID)
 	}
 	// E2B health probe.
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
@@ -227,6 +280,104 @@ func (c *controlPlane) handleSandboxByID(w http.ResponseWriter, r *http.Request)
 		}
 		writeJSON(w, http.StatusCreated, sandboxFromDetail(detail))
 
+	case action == "network" && r.Method == http.MethodPut:
+		ub, ok := c.backend.(NetworkUpdateBackend)
+		if !ok {
+			writeErr(w, http.StatusNotImplemented, "network updates are not supported by this deployment")
+			return
+		}
+		raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		var network E2BNetwork
+		if err := json.Unmarshal(raw, &network); err != nil {
+			writeErr(w, http.StatusBadRequest, "invalid network body: "+err.Error())
+			return
+		}
+		var meta struct {
+			AllowInternetAccess *bool `json:"allow_internet_access"`
+		}
+		_ = json.Unmarshal(raw, &meta)
+		err = ub.UpdateNetwork(ident, sandboxID, &network, meta.AllowInternetAccess)
+		if err != nil {
+			var invalid InvalidError
+			if errors.As(err, &invalid) {
+				writeErr(w, http.StatusBadRequest, invalid.Error())
+				return
+			}
+			var nf NotFoundError
+			if errors.As(err, &nf) {
+				writeErr(w, http.StatusNotFound, nf.Error())
+				return
+			}
+			var conflict ConflictError
+			if errors.As(err, &conflict) {
+				writeErr(w, http.StatusConflict, conflict.Error())
+				return
+			}
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+
+	case action == "fork" && r.Method == http.MethodPost:
+		fb, ok := c.backend.(ForkBackend)
+		if !ok {
+			writeErr(w, http.StatusNotImplemented, "fork is not supported by this deployment")
+			return
+		}
+		var req struct {
+			Timeout int32 `json:"timeout,omitempty"`
+			Count   int32 `json:"count,omitempty"`
+		}
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req)
+		if req.Count <= 0 {
+			req.Count = 1
+		}
+		if req.Count > 10 {
+			req.Count = 10
+		}
+		results, err := fb.ForkSandbox(ident, sandboxID, req.Timeout, req.Count)
+		if err != nil {
+			var nf NotFoundError
+			if errors.As(err, &nf) {
+				writeErr(w, http.StatusNotFound, nf.Error())
+				return
+			}
+			writeErr(w, http.StatusBadGateway, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, results)
+
+	case action == "snapshots" && r.Method == http.MethodPost:
+		sbk, ok := c.backend.(SnapshotBackend)
+		if !ok {
+			writeErr(w, http.StatusNotImplemented, "snapshots are not supported by this deployment")
+			return
+		}
+		var req struct {
+			Name string `json:"name,omitempty"`
+		}
+		_ = json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&req)
+		info, err := sbk.CreateSnapshot(ident, sandboxID, req.Name)
+		if err != nil {
+			var invalid InvalidError
+			if errors.As(err, &invalid) {
+				writeErr(w, http.StatusBadRequest, invalid.Error())
+				return
+			}
+			var nf NotFoundError
+			if errors.As(err, &nf) {
+				writeErr(w, http.StatusNotFound, nf.Error())
+				return
+			}
+			writeErr(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusCreated, info)
+
 	case action == "metrics" && r.Method == http.MethodGet:
 		metrics, ok := c.backend.GetMetrics(ident, sandboxID)
 		if !ok {
@@ -242,6 +393,59 @@ func (c *controlPlane) handleSandboxByID(w http.ResponseWriter, r *http.Request)
 		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
+
+// handleSnapshots is GET /snapshots (and /v2/snapshots): list templates.
+func (c *controlPlane) handleSnapshots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	sbk, ok := c.backend.(SnapshotBackend)
+	if !ok {
+		writeErr(w, http.StatusNotImplemented, "snapshots are not supported by this deployment")
+		return
+	}
+	limit := 100
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	out := sbk.ListSnapshots(identOf(r), r.URL.Query().Get("sandboxID"), limit)
+	if out == nil {
+		out = []SnapshotInfo{}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleTemplateByID is DELETE /templates/{snapshotID}; E2B uses a template ID
+// for snapshot deletion.
+func (c *controlPlane) handleTemplateByID(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		writeErr(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	sbk, ok := c.backend.(SnapshotBackend)
+	if !ok {
+		writeErr(w, http.StatusNotImplemented, "snapshots are not supported by this deployment")
+		return
+	}
+	raw := strings.TrimPrefix(strings.TrimPrefix(r.URL.Path, "/v2"), "/templates/")
+	id, err := url.PathUnescape(raw)
+	if err != nil || id == "" {
+		writeErr(w, http.StatusBadRequest, "snapshot id required")
+		return
+	}
+	if !sbk.DeleteSnapshot(identOf(r), id) {
+		writeErr(w, http.StatusNotFound, "snapshot not found")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// SandboxFromDetail projects the full detail onto the lighter create/resume
+// response schema. Exported for a host that builds a fork result itself.
+func SandboxFromDetail(d SandboxDetail) Sandbox { return sandboxFromDetail(d) }
 
 // sandboxFromDetail projects the full detail onto the lighter create/resume
 // response schema.

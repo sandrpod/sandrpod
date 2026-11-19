@@ -50,13 +50,17 @@ type SandboxInfo struct {
 	// budget, not a filesystem-enforced quota: Docker volumes have no portable
 	// size limit, so the control plane accounts for it the same way it accounts
 	// for vCPU and memory and refuses a create that would exceed the plan.
-	StorageMB   int64  `json:"storage_mb,omitempty"`
-	GPU         int    `json:"gpu,omitempty"`
-	PoderID     string `json:"poder_id,omitempty"`     // owning Poder ID
-	PoderURL    string `json:"poder_url,omitempty"`    // Poder API URL
-	ContainerID string `json:"container_id,omitempty"` // actual container ID
-	ProxyURL    string `json:"proxy_url,omitempty"`    // Toolbox proxy URL
-	APIURL      string `json:"api_url,omitempty"`
+	StorageMB int64 `json:"storage_mb,omitempty"`
+	// PrivatePorts requires the signed preview URL or an API key on every
+	// public in-sandbox port, not only the desktop/debugger ones. E2B's
+	// allowPublicTraffic=false maps here.
+	PrivatePorts bool   `json:"private_ports,omitempty"`
+	GPU          int    `json:"gpu,omitempty"`
+	PoderID      string `json:"poder_id,omitempty"`     // owning Poder ID
+	PoderURL     string `json:"poder_url,omitempty"`    // Poder API URL
+	ContainerID  string `json:"container_id,omitempty"` // actual container ID
+	ProxyURL     string `json:"proxy_url,omitempty"`    // Toolbox proxy URL
+	APIURL       string `json:"api_url,omitempty"`
 	// Runtime environment info (for AI-generated executable scripts)
 	Arch         string            `json:"arch,omitempty"`       // e.g. amd64, arm64 (inherited from Poder host)
 	OS           string            `json:"os,omitempty"`         // e.g. linux
@@ -111,6 +115,9 @@ type CreateSandboxRequest struct {
 	// gateway remembers a client's intent (E2B autoPause) and how the console's
 	// metadata filter finds a sandbox.
 	Labels map[string]string `json:"labels,omitempty"`
+	// PrivatePorts maps E2B allowPublicTraffic=false: every public port needs
+	// the signed URL or an API key, not just desktop/debugger ports.
+	PrivatePorts bool `json:"private_ports,omitempty"`
 	// GPU is how many GPUs the sandbox needs (0 = none). Placement requires a
 	// worker advertising the gpu capability; the container gets DeviceRequests.
 	GPU int `json:"gpu,omitempty"`

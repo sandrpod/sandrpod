@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS sandboxes (
     cpu_cores      REAL    NOT NULL DEFAULT 0,
     memory_mb      INTEGER NOT NULL DEFAULT 0,
     storage_mb     INTEGER NOT NULL DEFAULT 0,
+    private_ports  INTEGER NOT NULL DEFAULT 0,
     created_at     DATETIME NOT NULL,
     last_activity  DATETIME NOT NULL
 );
@@ -138,6 +139,7 @@ var columnMigrations = []string{
 	`ALTER TABLE sandboxes ADD COLUMN desktop INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE sandboxes ADD COLUMN memory_mb INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE sandboxes ADD COLUMN storage_mb INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE sandboxes ADD COLUMN private_ports INTEGER NOT NULL DEFAULT 0`,
 	`ALTER TABLE poders ADD COLUMN capabilities TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE poders ADD COLUMN workspace TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE sandboxes ADD COLUMN display_name TEXT NOT NULL DEFAULT ''`,
