@@ -27,14 +27,17 @@ delete every worker. Do not ship it inside an agent.
 | Method | Path | Notes |
 |---|---|---|
 | `POST` | `/api/v1/sandboxes` | create. `async:true` returns `202` with a job id |
-| `GET` | `/api/v1/sandboxes` | list, scoped by credential |
+| `GET` | `/api/v1/sandboxes` | list, scoped by credential; `limit`/`offset`, response carries `has_more` |
 | `GET` | `/api/v1/sandboxes/{name}` | one sandbox |
 | `DELETE` | `/api/v1/sandboxes/{name}` | delete record and container |
 | `POST` | `/api/v1/sandboxes/{name}/start` \| `/stop` | resume / pause |
 | `POST` | `/api/v1/sandboxes/execute?sandbox={name}` | run code |
 | `GET` | `/api/v1/sandboxes/stream?sandbox={name}` | streaming run |
+| `GET` | `/api/v1/sandboxes/{name}/logs?tail=N` | container log |
 | `GET` | `/api/v1/sandboxes/{name}/toolbox/*` | proxy to the in-sandbox toolbox |
 | `POST` | `/api/v1/sandboxes/{name}/snapshot` | commit the container to an image |
+| `GET` | `/api/v1/snapshots` | snapshot images across online workers (deduped by tag) |
+| `DELETE` | `/api/v1/snapshots?image={repo:tag}` | remove one (`poder_id` narrows it to one worker) |
 
 `{name}` is the workspace-scoped name from the create request: two workspaces may
 both use `mysandbox`, and a request resolves the name within the caller's
@@ -59,6 +62,22 @@ Create body:
 A `network` policy on a fleet with no egress-capable worker answers **409** rather
 than starting an unenforced sandbox.
 
+The create body also takes `env_vars` (applied to the container), `storage_mb`
+(the workspace reservation), `labels`, `private_ports: true` (every public port
+requires a credential), `persist_data`, `gpu`, `poder_id` (skip placement), and
+`async`. CPU/memory/storage defaults are 1 vCPU / 1024 MiB / 2048 MiB when
+omitted.
+
+Long-running access to a sandbox uses the same `{name}` prefix:
+`/api/v1/sandboxes/{name}/session/*` (long-lived shell sessions),
+`/api/v1/sandboxes/{name}/mcp` (the native MCP bridge), `/pty` (raw terminal),
+and `/toolbox/*` (files, processes, stats). The CLI wraps these; the paths are
+stable if you are writing your own client.
+
+`GET /api/v1/jobs/{id}` returns an asynchronous create's status, error and
+result. `PATCH` on the same path is the worker's status report and needs an
+admin credential.
+
 ## Execution
 
 ```bash
@@ -78,8 +97,10 @@ curl -s -X POST "$API/api/v1/sandboxes/execute?sandbox=agent-01" \
 | Method | Path | Notes |
 |---|---|---|
 | `GET` | `/api/v1/poders` | inventory with state, resources, capabilities, region |
+| `POST` | `/api/v1/poders/{id}/sandboxes` | create on that worker, skipping placement |
 | `DELETE` | `/api/v1/poders/{id}` | remove a record (and its tunnel) |
 | `POST` | `/api/v1/poders/{id}/heartbeat` | workers only; a worker may heartbeat itself and nothing else |
+| `POST` | `/api/v1/poders/enroll` | worker exchanges a join invitation for its worker key |
 | `GET` | `/ws/poder/connect` | the WebSocket a worker dials (not called by hand) |
 
 ## Egress
@@ -90,6 +111,21 @@ curl -s -X POST "$API/api/v1/sandboxes/execute?sandbox=agent-01" \
 | `PUT` | `/api/v1/sandboxes/{name}/egress` | replace it (validated) |
 | `DELETE` | `/api/v1/sandboxes/{name}/egress` | unset it — not the same as `PUT {}` |
 | `POST` | `/api/v1/policy/decide` | per-connection verdict, for `-egress-mode=decider` |
+
+## Tokens
+
+Admin-only, and only on a build started with a persistent `-db`. Issued keys use
+the `e2b_<hex>` spelling, so the same key works on both the native and E2B
+surfaces. Only the hash is stored; the raw key is returned once.
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/v1/tokens` | list names, prefixes, roles and creation times |
+| `POST` | `/api/v1/tokens` | `{"name":"…","role":"user"\|"admin"}` → `201` with the raw key |
+| `DELETE` | `/api/v1/tokens/{prefix}` | revoke by the printed prefix |
+
+A hosted deployment may disable this route in favour of per-workspace keys
+minted from its console.
 
 ## Operations
 
@@ -116,10 +152,11 @@ curl -s -X POST "$API/api/v1/sandboxes/execute?sandbox=agent-01" \
 
 A second, E2B-shaped surface can be mounted on its own domain. It is documented
 in [E2B drop-in](/e2b); the paths are `/sandboxes`, `/sandboxes/{id}`,
-`/sandboxes/{id}/pause`, and envd RPCs on `<port>-<id>.<domain>`.
+`/sandboxes/{id}/pause`, `/snapshots`, `/sandboxes/{id}/fork`,
+`/sandboxes/{id}/network`, and envd RPCs on `<port>-<id>.<domain>`.
 
 ## OpenAPI
 
-The control plane serves its OpenAPI document at `/api/v1/openapi.json` on builds
-that include it; the E2B surface's schema is E2B's own
-(`spec/openapi.yml` upstream), which is what makes a drop-in possible.
+The native surface has no served OpenAPI document; this page and the CLI are the
+contract. The E2B surface follows E2B's own schema (`spec/openapi.yml`
+upstream), which is what makes a drop-in possible.
