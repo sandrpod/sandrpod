@@ -25,6 +25,31 @@ type Scheduler struct {
 	poderStore PoderRepository
 	apiURL     string
 	token      string // API bearer token, forwarded to provisioned Poders
+	// tokenMinter, when set, produces the per-VM credential a provisioned Poder
+	// authenticates with instead of token. The platform token is an
+	// administrator key; leaving a copy on every machine the scheduler boots is
+	// what this replaces (see server.MintProvisionToken).
+	tokenMinter func(vmID, tenant string) string
+}
+
+// SetTokenMinter installs the per-VM credential factory. nil keeps the old
+// behaviour (the platform token, or none when auth is off), which is what a
+// self-hosted build without a signing secret does.
+func (s *Scheduler) SetTokenMinter(f func(vmID, tenant string) string) {
+	s.tokenMinter = f
+}
+
+// workerTokenFor is what a provisioned Poder on vmID authenticates with: the
+// minted per-VM credential when a minter is installed and produced one, else the
+// platform token (or nothing, when auth is off).
+func (s *Scheduler) workerTokenFor(vmID string) string {
+	if s.tokenMinter != nil {
+		tenant, _ := VMTenant(vmID)
+		if minted := s.tokenMinter(vmID, tenant); minted != "" {
+			return minted
+		}
+	}
+	return s.token
 }
 
 // NewScheduler creates a new Scheduler. token is the API Server bearer token
@@ -387,10 +412,14 @@ docker --version ||
 	if tb := providerEnv("SANDRPOD_TOOLBOX_IMAGE", providerType); tb != "" {
 		toolboxEnv = fmt.Sprintf(` -e SANDRPOD_TOOLBOX_IMAGE='%s'`, shellQuoteSingleValue(tb))
 	}
-	// Forward the API token so the Poder can authenticate to the tunnel
-	// endpoint; without it a token-protected server rejects the handshake.
-	if s.token != "" {
-		toolboxEnv += fmt.Sprintf(` -e SANDRPOD_TOKEN='%s'`, shellQuoteSingleValue(s.token))
+	// What this VM's Poder authenticates with. Without a credential a
+	// token-protected server rejects the handshake outright; with the platform
+	// token it accepts it and hands the machine administrator rights for good.
+	// A minted per-VM token is the worker role, scoped to the tenant that asked
+	// for the VM, and signed rather than stored.
+	workerToken := s.workerTokenFor(vm.ID)
+	if workerToken != "" {
+		toolboxEnv += fmt.Sprintf(` -e SANDRPOD_TOKEN='%s'`, shellQuoteSingleValue(workerToken))
 	}
 	// Forward the VM instance ID so the Poder reports it on registration; the
 	// server uses it to terminate the underlying cloud VM on poder reclamation.

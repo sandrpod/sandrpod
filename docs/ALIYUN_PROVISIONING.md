@@ -143,11 +143,18 @@ drop-in pattern from [AWS_PROVISIONING.md](AWS_PROVISIONING.md).
 
 ### Who owns a provisioned worker
 
-The VM worker dials in with the platform token, which has no tenant. Registration
-therefore takes the workspace from the create that provisioned the machine, so the
-node appears in **that** workspace's list and is not eligible for another tenant's
-sandboxes. Both halves matter: a machine nobody can see is a machine nobody can
-manage, and an unscoped machine is one two tenants can share.
+The VM worker dials in with a **provision token**: a per-VM credential the
+scheduler mints from the platform secret (`pv1_…`, worker role, the workspace that
+asked for the machine, see [AUTH_AND_KEYS.md](AUTH_AND_KEYS.md#provisioned-workers)).
+It used to be the platform token itself, which meant every booted machine held an
+administrator key for its whole life; the SSH or run-command hop that delivers the
+credential runs against a host key nobody has seen yet, so the first boot was the
+one place an attacker could have taken it.
+
+Registration takes the workspace from that credential, so the node appears in
+**that** workspace's list and is not eligible for another tenant's sandboxes. Both
+halves matter: a machine nobody can see is a machine nobody can manage, and an
+unscoped machine is one two tenants can share.
 
 A worker registered before 0.7.1 stays unscoped until it is reclaimed and
 re-provisioned — check with `psql … select id, workspace from poders`.

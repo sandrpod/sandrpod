@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [Unreleased]
+
+### Security
+
+- **Provisioned VMs no longer receive the platform token.** A VM the scheduler
+  boots is handed a per-VM provision token instead: HMAC-signed with the platform
+  secret, authenticated as a `worker` scoped to the tenant that requested the
+  machine, and limited to the tunnel handshake, the job poll and its own
+  heartbeat. The bootstrap hop (SSH against an unpinned host key, or a cloud
+  run-command API) therefore leaks at worst one worker's credential, not an
+  administrator key. See [docs/AUTH_AND_KEYS.md](docs/AUTH_AND_KEYS.md).
+
 ## [0.13.1] - 2026-11-20
 
 ### Fixed

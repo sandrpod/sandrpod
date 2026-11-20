@@ -676,3 +676,38 @@ func TestSchedule_PinnedPlacementTenantRule(t *testing.T) {
 		})
 	}
 }
+
+// A provisioned VM must not be handed the platform token: that is an
+// administrator key, and the machine outlives the create that booted it. The
+// minter gets the VM id and the tenant recorded for it, so the credential it
+// mints can be scoped to both.
+func TestWorkerTokenFor_PrefersTheMintedPerVMCredential(t *testing.T) {
+	RecordVMTenant("vm-mint-1", "tenant-x")
+	var gotVM, gotTenant string
+	s := NewScheduler(nil, "http://localhost:8080", "platform-admin-token")
+	s.SetTokenMinter(func(vmID, tenant string) string {
+		gotVM, gotTenant = vmID, tenant
+		return "pv1_minted"
+	})
+	if tok := s.workerTokenFor("vm-mint-1"); tok != "pv1_minted" {
+		t.Fatalf("token = %q, want the minted credential", tok)
+	}
+	if gotVM != "vm-mint-1" || gotTenant != "tenant-x" {
+		t.Fatalf("minter called with (%q, %q), want the VM and its tenant", gotVM, gotTenant)
+	}
+}
+
+func TestWorkerTokenFor_FallsBackWhenNoMinterOrNoSecret(t *testing.T) {
+	s := NewScheduler(nil, "http://localhost:8080", "platform-admin-token")
+	if tok := s.workerTokenFor("vm-plain"); tok != "platform-admin-token" {
+		t.Fatalf("token = %q, want the platform token when no minter is installed", tok)
+	}
+
+	// A minter that cannot sign (auth disabled) returns "": the platform token
+	// is empty too, so the worker starts without a credential, as before.
+	empty := NewScheduler(nil, "http://localhost:8080", "")
+	empty.SetTokenMinter(func(string, string) string { return "" })
+	if tok := empty.workerTokenFor("vm-plain"); tok != "" {
+		t.Fatalf("token = %q, want none", tok)
+	}
+}

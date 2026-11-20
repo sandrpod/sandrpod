@@ -406,6 +406,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 	sandboxStore := stores.Sandboxes
 	poderStore := stores.Poders
 	scheduler := podpkg.NewScheduler(poderStore, cfg.APIURL, cfg.Token)
+	installProvisionTokens(scheduler, cfg)
 
 	// Admission: the deployment's gate, or the built-in per-owner quota.
 	admission := admissionFor(cfg, sandboxStore)

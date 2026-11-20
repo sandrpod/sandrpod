@@ -173,9 +173,11 @@ func e2bHostRouter(domain string, gateway, next http.Handler) http.Handler {
 // portal API, and its isolation tests exercise both surfaces.
 func NewE2BGateway(domain string, cfg Config, stores podpkg.Stores,
 	tunnelStore, directStore *tunnel.TunnelStore) http.Handler {
+	scheduler := podpkg.NewScheduler(stores.Poders, cfg.APIURL, cfg.Token)
+	installProvisionTokens(scheduler, cfg)
 	return newE2BGateway(domain, e2bDeps{
 		cfg:         cfg,
-		scheduler:   podpkg.NewScheduler(stores.Poders, cfg.APIURL, cfg.Token),
+		scheduler:   scheduler,
 		sandboxes:   stores.Sandboxes,
 		poders:      stores.Poders,
 		jobs:        stores.Jobs,

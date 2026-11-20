@@ -111,6 +111,24 @@ everything runs as an anonymous admin. Never do this on a reachable server.
 |------|--------|
 | `admin` | Everything: infra endpoints (poders, jobs), all sandboxes, token issuance |
 | `user`  | The sandbox API only, scoped to sandboxes **it created** (`owner` = token name) |
+| `worker` | The two routes a machine needs: the tunnel handshake and the job poll, plus its own heartbeat. Nothing else |
+
+### Provisioned workers
+
+When the scheduler provisions a VM, it hands the machine a **provision token**
+(`pv1_…`) instead of the platform token. It is an HMAC over `vm-id | workspace |
+expiry`, signed with the platform secret, so any instance can verify it without
+shared state, and it authenticates as a `worker` scoped to that workspace — the
+machine can join the fleet and take jobs, and cannot read or delete sandboxes,
+mint keys or touch the infrastructure API. That is what makes the bootstrap hop
+(SSH to a host key nobody has pinned, or a cloud run-command API) survivable: the
+worst a reader of that command gets is one worker's credential, not the
+operator's.
+
+Its lifetime is `ProvisionTokenTTL` (180 days, the same order as a SaaS worker
+key): the credential has to outlive the VM, because a busy pod can serve for
+months and one that expires underneath a running worker stops taking jobs
+silently. Shortening the privilege is the fix here, not shortening the clock.
 
 - `-max-sandboxes-per-owner N` caps concurrent sandboxes per **user** token
   (admins exempt). Env: `SANDRPOD_MAX_SANDBOXES_PER_OWNER`.

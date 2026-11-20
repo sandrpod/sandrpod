@@ -290,6 +290,13 @@ func resolveToken(cfg Config, presented string) (Identity, bool) {
 		subtle.ConstantTimeCompare([]byte(presented), []byte(cfg.Token)) == 1 {
 		return Identity{Name: "admin", Role: RoleAdmin}, true
 	}
+	// A provisioned VM carries a credential signed by this server's secret: worker
+	// role, one VM, the tenant that asked for it. Checked before the token lists
+	// because it is self-describing — no store to consult, so it works on any
+	// instance in a multi-instance deployment.
+	if id, ok := verifyProvisionToken(cfg.Token, presented, time.Now()); ok {
+		return id, true
+	}
 	candidates := cfg.Tokens
 	if cfg.Registry != nil {
 		candidates = append(candidates, cfg.Registry.get()...)
