@@ -44,8 +44,21 @@ curl -s $API/api/v1/sandboxes/<name>/toolbox/mcp \
 ## 用哪个构建
 
 官方 release 提供四种 linux 变体。本镜像使用 **stealth** x86_64 构建
-（反浏览器指纹；包含截图/PDF——渲染管线是 Rust 原生实现，无需 Chromium、
-无需字体包）。
+（反浏览器指纹；包含截图/PDF——渲染管线是 Rust 原生实现，不需要 Chromium）。
+
+镜像内另装 `fontconfig` + `fonts-noto-cjk`，并以
+`--font-dir /usr/share/fonts/opentype/noto` 启动 Obscura：Obscura 不会自行加载
+系统字体，不装的话任何中文页面都是方框。
+
+## 已知限制：原生表单控件里的文字
+
+正文的中文渲染正常，但 **`<input>` 的 value**（submit / reset / text）、
+`<select>` 和 placeholder 由 Obscura 内置的拉丁字体绘制，没有逐字形回退，
+所以 `Google 搜尋` / `好手氣` 这类按钮里的中文，无论装什么字体都是方框。
+`<button>` 的文字和普通正文不受影响。这是上游
+[issue #606](https://github.com/h4ckf0r0day/obscura/issues/606)（未修复；
+PR #991 是尚未合并的补丁）。绕行办法：自己控制的页面用 `<button>`；需要按钮
+文案保真时用桌面档位（真 Chrome）。
 
 ## 反爬站点
 

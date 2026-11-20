@@ -46,7 +46,22 @@ block, so the calling agent sees the page directly.
 
 Official releases ship four linux variants. This image uses the **stealth**
 x86_64 build (anti-fingerprinting; screenshots/PDF included — the render
-pipeline is native Rust, no Chromium, no font packages needed).
+pipeline is native Rust, no Chromium required).
+
+The image also ships `fontconfig` + `fonts-noto-cjk` and starts Obscura with
+`--font-dir /usr/share/fonts/opentype/noto`: Obscura does not load system
+fonts on its own, so without this every CJK page renders as tofu boxes.
+
+## Known limitation: text inside native form controls
+
+Paragraph text renders CJK correctly, but the **value of an `<input>`**
+(submit / reset / text), `<select>` and placeholders are painted from Obscura's
+bundled Latin faces without per-glyph fallback, so labels like `Google 搜尋` /
+`好手氣` stay tofu no matter which fonts are installed. `<button>` text and
+normal text are unaffected. This is upstream
+[issue #606](https://github.com/h4ckf0r0day/obscura/issues/606) (open; PR #991
+is the unmerged fix). Workarounds: use `<button>` on pages you control, or the
+desktop tier (real Chrome) when control-label fidelity matters.
 
 ## Anti-bot sites
 

@@ -150,11 +150,31 @@ func rpc(t *testing.T, c *http.Client, sid, method string, params any) (string, 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("%s: status %d: %s", method, resp.StatusCode, raw)
 	}
-	txt := string(raw)
-	if i := strings.Index(txt, "data: "); i >= 0 { // Streamable-HTTP may wrap in SSE
-		txt = strings.TrimSpace(txt[i+6:])
+	return responsePayload(t, string(raw)), resp.Header
+}
+
+// responsePayload returns the JSON-RPC message that carries an id, dropping
+// the notifications that may be interleaved with it. The manager pushes
+// tools/list_changed and resources/list_changed as soon as the fixture child
+// finishes starting; under load those arrive between the SSE frames of the
+// reply being read, and "take everything after the first data: line" then
+// hands the caller two JSON values and no error. Only a message with an id is
+// a response.
+func responsePayload(t *testing.T, body string) string {
+	t.Helper()
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "data: "))
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var probe struct {
+			ID *json.RawMessage `json:"id"`
+		}
+		if json.Unmarshal([]byte(line), &probe) == nil && probe.ID != nil {
+			return line
+		}
 	}
-	return txt, resp.Header
+	return strings.TrimSpace(body)
 }
 
 func TestMCPLocalSocket_ServesTheProtocol(t *testing.T) {
