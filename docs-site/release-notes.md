@@ -5,6 +5,16 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.3
+
+Exports `server.VerifyProvisionToken` for embedding builds.
+
+| Area | What changed |
+|---|---|
+| Embedding | a program that supplies its own `Config.Authenticator` never runs the built-in token scheme; it can now verify the per-VM credential the scheduler mints, instead of rejecting every provisioned worker |
+
+No behaviour change for a server that uses the built-in authenticator.
+
 ## 0.13.2
 
 Two fixes: one narrows what a provisioned machine is allowed to do, the other
