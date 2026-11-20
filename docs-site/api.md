@@ -64,8 +64,8 @@ than starting an unenforced sandbox.
 
 The create body also takes `env_vars` (applied to the container), `storage_mb`
 (the workspace reservation), `labels`, `private_ports: true` (every public port
-requires a credential), `persist_data`, `gpu`, `poder_id` (skip placement), and
-`async`. CPU/memory/storage defaults are 1 vCPU / 1024 MiB / 2048 MiB when
+requires a credential), `persist_data`, `gpu`, `runtime` (`runc` or `gvisor`),
+`poder_id` (skip placement), and `async`. CPU/memory/storage defaults are 1 vCPU / 1024 MiB / 2048 MiB when
 omitted.
 
 Long-running access to a sandbox uses the same `{name}` prefix:

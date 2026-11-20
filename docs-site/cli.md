@@ -7,7 +7,7 @@ description: The sandrpod-cli reference — every command verified against a liv
 
 ```bash
 pip install sandrpod-cli          # or: uv tool install sandrpod-cli
-sandrpod-cli --version            # 0.7.2
+sandrpod-cli --version            # 0.7.3
 ```
 
 ```bash
@@ -15,7 +15,7 @@ export SANDRPOD_API_URL=https://cloud.example.com
 export SANDRPOD_API_TOKEN=sk_...          # or the platform token on a single-tenant server
 ```
 
-Every command below was run against a deployed server at version 0.12.1.
+Every command below was run against a deployed server at version 0.13.0.
 
 ## Configuration
 
@@ -48,6 +48,7 @@ preview hosts, API paths and E2B surface all address.
 | `create <name> --poder <id>` | skip the scheduler, place on a named worker |
 | `create <name> --ttl 3600 --cpu 2 --memory 2048` | idle TTL, cores, MiB |
 | `create <name> --wait-timeout 300` | how long to wait for `RUNNING` (default 900s) |
+| `create <name> --runtime gvisor` | run under gVisor (`runsc`); requires a capable worker |
 | `create <name> --allow-domain a.example --deny-domain b.example` | egress allow-list at creation |
 | `list` / `get <name>` / `delete <name…>` | inventory; `list` and `get` show both names |
 | `start <name>` / `stop <name>` | resume / pause |

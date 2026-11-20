@@ -61,7 +61,7 @@ description: 原生控制面 API —— 沙箱、worker、执行、出网，以�
 
 创建请求体还接受 `env_vars`（写到容器环境里）、`storage_mb`（工作区存储预留）、
 `labels`、`private_ports: true`（该沙箱所有公共端口都要求凭证）、`persist_data`、
-`gpu`、`poder_id`（跳过调度）和 `async`。省略 CPU/内存/存储时默认 1 vCPU /
+`gpu`、`runtime`（`runc` 或 `gvisor`）、`poder_id`（跳过调度）和 `async`。省略 CPU/内存/存储时默认 1 vCPU /
 1024 MiB / 2048 MiB。
 
 对沙箱的长连接与附加能力走同一前缀：`/api/v1/sandboxes/{name}/session/*`（长驻

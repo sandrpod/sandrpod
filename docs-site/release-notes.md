@@ -5,6 +5,18 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.0
+
+The first release with an **opt-in gVisor runtime**.
+
+| Area | What changed |
+|---|---|
+| Runtime | `runtime: "gvisor"` (CLI `--runtime gvisor`) runs a sandbox under `runsc`; workers advertise a `gvisor` capability, and a request without a capable worker is refused with `409` |
+| Node install | `deploy/node-install.sh` installs and registers gVisor by default; `--no-gvisor` opts out |
+| Networking | gVisor sandboxes get an upstream resolver through `SANDRPOD_GVISOR_DNS`; the egress sidecar is mapped in `/etc/hosts`, including after live network updates |
+| Limits | snapshots/fork are refused with `409` under gVisor (`docker commit` does not capture runsc writes); GPU + gVisor is a `400` |
+| CLI | `sandrpod-cli 0.7.3` adds `--runtime` |
+
 ## 0.12.1
 
 Fixes for the E2B snapshot and fork paths added in 0.12.0.

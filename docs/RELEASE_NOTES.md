@@ -3,7 +3,23 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.12.1 (current)
+## 0.13.0 (current)
+
+The first release with an **opt-in gVisor runtime**. `runtime: "gvisor"` on a
+create (CLI `--runtime gvisor`) runs the sandbox under `runsc` on a worker whose
+Docker daemon registers it; workers advertise the `gvisor` capability, and a
+request without a capable worker is refused with `409` instead of silently
+running under `runc`. The node installer installs and registers gVisor by
+default (`--no-gvisor` opts out).
+
+gVisor sandboxes get an explicit upstream resolver (`SANDRPOD_GVISOR_DNS`), an
+`/etc/hosts` mapping for the egress sidecar, and live egress updates. Snapshots
+and fork are refused (`409`): `docker commit` does not capture runsc writes.
+GPU + gVisor is refused (`400`). See [GVISOR.md](GVISOR.md).
+
+The Python CLI is `sandrpod-cli 0.7.3`, adding `--runtime`.
+
+## 0.12.1
 
 Fixes for the E2B snapshot and fork paths added in 0.12.0:
 

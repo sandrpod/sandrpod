@@ -1,8 +1,7 @@
 # gVisor runtime support
 
-> **Status**: implemented on `main` (2026-11-20), opt-in. The default runtime is
-> still Docker's `runc`. The API field and CLI flag ship in the next engine/CLI
-> release; a v0.12.1 deployment does not have them.
+> **Status**: shipped in v0.13.0 (2026-11-20), opt-in. The default runtime is
+> still Docker's `runc`. The API field and CLI flag are part of this release.
 >
 > gVisor puts a user-space kernel (the Sentry) between the sandbox and the host
 > kernel. It is not a microVM; it is a materially smaller host-kernel attack

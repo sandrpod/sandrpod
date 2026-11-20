@@ -7,7 +7,7 @@ description: sandrpod-cli 参考 —— 每条命令都在真实部署上验证�
 
 ```bash
 pip install sandrpod-cli          # 或：uv tool install sandrpod-cli
-sandrpod-cli --version            # 0.7.2
+sandrpod-cli --version            # 0.7.3
 ```
 
 ```bash
@@ -15,7 +15,7 @@ export SANDRPOD_API_URL=https://cloud.example.com
 export SANDRPOD_API_TOKEN=sk_...          # 单租户服务器上也可以用平台 token
 ```
 
-下面每一条命令都在引擎 0.12.1、CLI 0.7.2 的部署上实际跑过。
+下面每一条命令都在引擎 0.13.0、CLI 0.7.3 的部署上实际跑过。
 
 ## 配置
 
@@ -47,6 +47,7 @@ export SANDRPOD_API_TOKEN=sk_...          # 单租户服务器上也可以用平
 | `create <名字> --poder <id>` | 跳过调度器，放到指定 worker |
 | `create <名字> --ttl 3600 --cpu 2 --memory 2048` | 闲置 TTL、核数、内存（MiB） |
 | `create <名字> --wait-timeout 300` | 等待 `RUNNING` 的秒数（默认 900） |
+| `create <名字> --runtime gvisor` | 以 gVisor（`runsc`）运行；需要支持该能力的 worker |
 | `create <名字> --allow-domain a.example --deny-domain b.example` | 创建时带出网白名单 |
 | `list` / `get <名字>` / `delete <名字…>` | 清点；`list`/`get` 同时显示两个名字 |
 | `start <名字>` / `stop <名字>` | 恢复 / 暂停 |

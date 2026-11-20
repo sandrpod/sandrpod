@@ -1,7 +1,7 @@
 # Upgrade breaks by release
 
 A release review needs three answers per change: **what breaks**, **who breaks**,
-and **how to roll back**. The current release is **v0.12.1**; the running list is
+and **how to roll back**. The current release is **v0.13.0**; the running list is
 [CHANGELOG.md](../CHANGELOG.md). The first section covers everything since
 v0.8.0, the second preserves the detailed v0.6.0 → v0.7.0 review.
 
@@ -18,7 +18,7 @@ capability, and `runtime=gvisor` plus `gpu>0` is a `400` in this iteration.
 No existing request or response field changed; `SandboxInfo` gains
 `runtime` (empty for rows created before this build).
 
-## v0.8.0 → v0.12.1
+## v0.8.0 → v0.13.0
 
 ### v0.11.0 — sandbox names are workspace-scoped
 
@@ -67,7 +67,7 @@ a durable volume, or every recreate needs a fresh invitation.
 **Roll back:** the previous worker image still accepts the invitation; the worker
 key file is additive and ignored by older builds.
 
-### v0.12.1 — no new breaks
+### v0.13.0 — no new breaks
 
 Snapshot ids are now the familiar `repo:tag`, so a client that stored the
 `docker.io/...` spelling returned by v0.12.0 should re-list snapshots once.
@@ -231,7 +231,7 @@ diff <(server-old -help 2>&1 | grep -oE '^\s+-[a-z-]+') \
      <(server-new -help 2>&1 | grep -oE '^\s+-[a-z-]+')
 
 # 2. Version stamping still works
-docker run --rm ghcr.io/sandrpod/server:v0.12.1 -version
+docker run --rm ghcr.io/sandrpod/server:v0.13.0 -version
 
 # 3. Unknown readings are negative, not 0.5
 curl -s -H "X-Sandrpod-Token: $TOKEN" http://localhost:8080/api/v1/poders \

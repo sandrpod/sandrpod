@@ -5,6 +5,18 @@ description: 每个版本改了什么，其中哪些改动会破坏东西。
 
 # 发布说明
 
+## 0.13.0
+
+第一个支持 **可选 gVisor 运行时** 的版本。
+
+| 领域 | 改了什么 |
+|---|---|
+| 运行时 | `runtime: "gvisor"`（CLI `--runtime gvisor`）让沙箱以 `runsc` 运行；worker 宣告 `gvisor` 能力，没有可用节点时创建返回 `409` |
+| 节点安装 | `deploy/node-install.sh` 默认安装并注册 gVisor；`--no-gvisor` 可关闭 |
+| 网络 | gVisor 沙箱用 `SANDRPOD_GVISOR_DNS` 获得上游 resolver；egress sidecar 写入 `/etc/hosts`，实时网络更新后同步更新 |
+| 限制 | gVisor 下快照/分叉返回 `409`（`docker commit` 不捕获 runsc 写入）；GPU + gVisor 返回 `400` |
+| CLI | `sandrpod-cli 0.7.3` 增加 `--runtime` |
+
 ## 0.12.1
 
 修复 0.12.0 新增的 E2B 快照与 fork 路径。

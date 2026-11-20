@@ -25,7 +25,7 @@
 
 ## 成熟度与支持
 
-**v0.12.1 是当前最新发布版本。** `main` 是开发线。
+**v0.13.0 是当前最新发布版本。** `main` 是开发线。
 
 | | |
 |---|---|
@@ -76,7 +76,7 @@ sandrpod-cli --api-url http://localhost:8080 create demo --provider local
 sandrpod-cli --api-url http://localhost:8080 execute demo "echo hello from SandrPod; python3 -c 'print(6*7)'"
 ```
 
-本地 v0.12.1 栈的实录（无缓存沙箱镜像）：
+本地 v0.13.0 栈的实录（无缓存沙箱镜像）：
 
 ```
 Sandbox:     demo
