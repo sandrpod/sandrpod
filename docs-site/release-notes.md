@@ -5,6 +5,19 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.2
+
+Two fixes: one narrows what a provisioned machine is allowed to do, the other
+makes a delivery that was never confirmed resumable.
+
+| Area | What changed |
+|---|---|
+| Security | a VM the scheduler provisions gets a per-VM credential (worker role, scoped to the requesting workspace, signed with the platform secret) instead of the platform token, so it cannot administer the fleet |
+| Reliability | the outbox claim compares the timestamp a row actually carries; a job written by an import, a `psql` insert or an older build no longer sits `PENDING` forever with nothing in the log |
+| Testing | `SANDRPOD_RESUME_STALE_AFTER` / `SANDRPOD_RESUME_INTERVAL` let the multi-instance check run the resumer on a fast clock instead of racing the production cadence |
+
+No schema change. Workers do not have to move to use either fix.
+
 ## 0.13.1
 
 Fixes persistence on the pinned-create path used by the console.

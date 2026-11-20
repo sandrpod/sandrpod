@@ -5,6 +5,18 @@ description: 每个版本改了什么，其中哪些改动会破坏东西。
 
 # 发布说明
 
+## 0.13.2
+
+两个修复：一个收窄了被 provision 的机器能做什么，另一个让「没确认送达的创建」真的可以被重投。
+
+| 领域 | 改了什么 |
+|---|---|
+| 安全 | 调度器开出来的 VM 拿到的是每机一份的 provision token（worker 角色、绑定请求它的 workspace、用平台 secret 签名），不再是平台 admin token，无法管理整个集群 |
+| 可靠性 | outbox 认领改用行里实际存储的时间拼写；由导入、`psql` 或旧版本写下的 job 不会再永远停在 `PENDING` 而日志里一个字都没有 |
+| 测试 | `SANDRPOD_RESUME_STALE_AFTER` / `SANDRPOD_RESUME_INTERVAL` 让多实例检查用快节拍跑 resumer，不再和生产节奏赛跑 |
+
+没有 schema 变更。worker 不升级也能用这两个修复。
+
 ## 0.13.1
 
 修复控制台使用的 pinned create 路径上的持久化。
