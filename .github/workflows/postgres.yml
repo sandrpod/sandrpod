@@ -11,6 +11,7 @@
 name: postgres
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
     paths:
