@@ -262,9 +262,51 @@ func (p *AliyunProvider) DeleteVM(ctx context.Context, vmID string) error {
 	req.InstanceId = vmID
 	req.Force = "true" // Force delete even if running
 
-	_, err := p.ecsClient.DeleteInstance(req)
-	if err != nil {
-		return fmt.Errorf("failed to delete instance: %w", err)
+	// A machine that is still starting refuses deletion
+	// (IncorrectInstanceStatus.Initializing), and that is precisely when cleanup
+	// runs: the create failed seconds after RunInstances. Retrying for a minute is
+	// the difference between "terminated" and a billable orphan the caller has to
+	// find by hand — which is what happened on the first real provisioning run.
+	deadline := time.Now().Add(90 * time.Second)
+	var lastErr error
+	for {
+		if _, err := p.ecsClient.DeleteInstance(req); err == nil {
+			lastErr = nil
+			break
+		} else {
+			lastErr = err
+			if !strings.Contains(err.Error(), "IncorrectInstanceStatus") || time.Now().After(deadline) {
+				break
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("failed to delete instance: %w", ctx.Err())
+		case <-time.After(5 * time.Second):
+		}
+	}
+	if lastErr != nil {
+		// Stop it hard and try once more: a stuck Initializing state clears when the
+		// instance is explicitly stopped.
+		stop := ecs.CreateStopInstanceRequest()
+		stop.InstanceId = vmID
+		stop.ForceStop = "true"
+		if _, serr := p.ecsClient.StopInstance(stop); serr == nil {
+			for i := 0; i < 6; i++ {
+				if _, err := p.ecsClient.DeleteInstance(req); err == nil {
+					lastErr = nil
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return fmt.Errorf("failed to delete instance: %w", ctx.Err())
+				case <-time.After(5 * time.Second):
+				}
+			}
+		}
+	}
+	if lastErr != nil {
+		return fmt.Errorf("failed to delete instance: %w", lastErr)
 	}
 
 	p.mu.Lock()
@@ -593,6 +635,12 @@ func (p *AliyunProvider) GetDefaultImage(ctx context.Context, region string) (st
 	req.OSType = "linux"
 	req.Architecture = "x86_64"
 	req.Status = "Available"
+	// The API paginates, ten per page by default, and in cn-hongkong the first
+	// page held no Ubuntu at all — the ranking below never saw one and settled on
+	// Alibaba Cloud Linux 4, whose package manager is dnf. The bootstrap then
+	// tried apt-get and the create failed on the last step with a machine left
+	// running. Ask for a page big enough to hold the families we rank.
+	req.PageSize = requests.NewInteger(100)
 
 	resp, err := p.ecsClient.DescribeImages(req)
 	if err != nil {

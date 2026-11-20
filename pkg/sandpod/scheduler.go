@@ -384,8 +384,17 @@ if ! command -v docker >/dev/null 2>&1; then
   fi
 fi
 if ! command -v docker >/dev/null 2>&1; then
-  # Fallback for images where get.docker.com is unreachable: the distro package.
-  (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io) >/tmp/docker-install.log 2>&1 || true
+  # Fallback for images where get.docker.com did not apply: the distro package.
+  # Not every system image is Debian-derived — cn-hongkong defaults to Alibaba
+  # Cloud Linux, where this used to end in "apt-get: command not found" and a
+  # create that failed on its last step with the VM left running.
+  if command -v apt-get >/dev/null 2>&1; then
+    (apt-get update -qq && DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker.io) >/tmp/docker-install.log 2>&1 || true
+  elif command -v dnf >/dev/null 2>&1; then
+    (dnf install -y docker || dnf install -y moby-engine || dnf install -y docker-ce) >/tmp/docker-install.log 2>&1 || true
+  elif command -v yum >/dev/null 2>&1; then
+    (yum install -y docker || yum install -y docker-ce) >/tmp/docker-install.log 2>&1 || true
+  fi
 fi
 systemctl enable --now docker >/dev/null 2>&1 || true
 docker --version ||
