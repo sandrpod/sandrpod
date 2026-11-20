@@ -70,6 +70,14 @@ func MintProvisionToken(secret, vmID, tenant string, ttl time.Duration, now time
 		base64.RawURLEncoding.EncodeToString(signProvisionPayload(secret, payload))
 }
 
+// VerifyProvisionToken is the check resolveToken performs, exported for a build
+// that supplies its own Authenticator. The scheduler mints these credentials; a
+// front door that does not know them rejects every machine the scheduler boots,
+// which is not a security posture — it is an outage.
+func VerifyProvisionToken(secret, presented string, now time.Time) (Identity, bool) {
+	return verifyProvisionToken(secret, presented, now)
+}
+
 func signProvisionPayload(secret, payload string) []byte {
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(provisionTokenContext))
