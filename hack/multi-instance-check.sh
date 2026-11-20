@@ -164,7 +164,9 @@ done
 pass "resumed and completed"
 
 # `bc` is not installed on every runner; awk is.
-delivered=$(grep -ch "resume: delivered job job-mi-lost" "$LOG_A" "$LOG_B" | awk '{n+=$1} END {print n+0}')
+# grep -c exits 1 when a log has no match; under `set -e` that would abort
+# before the count is compared. `|| true` keeps the count.
+delivered=$( { grep -ch "resume: delivered job job-mi-lost" "$LOG_A" "$LOG_B" || true; } | awk '{n+=$1} END {print n+0}')
 [ "$delivered" = "1" ] || fail "delivered $delivered times across two instances, want exactly 1"
 pass "claimed by exactly one instance"
 
