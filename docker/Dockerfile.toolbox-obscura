@@ -3,7 +3,7 @@
 # Obscura (github.com/h4ckf0r0day/obscura, Apache-2.0) is a Rust headless browser
 # engine; `obscura mcp` exposes browser automation tools over the MCP stdio
 # transport, which the toolbox's MCP bridge spawns on demand from
-# /workspace/.sandrpod/mcp.json. The default config below registers it.
+# ~/.sandrpod/mcp.json. The default config below registers it.
 #
 # Base is debian (glibc): the official obscura release binaries are glibc builds
 # and the standard toolbox image is Alpine/musl, which cannot execute them. The
@@ -11,21 +11,47 @@
 FROM registry.sandbox.sandrpod.com/sandrpod/toolbox:latest AS toolbox
 
 FROM debian:bookworm-slim
+# fontconfig + Noto CJK: a bare debian-slim has no font covering Chinese,
+# Japanese or Korean, and every CJK page renders as tofu boxes — including the
+# labels inside form controls, whose default family is not the page's. The
+# fontconfig alias below makes Noto the fallback for the generic families, and
+# Obscura is pointed at the same files with --font-dir.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl bash \
-    && rm -rf /var/lib/apt/lists/*
+        ca-certificates curl bash fontconfig fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/* \
+    && printf '%s\n' \
+        '<?xml version="1.0"?>' \
+        '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">' \
+        '<fontconfig>' \
+        '  <alias><family>sans-serif</family><prefer>' \
+        '    <family>Noto Sans CJK SC</family><family>Noto Sans CJK TC</family>' \
+        '    <family>Noto Sans CJK JP</family><family>Noto Sans CJK KR</family>' \
+        '  </prefer></alias>' \
+        '  <alias><family>serif</family><prefer>' \
+        '    <family>Noto Serif CJK SC</family><family>Noto Serif CJK TC</family>' \
+        '    <family>Noto Serif CJK JP</family><family>Noto Serif CJK KR</family>' \
+        '  </prefer></alias>' \
+        '  <alias><family>monospace</family><prefer>' \
+        '    <family>Noto Sans Mono CJK SC</family><family>Noto Sans Mono CJK TC</family>' \
+        '  </prefer></alias>' \
+        '</fontconfig>' \
+        > /etc/fonts/conf.d/99-sandrpod-cjk.conf \
+    && fc-cache -f >/dev/null
 COPY --from=toolbox /app/toolbox /app/toolbox
 
 # Obscura v0.2.7 official release binaries
+#
+# The config belongs under $HOME/.sandrpod, not /workspace/.sandrpod: the
+# toolbox moves ~/.sandrpod onto the workspace volume at startup and re-reads
+# the default path through that link, so a config anywhere else is never read.
+# Baking it here also means the volume starts out with the server registered.
 ADD https://github.com/h4ckf0r0day/obscura/releases/download/v0.2.7/obscura-x86_64-linux.tar.gz /tmp/obscura.tar.gz
-RUN mkdir -p /usr/local/bin /workspace/.sandrpod \
+RUN mkdir -p /usr/local/bin /root/.sandrpod \
  && tar xzf /tmp/obscura.tar.gz -C /usr/local/bin \
  && chmod +x /usr/local/bin/obscura /usr/local/bin/obscura-worker \
  && rm -f /tmp/obscura.tar.gz \
- && printf '{"mcpServers":{"obscura":{"command":"/usr/local/bin/obscura","args":["mcp"]}}}\n' \
-      > /workspace/.sandrpod/mcp.json
-
-ENV SANDRPOD_MCP_CONFIG=/workspace/.sandrpod/mcp.json
+ && printf '{"mcpServers":{"obscura":{"command":"/usr/local/bin/obscura","args":["mcp","--font-dir","/usr/share/fonts/opentype/noto"]}}}\n' \
+      > /root/.sandrpod/mcp.json
 WORKDIR /workspace
 EXPOSE 8080
 ENTRYPOINT ["/app/toolbox"]

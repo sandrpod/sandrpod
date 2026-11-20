@@ -68,8 +68,27 @@ obscura-x86_64-linux-stealth.tar.gz   # 镜像内烘焙的就是它
 - 基座 `debian:bookworm-slim` —— 官方 obscura 二进制是 glibc 构建，而标准
   toolbox 镜像是 Alpine/musl，无法执行；
 - toolbox 二进制是 CGO-free 的静态构建，跨基座搬移无损；
-- 默认 `mcp.json` 烘焙在 `/root/.sandrpod/mcp.json`（MCP bridge 读取的路径），
-  开机时的 workspace 搬移逻辑会把它保留到数据卷上，跨镜像升级不丢。
+- 默认 `mcp.json` 烘焙在 `/root/.sandrpod/mcp.json`——bridge 的默认路径。它必须
+  放在 `$HOME` 下：toolbox 启动时会把 `~/.sandrpod` 搬到
+  `/workspace/.home/.sandrpod` 再经这个链接读配置，所以放在
+  `/workspace/.sandrpod/mcp.json` 的文件根本不会被读到。烘焙在 home 路径下
+  还能让数据卷首次启动时直接从镜像播种；
+- 预装 `fontconfig` + `fonts-noto-cjk`，并把 Noto CJK 设为通用族的兜底
+  （`/etc/fonts/conf.d/99-sandrpod-cjk.conf`）；烘焙的 `mcp.json` 带
+  `--font-dir /usr/share/fonts/opentype/noto`。debian-slim 基座本身没有任何
+  CJK 字体，而表单控件（`<input type=submit>`）的文字用的是与页面不同的默认
+  字体族，只装字体不配兜底的话，按钮里的中文仍然是方框。
+
+## 已知限制：原生表单控件里的文字
+
+装上上面的字体后，正文的中文能正常渲染；但 **`<input>` 的 value**（submit/
+reset/text）由 `crates/obscura-render/src/paint.rs` 里的 `draw_text` 绘制，它只用
+Obscura **内置的拉丁字体**做字形，没有逐字形回退——所以 `Google 搜尋` /
+`好手氣` 这类按钮里的中文，无论装什么字体、加不加 `--font-dir` 都是方框。
+`<button>` 的文字和普通正文不受影响。这是上游
+[issue #606](https://github.com/h4ckf0r0day/obscura/issues/606)（未修复，
+PR #991 是尚未合并的补丁）。绕行办法：自己控制的页面用 `<button>` 代替
+`<input type=submit>`；需要按钮文案保真时用桌面档位（真 Chrome）。
 
 ## 备注
 

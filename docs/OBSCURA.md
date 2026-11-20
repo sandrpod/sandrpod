@@ -69,8 +69,30 @@ block by **IP reputation**, which no browser fingerprint change fixes. Options:
 - base `debian:bookworm-slim` — the official obscura binaries are glibc builds and
   the standard toolbox image is Alpine/musl, which cannot execute them;
 - the toolbox binary is CGO-free and static, so it moves over unchanged;
-- the default `mcp.json` is baked at `/root/.sandrpod/mcp.json` (the path the MCP
-  bridge reads); the workspace-volume boot logic then keeps it across rebuilds.
+- the default `mcp.json` is baked at `/root/.sandrpod/mcp.json` — the bridge's
+  default path. It must live under `$HOME`: at startup the toolbox moves
+  `~/.sandrpod` onto `/workspace/.home/.sandrpod` and reads the config through
+  that link, so a file at `/workspace/.sandrpod/mcp.json` is never read. Baking
+  it at the home path also seeds the volume on first boot;
+- `fontconfig` and `fonts-noto-cjk` are installed, Noto CJK is the fallback for
+  the generic families (`/etc/fonts/conf.d/99-sandrpod-cjk.conf`), and the baked
+  `mcp.json` passes `--font-dir /usr/share/fonts/opentype/noto`. A base
+  `debian-slim` has no CJK font at all, and the text inside form controls
+  (`<input type=submit>`) uses a different default family than the page, so it
+  stays tofu unless the fallback is configured too.
+
+## Known limitation: text inside native form controls
+
+Paragraph text renders CJK once the fonts above are present, but the **value of
+an `<input>`** (submit/reset/text) is painted by `draw_text` in
+`crates/obscura-render/src/paint.rs`, which shapes only with Obscura's *bundled*
+Latin faces and does no per-glyph fallback — so `Google 搜尋` / `好手氣` style
+buttons stay tofu no matter which fonts are installed, `--font-dir` included.
+`<button>` text and normal text are unaffected. This is upstream
+[issue #606](https://github.com/h4ckf0r0day/obscura/issues/606) (open; PR #991
+is the unmerged fix). Workarounds: use `<button>` instead of `<input
+type=submit>` on pages you control, or use the desktop tier (real Chrome) when
+control-label fidelity matters.
 
 ## Notes
 
