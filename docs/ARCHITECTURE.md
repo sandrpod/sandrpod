@@ -1,6 +1,6 @@
 # SandrPod Architecture
 
-> **Version**: v0.13.2
+> **Version**: v0.13.3
 > **Updated**: 2026-11
 > 中文版：[ARCHITECTURE.zh.md](ARCHITECTURE.zh.md)
 >

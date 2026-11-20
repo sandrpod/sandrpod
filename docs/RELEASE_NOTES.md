@@ -3,7 +3,15 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.13.2 (current)
+## 0.13.3 (current)
+
+Exports `server.VerifyProvisionToken` so an embedding build that supplies its own
+`Config.Authenticator` can accept the credential the scheduler mints for a
+provisioned VM. That front door never runs the built-in token scheme, so without
+the exported check it rejected every machine the scheduler booted. No behaviour
+change for a server using the built-in authenticator.
+
+## 0.13.2
 
 Two fixes that matter more than their size. Provisioned VMs no longer receive
 the platform token: the scheduler mints a per-VM credential (worker role, scoped

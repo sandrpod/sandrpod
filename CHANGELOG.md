@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.13.3] - 2026-11-20
+
+### Fixed
+
+- **An embedding build could not accept a provision token.** `VerifyProvisionToken`
+  is exported so a program that supplies its own `Config.Authenticator` — the
+  hosted product does — can resolve the per-VM credential the scheduler mints.
+  Without it, that front door rejected every provisioned worker's handshake.
+
 ## [0.13.2] - 2026-11-20
 
 ### Fixed
