@@ -976,6 +976,12 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					http.Error(w, err.Error(), http.StatusBadRequest)
 					return
 				}
+				// Persistence is the default on the scheduled path; the pinned
+				// path (the console always pins the chosen node) must apply the
+				// same rule or a stop/start loses /workspace.
+				if os.Getenv("SANDRPOD_SANDBOX_PERSIST") != "false" {
+					req.PersistData = true
+				}
 				// This pinned-create path predates tenant-scoped names and used
 				// to keep the display name as the routing key. That made a name
 				// collision across workspaces possible here even though the
