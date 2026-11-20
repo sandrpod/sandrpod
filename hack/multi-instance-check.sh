@@ -144,10 +144,14 @@ echo "$out" | grep -q "mi-check-ok" || fail "execute through B: $out"
 pass "forwarded to A and ran"
 
 info "outbox: a delivery that never happened is resumed, exactly once"
+# A *new* routing key with no sandbox record: if it reused the running sandbox
+# above, the resumer would see RUNNING and mark the job complete without
+# delivering, which is not the path this check exists for.
+LOST_ID="sb-mi-lost-$$"
 psql "$DSN" -c "
 INSERT INTO jobs (id, type, status, sandbox_name, poder_id, request, created_at, updated_at)
-VALUES ('job-mi-lost', 'CREATE_SANDBOX', 'PENDING', '$ROUTING_ID', '$PODER_ID',
-        '{\"name\":\"$ROUTING_ID\",\"provider_type\":\"local\"}',
+VALUES ('job-mi-lost', 'CREATE_SANDBOX', 'PENDING', '$LOST_ID', '$PODER_ID',
+        '{\"name\":\"$LOST_ID\",\"provider_type\":\"local\"}',
         to_char((now() at time zone 'utc') - interval '3 minutes','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
         to_char((now() at time zone 'utc') - interval '3 minutes','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'))" >/dev/null
 pass "planted a PENDING job that was never delivered"
