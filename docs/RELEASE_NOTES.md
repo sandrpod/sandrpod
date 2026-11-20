@@ -3,7 +3,24 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.13.1 (current)
+## 0.13.2 (current)
+
+Two fixes that matter more than their size. Provisioned VMs no longer receive
+the platform token: the scheduler mints a per-VM credential (worker role, scoped
+to the requesting tenant, signed with the platform secret) so a machine it booted
+cannot administer the fleet, and the SSH/run-command hop that delivers it leaks
+at worst that one worker's credential. And the outbox claim now compares the
+timestamp a row actually carries: a job written by anything other than this
+process (an import, an operator's `psql`, an older build) spells the same instant
+differently, which made its claim match zero rows and left the delivery PENDING
+forever with nothing in the log.
+
+The multi-instance check runs its resumer on a 2 s tick
+(`SANDRPOD_RESUME_STALE_AFTER` / `SANDRPOD_RESUME_INTERVAL`) so it tests the
+logic instead of racing the production cadence. No schema change; workers do not
+need to move to use either fix, but upgrading them keeps versions aligned.
+
+## 0.13.1
 
 Fixes the pinned-create path used by the console: it now sets
 `persist_data` by default, so a desktop sandbox keeps `/workspace` across

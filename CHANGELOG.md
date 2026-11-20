@@ -6,7 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
-## [Unreleased]
+## [0.13.2] - 2026-11-20
+
+### Fixed
+
+- **The outbox could not resume a job it did not write.** The resume claim is a
+  compare-and-swap on `updated_at` stored as text; it re-formatted the instant it
+  read, which is only the same string when this process wrote the row. A job from
+  an import, an operator's `psql` or an older build spelled the same instant
+  differently (`…40.813130Z` vs `…40.81313Z`), the claim matched zero rows, and
+  the delivery stayed PENDING forever with nothing in the log. The claim now uses
+  the spelling the store holds (`Job.UpdatedAtRaw` / `RawTimeClaimer`), and the
+  SQL store reads the column through `updated_at||''` so the SQLite driver stops
+  re-rendering it. Regression tests on both backends.
+- `ResumeStaleAfter` / `ResumeInterval` are overridable
+  (`SANDRPOD_RESUME_STALE_AFTER` / `SANDRPOD_RESUME_INTERVAL`); the
+  multi-instance check uses a 2 s tick instead of racing the production cadence.
 
 ### Security
 

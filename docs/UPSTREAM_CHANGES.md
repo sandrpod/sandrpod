@@ -231,7 +231,7 @@ diff <(server-old -help 2>&1 | grep -oE '^\s+-[a-z-]+') \
      <(server-new -help 2>&1 | grep -oE '^\s+-[a-z-]+')
 
 # 2. Version stamping still works
-docker run --rm ghcr.io/sandrpod/server:v0.13.1 -version
+docker run --rm ghcr.io/sandrpod/server:v0.13.2 -version
 
 # 3. Unknown readings are negative, not 0.5
 curl -s -H "X-Sandrpod-Token: $TOKEN" http://localhost:8080/api/v1/poders \
