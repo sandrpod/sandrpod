@@ -1,6 +1,6 @@
 # gVisor runtime support
 
-> **Status**: shipped in v0.13.0 (2026-11-20), opt-in. The default runtime is
+> **Status**: shipped in v0.13.1 (2026-11-20), opt-in. The default runtime is
 > still Docker's `runc`. The API field and CLI flag are part of this release.
 >
 > gVisor puts a user-space kernel (the Sentry) between the sandbox and the host

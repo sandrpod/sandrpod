@@ -26,7 +26,7 @@ Verify:
 
 ```bash
 curl -s localhost:8080/health
-# {"mode":"control-plane+tunnel","status":"ok","version":"0.13.0", ...}
+# {"mode":"control-plane+tunnel","status":"ok","version":"0.13.1", ...}
 ```
 
 ## 2. A sandbox, then code

@@ -1,7 +1,7 @@
 # Upgrade breaks by release
 
 A release review needs three answers per change: **what breaks**, **who breaks**,
-and **how to roll back**. The current release is **v0.13.0**; the running list is
+and **how to roll back**. The current release is **v0.13.1**; the running list is
 [CHANGELOG.md](../CHANGELOG.md). The first section covers everything since
 v0.8.0, the second preserves the detailed v0.6.0 → v0.7.0 review.
 
@@ -231,7 +231,7 @@ diff <(server-old -help 2>&1 | grep -oE '^\s+-[a-z-]+') \
      <(server-new -help 2>&1 | grep -oE '^\s+-[a-z-]+')
 
 # 2. Version stamping still works
-docker run --rm ghcr.io/sandrpod/server:v0.13.0 -version
+docker run --rm ghcr.io/sandrpod/server:v0.13.1 -version
 
 # 3. Unknown readings are negative, not 0.5
 curl -s -H "X-Sandrpod-Token: $TOKEN" http://localhost:8080/api/v1/poders \

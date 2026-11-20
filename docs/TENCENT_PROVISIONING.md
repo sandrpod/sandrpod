@@ -118,8 +118,8 @@ mainland-China CVMs is often slow or unreliable** — strongly prefer **Tencent
 Container Registry (TCR)**:
 
 ```bash
-SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.13.0
-SANDRPOD_TOOLBOX_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/toolbox:v0.13.0
+SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.13.1
+SANDRPOD_TOOLBOX_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/toolbox:v0.13.1
 ```
 
 Private TCR repos need the VM to `docker login`; the current bootstrap does not,
@@ -155,8 +155,8 @@ export TENCENTCLOUD_SECRET_ID=AKID...
 export TENCENTCLOUD_SECRET_KEY=...
 export TENCENTCLOUD_REGION=ap-guangzhou
 export TENCENTCLOUD_ZONE=ap-guangzhou-3
-export SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.13.0
-export SANDRPOD_TOOLBOX_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/toolbox:v0.13.0
+export SANDRPOD_PODER_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/poder:v0.13.1
+export SANDRPOD_TOOLBOX_IMAGE_TENCENT=ccr.ccs.tencentyun.com/<ns>/toolbox:v0.13.1
 
 go run ./cmd/server -port 8080 -public-url https://api.example.com \
   -db sqlite:./data/sandrpod.db -token "$SANDRPOD_TOKEN"

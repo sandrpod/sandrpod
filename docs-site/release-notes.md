@@ -5,6 +5,14 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.1
+
+Fixes persistence on the pinned-create path used by the console.
+
+| Area | What changed |
+|---|---|
+| Persistence | a create that pins a worker now sets `persist_data` by default, as the scheduled path already did; stopping and starting a desktop sandbox no longer loses `/workspace` |
+
 ## 0.13.0
 
 The first release with an **opt-in gVisor runtime**.

@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.13.1] - 2026-11-20
+
+### Fixed
+
+- **Pinned creates persist `/workspace` by default.** The console always pins the
+  chosen worker; that path skipped `PersistData=true`, so stopping a desktop
+  sandbox lost its workspace. It now follows the same default as the scheduled
+  path (`SANDRPOD_SANDBOX_PERSIST=false` still opts out).
+
 ## [0.13.0] - 2026-11-20
 
 ### Added

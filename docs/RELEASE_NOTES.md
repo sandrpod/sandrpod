@@ -3,7 +3,14 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.13.0 (current)
+## 0.13.1 (current)
+
+Fixes the pinned-create path used by the console: it now sets
+`persist_data` by default, so a desktop sandbox keeps `/workspace` across
+stop/start. `sandrpod-cli` stays at 0.7.3.
+
+## 0.13.0
+
 
 The first release with an **opt-in gVisor runtime**. `runtime: "gvisor"` on a
 create (CLI `--runtime gvisor`) runs the sandbox under `runsc` on a worker whose
