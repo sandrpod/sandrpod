@@ -119,8 +119,12 @@ code=$(curl -s -o "$WORK/create.json" -w '%{http_code}' -X POST "http://127.0.0.
   -H "X-Sandrpod-Token: $TOKEN" -H 'Content-Type: application/json' \
   -d '{"name":"mi-check-box","provider_type":"local","async":true}')
 [ "$code" = "202" ] || fail "create on B answered $code ($(cat "$WORK/create.json"))"
+# Display names are workspace-scoped; the `name` column is the routing id
+# (sb-<hex>) since v0.11. Resolve it once and use it for DB assertions.
+ROUTING_ID=$(psql_run "select name from sandboxes where display_name='mi-check-box' limit 1")
+[ -n "$ROUTING_ID" ] || fail "the create left no sandbox row (see $LOG_A $LOG_B)"
 for _ in $(seq 1 60); do
-  state=$(psql_run "select state from sandboxes where name='mi-check-box'")
+  state=$(psql_run "select state from sandboxes where name='$ROUTING_ID'")
   [ "$state" = "RUNNING" ] && break
   sleep 2
 done
@@ -142,8 +146,8 @@ pass "forwarded to A and ran"
 info "outbox: a delivery that never happened is resumed, exactly once"
 psql "$DSN" -c "
 INSERT INTO jobs (id, type, status, sandbox_name, poder_id, request, created_at, updated_at)
-VALUES ('job-mi-lost', 'CREATE_SANDBOX', 'PENDING', 'mi-lost-box', '$PODER_ID',
-        '{\"name\":\"mi-lost-box\",\"provider_type\":\"local\"}',
+VALUES ('job-mi-lost', 'CREATE_SANDBOX', 'PENDING', '$ROUTING_ID', '$PODER_ID',
+        '{\"name\":\"$ROUTING_ID\",\"provider_type\":\"local\"}',
         to_char((now() at time zone 'utc') - interval '3 minutes','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
         to_char((now() at time zone 'utc') - interval '3 minutes','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'))" >/dev/null
 pass "planted a PENDING job that was never delivered"
