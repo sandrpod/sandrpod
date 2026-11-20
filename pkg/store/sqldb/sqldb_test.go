@@ -712,3 +712,50 @@ func TestSandboxRepo_TenantScopedNames(t *testing.T) {
 		t.Fatal("a duplicate display name in one workspace was accepted")
 	}
 }
+
+// A row read back must be claimable with the spelling it was read with: the
+// claim is a compare-and-swap on the stored text, so handing it a re-formatting
+// of the same instant is a different value. SQLite's driver normalises the
+// column, so the failure mode only shows up on Postgres — that case lives in
+// pg_test.go; here we pin the round-trip and the exactly-once guarantee.
+func TestJobRepo_ClaimJobRaw_ClaimsTheRowItRead(t *testing.T) {
+	db, err := sqldb.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	defer db.Close()
+	repo := sqldb.NewJobRepo(db)
+
+	if _, err := db.Exec(
+		`INSERT INTO jobs (id, type, status, sandbox_name, request, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"raw-job", "CREATE_SANDBOX", "PENDING", "sb-raw", "{}",
+		"2026-11-20T07:46:40.813130Z", "2026-11-20T07:46:40.813130Z",
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	job, ok := repo.GetJob("raw-job")
+	if !ok {
+		t.Fatal("the row did not read back")
+	}
+	if job.UpdatedAtRaw == "" {
+		t.Fatal("UpdatedAtRaw is empty: the store must keep the timestamp it read")
+	}
+
+	raw, ok := interface{}(repo).(sandpod.RawTimeClaimer)
+	if !ok {
+		t.Fatal("the SQL store must implement RawTimeClaimer")
+	}
+	claimed, err := raw.ClaimJobRaw("raw-job", job.UpdatedAtRaw, time.Now())
+	if err != nil {
+		t.Fatalf("ClaimJobRaw: %v", err)
+	}
+	if !claimed {
+		t.Fatal("the row's own spelling was refused — the outbox would skip it forever")
+	}
+	// Exactly once: the successful claim moved the timestamp.
+	if claimed, _ := raw.ClaimJobRaw("raw-job", job.UpdatedAtRaw, time.Now()); claimed {
+		t.Fatal("a second claim on the same timestamp succeeded")
+	}
+}

@@ -84,8 +84,17 @@ for p in "$PORT_A" "$PORT_B"; do
     fail "port $p already answers /health — a stale instance would be tested instead of this build (pkill -f -- \"-port $p\")"
   fi
 done
-"$WORK/server" -port "$PORT_A" -db "$DSN" -token "$TOKEN" -node-url "http://127.0.0.1:$PORT_A" >"$LOG_A" 2>&1 &
-"$WORK/server" -port "$PORT_B" -db "$DSN" -token "$TOKEN" -node-url "http://127.0.0.1:$PORT_B" >"$LOG_B" 2>&1 &
+# The resumer cadence is production-tuned (45 s stale, 20 s tick) because a lost
+# delivery should recover while a human is watching. The outbox check below has to
+# observe that recovery inside a CI timeout, so both instances run the same logic
+# on a fast clock: the point is that a PENDING row is picked up and delivered,
+# not that it takes a minute to notice.
+SANDRPOD_RESUME_STALE_AFTER="${SANDRPOD_RESUME_STALE_AFTER:-5s}" \
+SANDRPOD_RESUME_INTERVAL="${SANDRPOD_RESUME_INTERVAL:-2s}" \
+  "$WORK/server" -port "$PORT_A" -db "$DSN" -token "$TOKEN" -node-url "http://127.0.0.1:$PORT_A" >"$LOG_A" 2>&1 &
+SANDRPOD_RESUME_STALE_AFTER="${SANDRPOD_RESUME_STALE_AFTER:-5s}" \
+SANDRPOD_RESUME_INTERVAL="${SANDRPOD_RESUME_INTERVAL:-2s}" \
+  "$WORK/server" -port "$PORT_B" -db "$DSN" -token "$TOKEN" -node-url "http://127.0.0.1:$PORT_B" >"$LOG_B" 2>&1 &
 for p in "$PORT_A" "$PORT_B"; do
   for _ in $(seq 1 40); do
     curl -fsS -o /dev/null "http://127.0.0.1:$p/health" 2>/dev/null && break
@@ -156,15 +165,16 @@ VALUES ('job-mi-lost', 'CREATE_SANDBOX', 'PENDING', '$LOST_ID', '$PODER_ID',
         to_char((now() at time zone 'utc') - interval '3 minutes','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'))" >/dev/null
 pass "planted a PENDING job that was never delivered"
 
-# The resumer ticks on an interval and the row has to age past ResumeStaleAfter
-# first, so this is a race against the clock rather than a logic check: give it a
-# generous window (2 minutes) instead of failing on a slow runner.
+# The instances run the resumer on a 2 s tick with a 5 s stale window (set above),
+# so this is about the logic now: the row is stale on the first pass, one instance
+# claims it, and the delivery completes the job. The window is still generous for a
+# loaded runner, but it is no longer a race against the production cadence.
 for _ in $(seq 1 60); do
   status=$(psql_run "select status from jobs where id='job-mi-lost'")
   [ "$status" = "COMPLETED" ] && break
   sleep 2
 done
-[ "$status" = "COMPLETED" ] || fail "the resumer never completed the job (status: ${status:-none})"
+[ "$status" = "COMPLETED" ] || fail "the resumer never completed the job (status: ${status:-none}); resumer log: $(grep -h 'resume:' "$LOG_A" "$LOG_B" 2>/dev/null | tail -5)"
 pass "resumed and completed"
 
 # `bc` is not installed on every runner; awk is.

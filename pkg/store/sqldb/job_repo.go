@@ -161,9 +161,15 @@ func (r *jobRepo) ListJobs() []*sandpod.Job {
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
+// updated_at is read through ||” so the value arrives with the spelling it was
+// stored with. The SQLite driver parses a DATETIME column into a Go time.Time
+// before handing it to a string scan and re-renders it, which silently rewrites
+// "…40.813130Z" to "…40.81313Z"; the optimistic claim compares the stored text, so
+// a normalised copy is a value the row does not have. Postgres keeps TEXT as is and
+// is unaffected by the concatenation.
 const jobColumns = `id, type, status, sandbox_name, sandbox_id, region, provider_type,
     poder_id, poder_url, vm_id, instance_type, image_id, command, language,
-    result, error_message, request, trace_context, owner, created_at, updated_at`
+    result, error_message, request, trace_context, owner, created_at, updated_at||''`
 
 func (r *jobRepo) getByID(id string) (*sandpod.Job, bool, error) {
 	row := r.db.QueryRow(`SELECT `+jobColumns+` FROM jobs WHERE id=?`, id)
@@ -248,6 +254,9 @@ func scanJob(row *sql.Row) (*sandpod.Job, bool, error) {
 	json.Unmarshal([]byte(traceJSON), &j.TraceContext)
 	j.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdStr)
 	j.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedStr)
+	// Keep the spelling: an optimistic claim compares the stored text, and
+	// re-formatting it can produce a different string for the same instant.
+	j.UpdatedAtRaw = updatedStr
 	return &j, true, nil
 }
 
@@ -294,6 +303,24 @@ func scanJobs(rows *sql.Rows) []*sandpod.Job {
 // ClaimJob moves updated_at only if nobody else did since the caller read it. One
 // UPDATE, so the database does the arbitration — no locks held across a network
 // round-trip to a worker.
+// ClaimJobRaw is ClaimJob for rows whose timestamp may not be spelled the way Go
+// spells it. The rows the outbox exists for are exactly the ones where that is
+// possible — written by an earlier build, an import, or an operator's psql — and
+// a claim that never matches there is a silent dead letter.
+func (r *jobRepo) ClaimJobRaw(id, expectedRaw string, now time.Time) (bool, error) {
+	res, err := r.db.Exec(
+		`UPDATE jobs SET updated_at=? WHERE id=? AND updated_at=?`,
+		now.UTC().Format(time.RFC3339Nano), id, expectedRaw)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
 func (r *jobRepo) ClaimJob(id string, expected, now time.Time) (bool, error) {
 	res, err := r.db.Exec(
 		`UPDATE jobs SET updated_at=? WHERE id=? AND updated_at=?`,

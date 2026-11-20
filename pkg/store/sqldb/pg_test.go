@@ -121,3 +121,55 @@ func TestPostgres_JobConcurrentClaim(t *testing.T) {
 		}
 	}
 }
+
+// The outbox claim is a compare-and-swap on the stored text, and Postgres keeps
+// that text exactly as written. A row inserted by something other than this
+// process — an import, an operator's psql, an older build — spells the same
+// instant differently ("…40.813130Z" from to_char vs "…40.81313Z" from Go), and
+// the timestamp round-trip claim then never matches. The job sits PENDING, the
+// resumer says nothing, and the delivery it exists to save is lost. The raw claim
+// compares the spelling the row actually carries.
+func TestPostgres_ClaimJobRaw_AcceptsAForeignTimestampSpelling(t *testing.T) {
+	db := openPG(t)
+	repo := sqldb.NewJobRepo(db)
+
+	stored := "2026-11-20T07:46:40.813130Z"
+	if _, err := db.Exec(
+		`INSERT INTO jobs (id, type, status, sandbox_name, request, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		"foreign-job", "CREATE_SANDBOX", "PENDING", "sb-foreign", "{}", stored, stored,
+	); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	job, ok := repo.GetJob("foreign-job")
+	if !ok {
+		t.Fatal("the row did not read back")
+	}
+	if job.UpdatedAtRaw != stored {
+		t.Fatalf("UpdatedAtRaw = %q, want the stored spelling %q", job.UpdatedAtRaw, stored)
+	}
+
+	// Pinned: the round-trip claim cannot match, which is why the outbox skipped
+	// exactly the rows it exists for.
+	if claimed, err := repo.ClaimJob("foreign-job", job.UpdatedAt, time.Now()); err != nil {
+		t.Fatalf("ClaimJob: %v", err)
+	} else if claimed {
+		t.Fatal("the round-trip claim matched; this test no longer proves anything")
+	}
+
+	raw, ok := interface{}(repo).(sandpod.RawTimeClaimer)
+	if !ok {
+		t.Fatal("the SQL store must implement RawTimeClaimer")
+	}
+	claimed, err := raw.ClaimJobRaw("foreign-job", job.UpdatedAtRaw, time.Now())
+	if err != nil {
+		t.Fatalf("ClaimJobRaw: %v", err)
+	}
+	if !claimed {
+		t.Fatal("the row's own spelling was refused — the outbox would skip it forever")
+	}
+	if claimed, _ := raw.ClaimJobRaw("foreign-job", job.UpdatedAtRaw, time.Now()); claimed {
+		t.Fatal("a second claim on the same timestamp succeeded")
+	}
+}

@@ -55,6 +55,13 @@ type JobRepository interface {
 	ClaimJob(id string, expected time.Time, now time.Time) (bool, error)
 }
 
+// RawTimeClaimer is what a store that keeps timestamps as text implements, so a
+// claim can compare the row's own spelling instead of a re-formatting of it.
+// Optional: a store with real time columns has no such problem.
+type RawTimeClaimer interface {
+	ClaimJobRaw(id string, expectedRaw string, now time.Time) (bool, error)
+}
+
 // Stores groups the repositories for dependency injection into handlers and the
 // scheduler.
 type Stores struct {

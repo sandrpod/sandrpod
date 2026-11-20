@@ -39,18 +39,23 @@ func jobRoutingKey(j *podpkg.Job) string {
 	return j.SandboxName
 }
 
-const (
+var (
 	// ResumeStaleAfter is how long a job may sit PENDING before another attempt
 	// is made. Long enough that the in-flight delivery (2 min budget) usually
 	// wins the race, short enough that a lost create recovers while a human is
-	// still watching.
-	ResumeStaleAfter = 45 * time.Second
+	// still watching. `SANDRPOD_RESUME_STALE_AFTER` overrides it: the
+	// multi-instance check plants a lost delivery and has to watch it be picked
+	// up, and at the production cadence that wait is a race against CI timing
+	// rather than a test of the resumer.
+	ResumeStaleAfter = envDurationOr("SANDRPOD_RESUME_STALE_AFTER", 45*time.Second)
 	// ResumeInterval is how often the resumer looks.
-	ResumeInterval = 20 * time.Second
-	// ResumeMaxAttempts caps retries so a permanently broken request does not
-	// retry forever. Past it the job fails with the last reason.
-	ResumeMaxAttempts = 5
+	// `SANDRPOD_RESUME_INTERVAL` overrides it.
+	ResumeInterval = envDurationOr("SANDRPOD_RESUME_INTERVAL", 20*time.Second)
 )
+
+// ResumeMaxAttempts caps retries so a permanently broken request does not retry
+// forever. Past it the job fails with the last reason.
+const ResumeMaxAttempts = 5
 
 // resumeDeps is what the resumer needs. Passed explicitly so the decision logic
 // is testable without a database.
@@ -179,7 +184,7 @@ func resumeOnce(d resumeDeps) int {
 		// Claim before delivering. Every instance runs this pass over the same
 		// rows, and without a claim they would all send the same create — the
 		// promise is at-least-once, not "once per node".
-		claimed, err := d.jobs.ClaimJob(job.ID, job.UpdatedAt, now)
+		claimed, err := claimJob(d.jobs, job, now)
 		if err != nil || !claimed {
 			continue // someone else got there first, or is ahead of us
 		}
@@ -200,6 +205,20 @@ func resumeOnce(d resumeDeps) int {
 			job.ID, job.SandboxName, now.Sub(job.UpdatedAt).Truncate(time.Second))
 	}
 	return delivered
+}
+
+// claimJob is the compare-and-swap, done on the row's own timestamp spelling when
+// the store has one. Re-formatting a timestamp is not the identity function: the
+// same instant can be "…40.813130Z" (Postgres to_char) or "…40.81313Z" (Go), and
+// a claim that compares the wrong spelling never matches, so the job sits PENDING
+// forever with nothing in the log.
+func claimJob(jobs podpkg.JobRepository, job *podpkg.Job, now time.Time) (bool, error) {
+	if job.UpdatedAtRaw != "" {
+		if raw, ok := jobs.(podpkg.RawTimeClaimer); ok {
+			return raw.ClaimJobRaw(job.ID, job.UpdatedAtRaw, now)
+		}
+	}
+	return jobs.ClaimJob(job.ID, job.UpdatedAt, now)
 }
 
 // startResumer runs the pass on a timer for the life of the process.

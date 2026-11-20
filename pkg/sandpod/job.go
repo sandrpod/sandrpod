@@ -62,6 +62,14 @@ type Job struct {
 	TraceContext map[string]string `json:"trace_context,omitempty"`
 	CreatedAt    time.Time         `json:"created_at"`
 	UpdatedAt    time.Time         `json:"updated_at"`
+	// UpdatedAtRaw is UpdatedAt exactly as the store spells it, when the store
+	// keeps timestamps as text. ClaimJob's compare-and-swap compares that text,
+	// and a row this process did not write (an import, a psql INSERT, an older
+	// build) can spell the same instant differently: "…40.813130Z" from Postgres
+	// to_char vs "…40.81313Z" from Go. Handing the claim the spelling it read is
+	// what keeps such a row claimable — otherwise the outbox resumes nothing and
+	// says nothing.
+	UpdatedAtRaw string `json:"-"`
 }
 
 // JobResult holds the outcome of a completed job.
