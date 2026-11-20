@@ -163,7 +163,8 @@ done
 [ "$status" = "COMPLETED" ] || fail "the resumer never completed the job (status: ${status:-none})"
 pass "resumed and completed"
 
-delivered=$(grep -ch "resume: delivered job job-mi-lost" "$LOG_A" "$LOG_B" | paste -sd+ - | bc)
+# `bc` is not installed on every runner; awk is.
+delivered=$(grep -ch "resume: delivered job job-mi-lost" "$LOG_A" "$LOG_B" | awk '{n+=$1} END {print n+0}')
 [ "$delivered" = "1" ] || fail "delivered $delivered times across two instances, want exactly 1"
 pass "claimed by exactly one instance"
 
