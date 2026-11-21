@@ -18,10 +18,11 @@ sandrpod-cli create agent-01 --provider aliyun --region cn-hongkong \
 | 配置 | 阿里云 | AWS |
 |---|---|---|
 | 凭据 | `ALIYUN_ACCESS_KEY`、`ALIYUN_SECRET_KEY` | `AWS_ACCESS_KEY_ID`、`AWS_SECRET_ACCESS_KEY` |
-| 默认地域 | `ALIYUN_REGION` | 按请求传 |
+| 默认地域 | `ALIYUN_REGION` | `AWS_REGION` —— 一个部署一个地域；请求别的地域会被拒绝 |
 | 交换机 | `SANDRPOD_VM_SUBNET_ID_ALIYUN` | `SANDRPOD_VM_SUBNET_ID_AWS` |
 | 安全组 | `SANDRPOD_VM_SECURITY_GROUP_ALIYUN` | `SANDRPOD_VM_SECURITY_GROUP_AWS` |
-| 公网 IP | 默认开启；NAT 环境用 `SANDRPOD_VM_PUBLIC_IP_ALIYUN=false` | 同上 |
+| 公网 IP | 默认开启；NAT 环境用 `SANDRPOD_VM_PUBLIC_IP_ALIYUN=false` | 同上——AWS 上要公网 IP 必须有交换机，否则直接拒绝 |
+| 竞价 | `SANDRPOD_SPOT_ALIYUN`（`SpotAsPriceGo`） | `SANDRPOD_SPOT_AWS`（one-time，被回收即终止） |
 
 厂商只有注册成功后才会出现在 `/api/v1/capabilities` 里，控制台据此禁用其余选项 ——
 给客户一个服务器根本开不出来的选项，等于让他填完表单再失败。
@@ -92,3 +93,7 @@ sandrpod-cli delete canary
 
 一次创建是唯一能同时验证厂商接口、引导、隧道和容器的测试。**最后一行是大家最容易忘的，
 也是唯一花钱的那行。**
+
+AWS 上的启动默认加固：**强制 IMDSv2 且 hop limit 为 1**，宿主上的容器读不到实例角色
+凭据；每次 `RunInstances` 都带一个只属于这次调用的 `ClientToken`，重试不会变成第二台
+在计费的机器。

@@ -19,10 +19,11 @@ sandrpod-cli create agent-01 --provider aliyun --region cn-hongkong \
 | Piece | Aliyun | AWS |
 |---|---|---|
 | Credentials | `ALIYUN_ACCESS_KEY`, `ALIYUN_SECRET_KEY` | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` |
-| Region default | `ALIYUN_REGION` | — (per request) |
+| Region default | `ALIYUN_REGION` | `AWS_REGION` — one region per deployment; a create naming another is refused |
 | Subnet | `SANDRPOD_VM_SUBNET_ID_ALIYUN` | `SANDRPOD_VM_SUBNET_ID_AWS` |
 | Security group | `SANDRPOD_VM_SECURITY_GROUP_ALIYUN` | `SANDRPOD_VM_SECURITY_GROUP_AWS` |
-| Public IP | on by default; `SANDRPOD_VM_PUBLIC_IP_ALIYUN=false` for NAT | same |
+| Public IP | on by default; `SANDRPOD_VM_PUBLIC_IP_ALIYUN=false` for NAT | same — and a public IP needs a subnet on AWS, or the launch is refused |
+| Spot | `SANDRPOD_SPOT_ALIYUN` (`SpotAsPriceGo`) | `SANDRPOD_SPOT_AWS` (one-time, terminated when interrupted) |
 
 A provider only appears in `/api/v1/capabilities` once it registers, and the console
 disables the rest — offering a substrate the server cannot provision produces a form
@@ -102,3 +103,8 @@ sandrpod-cli delete canary
 A create is the only test that exercises the provider API, the bootstrap, the tunnel
 and the container together. The last line is the one people forget, and it is the one
 that costs money.
+
+On AWS the launch is hardened by default: **IMDSv2 is required with a hop limit
+of 1**, so a container on that host cannot read the instance role's credentials,
+and every `RunInstances` carries a per-call `ClientToken` so a retried request
+cannot become a second billing instance.

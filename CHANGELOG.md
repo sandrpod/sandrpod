@@ -6,6 +6,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [Unreleased]
+
+### Fixed
+
+- **AWS provider, eight findings from reading it against what the scheduler
+  assumes.** The SSM terminal-status mapping now treats only `Success` as
+  success (the exit code AWS attaches to a cancelled or timed-out invocation is
+  not something to rely on); a public IP without a subnet is refused up front
+  with the setting named, instead of letting AWS answer with a parameter error
+  that reads like a bug here; `RunInstances` carries a per-call `ClientToken`,
+  so an SDK retry cannot become a second billing instance; a create naming a
+  region other than `AWS_REGION` is refused instead of launching somewhere else
+  while the record says otherwise. Also: `SANDRPOD_SPOT_AWS` now actually
+  requests spot capacity (it was a silent no-op), instances launch with IMDSv2
+  required and a hop limit of 1 (sandboxes are containers on that host), deleting
+  an already-terminated instance is not an error, and only the "invocation not
+  registered yet" error is retried while polling SSM.
+
 ## [0.13.4] - 2026-11-21
 
 ### Security
