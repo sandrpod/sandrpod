@@ -5,6 +5,17 @@ description: 每个版本改了什么，其中哪些改动会破坏东西。
 
 # 发布说明
 
+## 0.13.4
+
+一次权限收窄、一个调度修复，以及竞价容量。
+
+| 领域 | 改了什么 |
+|---|---|
+| 安全 | worker 凭据只能用隧道握手、任务轮询、自身心跳、邀请换取凭据，以及 agent 直连的两个调用（capabilities、出网决策）；沙箱 API 由中间件按白名单拒绝 |
+| 调度 | 异步创建在 VM 启动期间是 `PROVISIONING`，resume pass 不再把几分钟的 provisioning 当作丢投递判死；被放弃的行 30 分钟后回收 |
+| 云 | 阿里云竞价实例，开关 `SANDRPOD_SPOT_ALIYUN`（`SpotAsPriceGo`）；默认关闭，按量付费不变 |
+| 运维 | `poder -version`；`deploy/prometheus/sandrpod-alerts.yml`，基于 `/metrics` 的五条告警 |
+
 ## 0.13.3
 
 为嵌入构建导出 `server.VerifyProvisionToken`。

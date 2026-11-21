@@ -5,6 +5,17 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.4
+
+A security narrowing, a scheduling fix, and spot capacity.
+
+| Area | What changed |
+|---|---|
+| Security | a worker credential may only use the tunnel handshake, the job poll, its own heartbeat, the enrolment exchange, and the two calls an agent makes directly (capabilities, egress decisions); the sandbox API is refused in the middleware from an explicit list |
+| Scheduling | an async create is `PROVISIONING` while a VM boots, so the resume pass no longer fails a multi-minute provisioning as a lost delivery; abandoned rows are reclaimed after 30 minutes |
+| Cloud | Aliyun spot behind `SANDRPOD_SPOT_ALIYUN` (`SpotAsPriceGo`); off by default, on-demand unchanged |
+| Ops | `poder -version`; `deploy/prometheus/sandrpod-alerts.yml` with five alerts built on `/metrics` |
+
 ## 0.13.3
 
 Exports `server.VerifyProvisionToken` for embedding builds.

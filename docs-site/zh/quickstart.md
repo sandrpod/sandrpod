@@ -26,7 +26,7 @@ worker 需要 Docker socket，控制面不需要别的。
 
 ```bash
 curl -s localhost:8080/health
-# {"mode":"control-plane+tunnel","status":"ok","version":"0.13.3", ...}
+# {"mode":"control-plane+tunnel","status":"ok","version":"0.13.4", ...}
 ```
 
 ## 二、建一个沙箱，然后跑代码
