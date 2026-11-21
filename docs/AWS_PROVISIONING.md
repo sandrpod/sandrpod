@@ -280,6 +280,7 @@ All set on the **API Server** process.
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | for static creds | (cred chain) | AWS API auth |
 | `AWS_REGION` | no | `us-east-1` | target region |
 | `SANDRPOD_SPOT_AWS` | no | off | request spot capacity (`one-time`, terminated when interrupted). On-demand is unchanged when unset |
+| `SANDRPOD_AWS_ALLOW_CLEANUP` | only for `Cleanup` | unset | `Cleanup` terminates **all** tagged instances in the region; it refuses unless this is `1` |
 | `SANDRPOD_VM_SUBNET_ID_AWS` | yes, when a public IP is requested | — | the subnet to launch into; a public IP rides on a network interface, and AWS rejects one without a subnet |
 | `AWS_IAM_INSTANCE_PROFILE` | **yes** | — | instance profile for SSM on VMs |
 | `SANDRPOD_VM_PUBLIC_IP` | no | `true` | assign a public IP to VMs |
@@ -393,7 +394,9 @@ sudo journalctl -u sandrpod-server -f      # watch provisioning
 
 - **No autoscaling.** Idle-VM reclamation is opt-in (`SANDRPOD_PODER_IDLE_TIMEOUT`; see [UPGRADING.md](UPGRADING.md)). One VM per "region has no Poder".
   Clean up VMs you no longer need (delete the sandbox/Poder; `Cleanup` terminates
-  VMs tagged `sandrpod=true`).
+  VMs tagged `sandrpod=true`). `Cleanup` sweeps **every** SandrPod instance in
+  the region regardless of workspace, so it refuses to run unless
+  `SANDRPOD_AWS_ALLOW_CLEANUP=1` is set.
 - **SSM-only bootstrap.** Requires the instance profile and a working SSM agent.
 - **Default AMI is Ubuntu 22.04 (Canonical).** Override per-request with
   `--image` / `ImageID`.
