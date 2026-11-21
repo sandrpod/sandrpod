@@ -5,6 +5,8 @@ package aws
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -145,6 +147,14 @@ func mapEC2ToVMInfo(instance types.Instance) *provider.VMInfo {
 
 // CreateVM creates a new EC2 VM instance
 func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMRequest) (*provider.VMInfo, error) {
+	// The EC2 and SSM clients are bound to the configured region, so a request
+	// naming another one would land in the wrong place while the sandbox record
+	// and the worker both claim the region that was asked for. Refuse the
+	// mismatch instead of creating something that is silently somewhere else.
+	if err := p.checkRegion(req.Region); err != nil {
+		return nil, err
+	}
+
 	// Resolve image ID. Fail loudly rather than falling back to a hard-coded
 	// AMI that is region-specific and likely deregistered.
 	imageID := req.ImageID
@@ -187,32 +197,33 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 		}
 	}
 
-	// Network configuration. A requested public IP MUST be set on a network
-	// interface, and AWS forbids combining top-level SubnetId/SecurityGroupIds
-	// with NetworkInterfaces — so in that case the subnet and security group
-	// move INTO the interface.
-	if nc := req.NetworkConfig; nc != nil {
-		if nc.PublicIP {
-			ni := types.InstanceNetworkInterfaceSpecification{
-				AssociatePublicIpAddress: aws.Bool(true),
-				DeviceIndex:              aws.Int32(0),
-			}
-			if nc.SubnetID != "" {
-				ni.SubnetId = aws.String(nc.SubnetID)
-			}
-			if nc.SecurityGroup != "" {
-				ni.Groups = []string{nc.SecurityGroup}
-			}
-			input.NetworkInterfaces = []types.InstanceNetworkInterfaceSpecification{ni}
-		} else {
-			if nc.SubnetID != "" {
-				input.SubnetId = aws.String(nc.SubnetID)
-			}
-			if nc.SecurityGroup != "" {
-				input.SecurityGroupIds = []string{nc.SecurityGroup}
-			}
+	// Network configuration, in one place so the rules are testable: a requested
+	// public IP has to ride on a network interface, AWS forbids combining
+	// top-level SubnetId/SecurityGroupIds with NetworkInterfaces, and an
+	// interface without a subnet is rejected by the API with a parameter error
+	// that reads like a bug in this code rather than a missing setting.
+	ni, subnetID, sgIDs, err := networkInput(req.NetworkConfig)
+	if err != nil {
+		return nil, err
+	}
+	if ni != nil {
+		input.NetworkInterfaces = []types.InstanceNetworkInterfaceSpecification{*ni}
+	} else {
+		if subnetID != "" {
+			input.SubnetId = aws.String(subnetID)
+		}
+		if sgIDs != nil {
+			input.SecurityGroupIds = sgIDs
 		}
 	}
+
+	// RunInstances is not idempotent, and the SDK retries transport failures on
+	// its own: a request that succeeded but whose response was lost would come
+	// back as a second instance, billing alongside the first with no record
+	// pointing at it. A token fixed for this call makes the retry the same
+	// request; a later create gets a new one, so re-creating a sandbox is not
+	// deduplicated against yesterday's instance.
+	input.ClientToken = aws.String(newClientToken())
 
 	// Disk configuration
 	if req.DiskConfig != nil && req.DiskConfig.SizeGiB > 0 {
@@ -427,13 +438,37 @@ func (p *AWSProvider) ExecuteCommand(ctx context.Context, vmID, command string) 
 			continue
 		}
 
-		// Terminal state — ResponseCode is the command's real exit code.
+		return commandResult(inv, commandID), nil
+	}
+}
+
+// commandResult turns a terminal SSM invocation into what the scheduler reads.
+//
+// Only Success carries a real exit code. TimedOut and Cancelled invocations have
+// none — their ResponseCode is 0 or absent — and returning that unchanged made a
+// machine that never finished `apt-get install docker` look like it had exit 0.
+// The scheduler then started the Poder on it and surfaced the failure three
+// steps later, as something unrelated.
+func commandResult(inv *ssm.GetCommandInvocationOutput, commandID string) *provider.CommandResult {
+	out := strings.TrimSpace(aws.ToString(inv.StandardOutputContent))
+	stderr := strings.TrimSpace(aws.ToString(inv.StandardErrorContent))
+	if inv.Status == ssmtypes.CommandInvocationStatusSuccess {
 		return &provider.CommandResult{
-			Output:     strings.TrimSpace(aws.ToString(inv.StandardOutputContent)),
-			Stderr:     strings.TrimSpace(aws.ToString(inv.StandardErrorContent)),
+			Output:     out,
+			Stderr:     stderr,
 			ExitCode:   int(inv.ResponseCode),
 			ExecutedAt: time.Now(),
-		}, nil
+		}
+	}
+	msg := fmt.Sprintf("ssm invocation %s ended with status %s", commandID, inv.Status)
+	if stderr != "" {
+		msg += ": " + stderr
+	}
+	return &provider.CommandResult{
+		Output:     out,
+		Stderr:     msg,
+		ExitCode:   -1,
+		ExecutedAt: time.Now(),
 	}
 }
 
@@ -542,4 +577,58 @@ func (p *AWSProvider) Cleanup(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// checkRegion refuses a request whose region is not the one this provider's
+// clients are bound to. Empty means "the configured one".
+func (p *AWSProvider) checkRegion(region string) error {
+	if region == "" || p.region == "" || region == p.region {
+		return nil
+	}
+	return fmt.Errorf("provider \"aws\" is configured for region %q but the request names %q: "+
+		"one provider instance serves one region (set AWS_REGION, or run another control plane per region)",
+		p.region, region)
+}
+
+// networkInput decides where the subnet and security group go, and refuses the
+// combination AWS will reject anyway.
+func networkInput(nc *provider.NetworkConfig) (ni *types.InstanceNetworkInterfaceSpecification,
+	subnetID string, sgIDs []string, err error) {
+	if nc == nil {
+		return nil, "", nil, nil
+	}
+	if !nc.PublicIP {
+		return nil, nc.SubnetID, optionalGroups(nc.SecurityGroup), nil
+	}
+	if nc.SubnetID == "" {
+		return nil, "", nil, fmt.Errorf("provider \"aws\" cannot attach a public IP without a subnet: " +
+			"set SANDRPOD_VM_SUBNET_ID_AWS (or the unscoped SANDRPOD_VM_SUBNET_ID) to the subnet to launch into")
+	}
+	spec := &types.InstanceNetworkInterfaceSpecification{
+		AssociatePublicIpAddress: aws.Bool(true),
+		DeviceIndex:              aws.Int32(0),
+		SubnetId:                 aws.String(nc.SubnetID),
+	}
+	if nc.SecurityGroup != "" {
+		spec.Groups = []string{nc.SecurityGroup}
+	}
+	return spec, "", nil, nil
+}
+
+func optionalGroups(sg string) []string {
+	if sg == "" {
+		return nil
+	}
+	return []string{sg}
+}
+
+// newClientToken is an idempotency token for one RunInstances call: random, so
+// two creates never collide, and stable across the SDK's retries of this call.
+func newClientToken() string {
+	var b [16]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// A token is a nicety, not a correctness gate for the create itself.
+		return fmt.Sprintf("sandrpod-%d", time.Now().UnixNano())
+	}
+	return "sandrpod-" + hex.EncodeToString(b[:])
 }
