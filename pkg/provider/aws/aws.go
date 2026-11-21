@@ -189,6 +189,10 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 		},
 	}
 
+	// Spot capacity (when asked for) and IMDSv2-only metadata: both are
+	// properties of the launch, not of the network setup below.
+	applyLaunchOptions(input, req)
+
 	// IAM instance profile so the instance becomes SSM-managed (required by
 	// ExecuteCommand). Without it, SSM SendCommand has no target to run on.
 	if p.iamInstanceProfile != "" {
@@ -293,7 +297,10 @@ func (p *AWSProvider) DeleteVM(ctx context.Context, vmID string) error {
 	_, err := p.ec2Client.TerminateInstances(ctx, &ec2.TerminateInstancesInput{
 		InstanceIds: []string{vmID},
 	})
-	if err != nil {
+	// Already gone is the outcome the caller wanted. Reporting it as a failure
+	// made orphan cleanup say "left running, terminate it by hand" about a
+	// machine that no longer exists.
+	if err != nil && !isNotFound(err) {
 		return fmt.Errorf("failed to terminate instance: %w", err)
 	}
 
@@ -427,7 +434,13 @@ func (p *AWSProvider) ExecuteCommand(ctx context.Context, vmID, command string) 
 		})
 		if err != nil {
 			// The invocation may not be registered for a moment right after
-			// SendCommand; keep polling until the deadline.
+			// SendCommand — that one is worth polling through. Anything else
+			// (AccessDenied, throttling, a bad instance id) used to be swallowed
+			// the same way and surfaced as "did not finish before timeout", which
+			// sends the reader to the wrong place entirely.
+			if !isInvocationNotReady(err) {
+				return nil, fmt.Errorf("command %s on %s: %w", commandID, vmID, err)
+			}
 			continue
 		}
 
@@ -631,4 +644,52 @@ func newClientToken() string {
 		return fmt.Sprintf("sandrpod-%d", time.Now().UnixNano())
 	}
 	return "sandrpod-" + hex.EncodeToString(b[:])
+}
+
+// applyLaunchOptions sets what the launch itself should carry: spot capacity when
+// asked for, and IMDSv2-only metadata.
+//
+// The metadata setting is not incidental. Sandboxes run as containers on this
+// machine, and anything that can reach 169.254.169.254 can read the instance
+// role's credentials; requiring IMDSv2 (a token the agent obtains with a PUT)
+// plus a hop limit of 1 keeps a container from doing it without a proxy.
+func applyLaunchOptions(input *ec2.RunInstancesInput, req *provider.CreateVMRequest) {
+	if req.Spot {
+		input.InstanceMarketOptions = &types.InstanceMarketOptionsRequest{
+			MarketType: types.MarketTypeSpot,
+			SpotOptions: &types.SpotMarketOptions{
+				SpotInstanceType:             types.SpotInstanceTypeOneTime,
+				InstanceInterruptionBehavior: types.InstanceInterruptionBehaviorTerminate,
+			},
+		}
+	}
+	input.MetadataOptions = &types.InstanceMetadataOptionsRequest{
+		HttpTokens:              types.HttpTokensStateRequired,
+		HttpPutResponseHopLimit: aws.Int32(1),
+	}
+}
+
+// isNotFound reports the "this instance does not exist" family: it is the answer
+// a delete wants, and the reason GetVM should say so plainly.
+func isNotFound(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return apiErr.ErrorCode() == "InvalidInstanceID.NotFound" ||
+		apiErr.ErrorCode() == "InvalidInstanceId.NotFound"
+}
+
+// isInvocationNotReady reports the transient "SSM has not registered this
+// invocation yet" error, which is worth polling through.
+func isInvocationNotReady(err error) bool {
+	var apiErr smithy.APIError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	switch apiErr.ErrorCode() {
+	case "InvocationDoesNotExist", "InvalidInstanceId", "InvalidInstanceID":
+		return true
+	}
+	return false
 }
