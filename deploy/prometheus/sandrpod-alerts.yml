@@ -1,0 +1,71 @@
+# Alert rules for a SandrPod control plane.
+#
+# The engine exposes these at /metrics (Prometheus text format, no client
+# library):
+#
+#   sandrpod_sandboxes{state="RUNNING|PENDING|ERROR|..."}
+#   sandrpod_poders{state="ONLINE|OFFLINE"}
+#   sandrpod_jobs{status="PENDING|IN_PROGRESS|PROVISIONING|COMPLETED|FAILED"}
+#   sandrpod_poder_container_capacity
+#   sandrpod_poder_containers_in_use
+#
+# These rules are the ones worth waking someone for. They are deliberately
+# about *stuck*, not about spikes: a burst of ERROR sandboxes is a bad deploy,
+# but a sandbox that has been PENDING long enough to page is a delivery that is
+# not happening.
+groups:
+  - name: sandrpod
+    rules:
+      - alert: SandrPodJobStuckPending
+        expr: sandrpod_jobs{status="PENDING"} > 0
+        for: 20m
+        labels: {severity: warning}
+        annotations:
+          summary: "A create has been PENDING for 20 minutes"
+          description: >-
+            No delivery landed and the resume pass has not completed it. Check
+            the control plane log for "resume:" lines and the worker list for an
+            OFFLINE node.
+
+      - alert: SandrPodJobStuckProvisioning
+        expr: sandrpod_jobs{status="PROVISIONING"} > 0
+        for: 45m
+        labels: {severity: warning}
+        annotations:
+          summary: "A create has been PROVISIONING for 45 minutes"
+          description: >-
+            Longer than the create budget plus the abandonment window: the VM is
+            not coming up, or the process that owned it died. Check the cloud
+            console for a machine with no worker record.
+
+      - alert: SandrPodNoOnlineWorker
+        expr: sum(sandrpod_poders{state="ONLINE"}) == 0
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "No worker is ONLINE"
+          description: >-
+            Creates cannot be scheduled at all. Every poder tunnel is down:
+            check the workers, the network to the control plane, and the
+            credential each worker presents.
+
+      - alert: SandrPodSandboxesInError
+        expr: sandrpod_sandboxes{state="ERROR"} > 0
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "Sandboxes have been in ERROR for 30 minutes"
+          description: >-
+            An error state is terminal until someone deletes or restarts the
+            sandbox. A standing count means nobody is watching, or the same
+            fault keeps recurring.
+
+      - alert: SandrPodWorkerCapacityExhausted
+        expr: sandrpod_poder_containers_in_use >= sandrpod_poder_container_capacity
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Every container slot on the fleet is taken"
+          description: >-
+            New creates will wait for a slot or provision a VM. Add a node, or
+            check for sandboxes that were never deleted.

@@ -101,6 +101,7 @@ var (
 	networkName       = flag.String("network", env("SANDRPOD_NETWORK", ""), "Docker network name for sandbox containers (empty = Docker default bridge)")
 	heartbeatInterval = flag.Duration("heartbeat-interval", 10*time.Second, "Heartbeat interval")
 	help              = flag.Bool("help", false, "Show help")
+	showVersion       = flag.Bool("version", false, "Print the build version and exit")
 )
 
 // version is stamped at release time via -ldflags "-X main.version=v…".
@@ -119,6 +120,13 @@ func main() {
 
 	if *help {
 		flag.Usage()
+		os.Exit(0)
+	}
+	// Images are tagged by release, but a running container can be older than its
+	// tag suggests (a hand-built image, a `latest` someone forgot to pull). Asking
+	// the binary is the only answer that is not an inference.
+	if *showVersion {
+		fmt.Println(version)
 		os.Exit(0)
 	}
 
