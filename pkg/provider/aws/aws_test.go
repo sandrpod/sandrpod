@@ -1,7 +1,6 @@
 package aws
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -18,7 +17,7 @@ func TestMapInstanceState(t *testing.T) {
 		"shutting-down": provider.VMStateStopping,
 		"stopping":      provider.VMStateStopping,
 		"stopped":       provider.VMStateStopped,
-		"terminated":    provider.VMStateStopped,
+		"terminated":    provider.VMStateTerminated,
 		"weird-unknown": provider.VMStatePending, // default
 	}
 	for in, want := range cases {
@@ -44,7 +43,7 @@ func TestMapEC2ToVMInfo_FullInstance(t *testing.T) {
 		},
 	}
 
-	vm := mapEC2ToVMInfo(inst)
+	vm := mapEC2ToVMInfo(inst, "us-east-1")
 
 	if vm.ID != "i-abc123" {
 		t.Errorf("ID = %q", vm.ID)
@@ -61,6 +60,9 @@ func TestMapEC2ToVMInfo_FullInstance(t *testing.T) {
 	if vm.InstanceType != "t3.medium" {
 		t.Errorf("InstanceType = %q", vm.InstanceType)
 	}
+	if vm.Region != "us-east-1" {
+		t.Errorf("Region = %q, want the region rather than the availability zone", vm.Region)
+	}
 	if !vm.CreatedAt.Equal(launch) {
 		t.Errorf("CreatedAt = %v, want %v (from LaunchTime)", vm.CreatedAt, launch)
 	}
@@ -75,7 +77,7 @@ func TestMapEC2ToVMInfo_NilOptionalFields(t *testing.T) {
 		// no IPs, no LaunchTime, no Name tag
 	}
 
-	vm := mapEC2ToVMInfo(inst)
+	vm := mapEC2ToVMInfo(inst, "us-east-1")
 
 	if vm.PublicIP != "" || vm.PrivateIP != "" {
 		t.Errorf("expected empty IPs, got %q / %q", vm.PublicIP, vm.PrivateIP)
@@ -101,16 +103,13 @@ func TestProviderMetadata(t *testing.T) {
 	}
 }
 
-func TestListInstanceTypes_Static(t *testing.T) {
-	p := &AWSProvider{}
-	types, err := p.ListInstanceTypes(context.TODO(), "us-east-1")
-	if err != nil {
-		t.Fatalf("ListInstanceTypes: %v", err)
-	}
+// The API answers with what the region actually sells; this is the fallback used
+// only when it cannot, so it still has to be well-formed.
+func TestCommonInstanceTypes_FallbackIsWellFormed(t *testing.T) {
+	types := commonInstanceTypes()
 	if len(types) == 0 {
-		t.Fatal("expected a non-empty static instance-type list")
+		t.Fatal("expected a non-empty fallback list")
 	}
-	// Every entry must have a name and positive CPU/memory.
 	for _, it := range types {
 		if it.Name == "" || it.CPU <= 0 || it.MemoryGiB <= 0 {
 			t.Errorf("malformed instance type: %+v", it)

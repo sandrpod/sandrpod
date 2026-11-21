@@ -9,6 +9,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -99,15 +101,19 @@ func mapInstanceState(state string) provider.VMState {
 		return provider.VMStatePending
 	case "shutting-down", "stopping":
 		return provider.VMStateStopping
-	case "stopped", "terminated":
+	case "stopped":
 		return provider.VMStateStopped
+	case "terminated":
+		// Gone, not paused: a caller that treats Stopped as recoverable would
+		// otherwise try to start a machine whose disk no longer exists.
+		return provider.VMStateTerminated
 	default:
 		return provider.VMStatePending
 	}
 }
 
 // mapEC2ToVMInfo converts an EC2 instance to a VMInfo struct
-func mapEC2ToVMInfo(instance types.Instance) *provider.VMInfo {
+func mapEC2ToVMInfo(instance types.Instance, region string) *provider.VMInfo {
 	publicIP := ""
 	if instance.PublicIpAddress != nil {
 		publicIP = *instance.PublicIpAddress
@@ -136,7 +142,7 @@ func mapEC2ToVMInfo(instance types.Instance) *provider.VMInfo {
 	return &provider.VMInfo{
 		ID:           *instance.InstanceId,
 		Name:         name,
-		Region:       *instance.Placement.AvailabilityZone,
+		Region:       region,
 		InstanceType: string(instance.InstanceType),
 		State:        mapInstanceState(state),
 		PublicIP:     publicIP,
@@ -177,16 +183,11 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 
 	// Launch EC2 instance
 	input := &ec2.RunInstancesInput{
-		ImageId:      aws.String(imageID),
-		InstanceType: types.InstanceType(req.InstanceType),
-		MinCount:     aws.Int32(1),
-		MaxCount:     aws.Int32(1),
-		TagSpecifications: []types.TagSpecification{
-			{
-				ResourceType: types.ResourceTypeInstance,
-				Tags:         tags,
-			},
-		},
+		ImageId:           aws.String(imageID),
+		InstanceType:      types.InstanceType(req.InstanceType),
+		MinCount:          aws.Int32(1),
+		MaxCount:          aws.Int32(1),
+		TagSpecifications: tagSpecifications(tags),
 	}
 
 	// Spot capacity (when asked for) and IMDSv2-only metadata: both are
@@ -276,7 +277,7 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 	})
 	haveDesc := false
 	if derr == nil && len(desc.Reservations) > 0 && len(desc.Reservations[0].Instances) > 0 {
-		vmInfo = mapEC2ToVMInfo(desc.Reservations[0].Instances[0])
+		vmInfo = mapEC2ToVMInfo(desc.Reservations[0].Instances[0], p.region)
 		if vmInfo.Name == "" {
 			vmInfo.Name = req.Name
 		}
@@ -337,7 +338,7 @@ func (p *AWSProvider) GetVM(ctx context.Context, vmID string) (*provider.VMInfo,
 		return nil, fmt.Errorf("instance %s not found", vmID)
 	}
 
-	vm := mapEC2ToVMInfo(resp.Reservations[0].Instances[0])
+	vm := mapEC2ToVMInfo(resp.Reservations[0].Instances[0], p.region)
 	p.mu.Lock()
 	p.vms[vmID] = vm
 	p.mu.Unlock()
@@ -360,7 +361,7 @@ func (p *AWSProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, error) {
 		}
 		for _, reservation := range resp.Reservations {
 			for _, instance := range reservation.Instances {
-				vms = append(vms, mapEC2ToVMInfo(instance))
+				vms = append(vms, mapEC2ToVMInfo(instance, p.region))
 			}
 		}
 		if resp.NextToken == nil || *resp.NextToken == "" {
@@ -532,10 +533,53 @@ func (p *AWSProvider) ListRegions(ctx context.Context) ([]string, error) {
 	return regions, nil
 }
 
-// ListInstanceTypes returns commonly used EC2 instance types
+// ListInstanceTypes asks EC2 what this region actually offers.
+//
+// The hand-written list this used to return included types that a given region
+// or availability zone does not sell — the failure then lands on the customer as
+// "the instance type you chose does not exist". A failed call falls back to the
+// static list rather than leaving the console with nothing.
 func (p *AWSProvider) ListInstanceTypes(ctx context.Context, region string) ([]*provider.InstanceType, error) {
-	// Commonly used instance types
-	commonTypes := []*provider.InstanceType{
+	if p.ec2Client == nil {
+		return commonInstanceTypes(), nil
+	}
+	var out []*provider.InstanceType
+	var nextToken *string
+	for {
+		resp, err := p.ec2Client.DescribeInstanceTypes(ctx, &ec2.DescribeInstanceTypesInput{NextToken: nextToken})
+		if err != nil {
+			log.Printf("[aws] DescribeInstanceTypes failed (%v); falling back to the static list", err)
+			return commonInstanceTypes(), nil
+		}
+		for _, it := range resp.InstanceTypes {
+			info := &provider.InstanceType{Name: string(it.InstanceType)}
+			if it.VCpuInfo != nil && it.VCpuInfo.DefaultVCpus != nil {
+				info.CPU = float64(*it.VCpuInfo.DefaultVCpus)
+			}
+			if it.MemoryInfo != nil && it.MemoryInfo.SizeInMiB != nil {
+				info.MemoryGiB = float64(*it.MemoryInfo.SizeInMiB) / 1024
+			}
+			if it.GpuInfo != nil && len(it.GpuInfo.Gpus) > 0 {
+				info.GPU = int(aws.ToInt32(it.GpuInfo.Gpus[0].Count))
+				info.GPUType = aws.ToString(it.GpuInfo.Gpus[0].Name)
+			}
+			out = append(out, info)
+		}
+		if resp.NextToken == nil || *resp.NextToken == "" {
+			break
+		}
+		nextToken = resp.NextToken
+	}
+	if len(out) == 0 {
+		return commonInstanceTypes(), nil
+	}
+	return out, nil
+}
+
+// commonInstanceTypes is the fallback list: broadly available general-purpose
+// and GPU types, used only when the API cannot answer.
+func commonInstanceTypes() []*provider.InstanceType {
+	return []*provider.InstanceType{
 		{Name: "t3.micro", CPU: 2, MemoryGiB: 1, GPU: 0},
 		{Name: "t3.small", CPU: 2, MemoryGiB: 2, GPU: 0},
 		{Name: "t3.medium", CPU: 2, MemoryGiB: 4, GPU: 0},
@@ -551,8 +595,6 @@ func (p *AWSProvider) ListInstanceTypes(ctx context.Context, region string) ([]*
 		{Name: "g4dn.xlarge", CPU: 4, MemoryGiB: 16, GPU: 1, GPUType: "NVIDIA T4"},
 		{Name: "g4dn.2xlarge", CPU: 8, MemoryGiB: 32, GPU: 1, GPUType: "NVIDIA T4"},
 	}
-
-	return commonTypes, nil
 }
 
 // GetDefaultImage returns the latest Ubuntu 22.04 LTS AMI ID for the region
@@ -586,19 +628,28 @@ func (p *AWSProvider) GetDefaultImage(ctx context.Context, region string) (strin
 	return "", fmt.Errorf("no Ubuntu 22.04 AMI found in region %s", region)
 }
 
-// Cleanup removes all VMs managed by this provider
+// Cleanup terminates every SandrPod-managed instance in this provider's region.
+//
+// It has no caller in the server, but an embedding build can reach it, and what
+// it does is not scoped to a workspace: the tag it filters on is set by every
+// tenant's VMs. A destructive, all-tenant sweep is therefore opt-in — set
+// SANDRPOD_AWS_ALLOW_CLEANUP=1 to arm it — and it says what it is about to do
+// before doing it.
 func (p *AWSProvider) Cleanup(ctx context.Context) error {
+	if os.Getenv("SANDRPOD_AWS_ALLOW_CLEANUP") != "1" {
+		return fmt.Errorf("aws Cleanup terminates every SandrPod-managed instance in %s regardless of workspace; "+
+			"set SANDRPOD_AWS_ALLOW_CLEANUP=1 to confirm that is what you want", p.region)
+	}
 	vms, err := p.ListVMs(ctx)
 	if err != nil {
 		return err
 	}
-
+	log.Printf("[aws] Cleanup: terminating %d SandrPod instance(s) in %s", len(vms), p.region)
 	for _, vm := range vms {
 		if err := p.DeleteVM(ctx, vm.ID); err != nil {
-			fmt.Printf("failed to delete VM %s: %v\n", vm.ID, err)
+			log.Printf("[aws] Cleanup: failed to delete VM %s: %v", vm.ID, err)
 		}
 	}
-
 	return nil
 }
 
@@ -702,4 +753,14 @@ func isInvocationNotReady(err error) bool {
 		return true
 	}
 	return false
+}
+
+// tagSpecifications tags the instance and its volumes. Volumes used to be left
+// untagged, which makes cost allocation per sandbox incomplete and leaves
+// orphans invisible to anything that looks by tag.
+func tagSpecifications(tags []types.Tag) []types.TagSpecification {
+	return []types.TagSpecification{
+		{ResourceType: types.ResourceTypeInstance, Tags: tags},
+		{ResourceType: types.ResourceTypeVolume, Tags: tags},
+	}
 }

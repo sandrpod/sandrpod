@@ -43,6 +43,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   registered yet" error is retried while polling SSM. A create whose instance is
   not running when the waiter returns is now reported as a failure instead of
   being handed back as a pending VM.
+- **AWS provider, five more things that were quietly wrong.** A terminated
+  instance reports `TERMINATED` (it reported `STOPPED`, so a caller waiting for
+  removal — or an orphan sweep — saw a machine that never went away); `GetVM`
+  reports the region it was asked for rather than the availability zone in that
+  field; `Cleanup` refuses to run unless `SANDRPOD_AWS_ALLOW_CLEANUP=1` is set,
+  because it terminates **every** SandrPod instance in the region regardless of
+  workspace and a method call is not consent; `ListInstanceTypes` now asks
+  `DescribeInstanceTypes` (paginated, 1 373 types in `us-east-1`) instead of
+  returning a fixed handful, with the old list kept as the offline fallback; and
+  the EBS volume is tagged alongside the instance, so cost allocation and
+  orphan searches by tag see it. All five were checked on a live account.
 
 ## [0.13.4] - 2026-11-21
 

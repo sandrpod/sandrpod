@@ -3,6 +3,7 @@ package aws
 import (
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -91,3 +92,37 @@ func TestInvocationNotReadyClassification(t *testing.T) {
 }
 
 var _ = aws.Int32
+
+// Volumes used to be left untagged: cost allocation per sandbox loses a piece,
+// and anything that looks for orphans by tag cannot see them.
+func TestTagSpecifications_CoverInstanceAndVolume(t *testing.T) {
+	tags := []ec2types.Tag{{Key: aws.String("sandrpod"), Value: aws.String("true")}}
+	specs := tagSpecifications(tags)
+	if len(specs) != 2 {
+		t.Fatalf("%d tag specifications, want instance + volume", len(specs))
+	}
+	seen := map[ec2types.ResourceType]bool{}
+	for _, s := range specs {
+		seen[s.ResourceType] = true
+		if len(s.Tags) != 1 {
+			t.Errorf("%s carries %d tags", s.ResourceType, len(s.Tags))
+		}
+	}
+	if !seen[ec2types.ResourceTypeInstance] || !seen[ec2types.ResourceTypeVolume] {
+		t.Fatalf("resource types = %v", seen)
+	}
+}
+
+// Cleanup is an all-tenant sweep in a region; it must not run because someone
+// called an interface method.
+func TestCleanup_RequiresOptIn(t *testing.T) {
+	t.Setenv("SANDRPOD_AWS_ALLOW_CLEANUP", "")
+	p := &AWSProvider{region: "us-east-1"}
+	err := p.Cleanup(nil)
+	if err == nil {
+		t.Fatal("Cleanup ran without the opt-in")
+	}
+	if !strings.Contains(err.Error(), "SANDRPOD_AWS_ALLOW_CLEANUP") {
+		t.Errorf("error should name the setting: %v", err)
+	}
+}
