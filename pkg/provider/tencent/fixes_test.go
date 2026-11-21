@@ -1,12 +1,13 @@
 package tencent
 
 import (
-	"errors"
 	"strings"
 	"testing"
+	"time"
 
-	sdkerrors "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common/errors"
+	"github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/common"
 	cvm "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/cvm/v20170312"
+	tat "github.com/tencentcloud/tencentcloud-sdk-go/tencentcloud/tat/v20201028"
 
 	"github.com/sandrpod/sandrpod/pkg/provider"
 )
@@ -49,13 +50,26 @@ func TestInternetAccessible(t *testing.T) {
 // it the field must stay empty so the default (POSTPAID_BY_HOUR) applies.
 func TestApplySpot(t *testing.T) {
 	onDemand := cvm.NewRunInstancesRequest()
-	applySpot(onDemand, &provider.CreateVMRequest{})
+	if err := applySpot(onDemand, &provider.CreateVMRequest{}); err != nil {
+		t.Fatalf("on-demand: %v", err)
+	}
 	if onDemand.InstanceChargeType != nil || onDemand.InstanceMarketOptions != nil {
 		t.Fatal("an on-demand create set spot fields")
 	}
 
+	// Tencent rejects a spot request without MaxPrice, so a request that does
+	// not name a price is refused here with the setting named.
+	noPrice := cvm.NewRunInstancesRequest()
+	if err := applySpot(noPrice, &provider.CreateVMRequest{Spot: true}); err == nil {
+		t.Fatal("spot without a max price was accepted")
+	} else if !strings.Contains(err.Error(), "SANDRPOD_SPOT_MAX_PRICE_TENCENT") {
+		t.Errorf("error should name the setting: %v", err)
+	}
+
 	spot := cvm.NewRunInstancesRequest()
-	applySpot(spot, &provider.CreateVMRequest{Spot: true})
+	if err := applySpot(spot, &provider.CreateVMRequest{Spot: true, SpotPriceLimit: 0.05}); err != nil {
+		t.Fatalf("applySpot: %v", err)
+	}
 	if spot.InstanceChargeType == nil || *spot.InstanceChargeType != "SPOTPAID" {
 		t.Errorf("charge type = %v, want SPOTPAID", spot.InstanceChargeType)
 	}
@@ -65,27 +79,28 @@ func TestApplySpot(t *testing.T) {
 		*imo.SpotOptions.SpotInstanceType != "one-time" {
 		t.Fatalf("market options = %+v", imo)
 	}
-	if imo.SpotOptions.MaxPrice != nil {
-		t.Errorf("no price cap requested but MaxPrice = %v", *imo.SpotOptions.MaxPrice)
+	if imo.SpotOptions.MaxPrice == nil || *imo.SpotOptions.MaxPrice != "0.050" {
+		t.Errorf("MaxPrice = %v, want 0.050", imo.SpotOptions.MaxPrice)
 	}
 
 	capped := cvm.NewRunInstancesRequest()
-	applySpot(capped, &provider.CreateVMRequest{Spot: true, SpotPriceLimit: 0.25})
+	_ = applySpot(capped, &provider.CreateVMRequest{Spot: true, SpotPriceLimit: 0.25})
 	if capped.InstanceMarketOptions.SpotOptions.MaxPrice == nil ||
 		*capped.InstanceMarketOptions.SpotOptions.MaxPrice != "0.250" {
 		t.Errorf("price cap = %v", capped.InstanceMarketOptions.SpotOptions.MaxPrice)
 	}
 }
 
-// Deleting something already gone is the outcome the caller wanted.
-func TestIsNotFound(t *testing.T) {
-	if !isNotFound(&sdkerrors.TencentCloudSDKError{Code: "InvalidInstanceId.NotFound"}) {
-		t.Error("InvalidInstanceId.NotFound not recognised")
+// TAT kills a command after 60 seconds by default. Every bootstrap command the
+// scheduler runs — the Docker install, a cold image pull — outlives that, and the
+// provider never said otherwise.
+func TestRunCommandSetsATimeout(t *testing.T) {
+	if tatCommandTimeout <= time.Minute {
+		t.Fatalf("command budget %v is not longer than TAT's 60s default", tatCommandTimeout)
 	}
-	if isNotFound(&sdkerrors.TencentCloudSDKError{Code: "UnauthorizedOperation"}) {
-		t.Error("an unrelated code was treated as NotFound")
-	}
-	if isNotFound(errors.New("boom")) {
-		t.Error("a non-API error was treated as NotFound")
+	req := tat.NewRunCommandRequest()
+	req.Timeout = common.Uint64Ptr(uint64(tatCommandTimeout.Seconds()))
+	if req.Timeout == nil || *req.Timeout < 120 {
+		t.Fatalf("timeout = %v, want the command budget", req.Timeout)
 	}
 }

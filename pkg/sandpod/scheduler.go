@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -302,8 +303,11 @@ func (s *Scheduler) createVMWithProvider(ctx context.Context, providerType strin
 			APIURL: s.apiURL,
 		},
 		// Preemptible capacity, when the deployment asks for it. Off by default:
-		// a spot machine can vanish, and that should be a choice.
-		Spot: providerEnvBool("SANDRPOD_SPOT", providerType, false),
+		// a spot machine can vanish, and that should be a choice. The price is a
+		// separate knob because Tencent rejects a spot request without one
+		// (MaxPrice is mandatory there; AWS bids the market by default).
+		Spot:           providerEnvBool("SANDRPOD_SPOT", providerType, false),
+		SpotPriceLimit: providerEnvFloat("SANDRPOD_SPOT_MAX_PRICE", providerType),
 	}
 
 	vm, err := p.CreateVM(ctx, createReq)
@@ -655,6 +659,21 @@ func providerEnv(key, providerType string) string {
 
 // providerEnvBool parses a provider-scoped boolean env var (KEY_<PROVIDER>),
 // then the unscoped KEY, returning def when neither is set/recognized.
+// providerEnvFloat reads a provider-scoped float (KEY_<PROVIDER> first), 0 when
+// unset or unparseable.
+func providerEnvFloat(key, providerType string) float64 {
+	raw := providerEnv(key, providerType)
+	if raw == "" {
+		return 0
+	}
+	v, err := strconv.ParseFloat(raw, 64)
+	if err != nil || v < 0 {
+		log.Printf("[Scheduler] ignoring %s=%q: %v", key, raw, err)
+		return 0
+	}
+	return v
+}
+
 func providerEnvBool(key, providerType string, def bool) bool {
 	if providerType != "" {
 		switch strings.ToLower(strings.TrimSpace(os.Getenv(key + "_" + strings.ToUpper(providerType)))) {

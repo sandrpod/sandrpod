@@ -139,7 +139,9 @@ func (p *TencentProvider) CreateVM(ctx context.Context, req *provider.CreateVMRe
 	// A public IP is how the worker reaches the control plane and GHCR; a NAT
 	// deployment asks for none, and this used to assign one anyway.
 	runReq.InternetAccessible = internetAccessible(req.NetworkConfig)
-	applySpot(runReq, req)
+	if err := applySpot(runReq, req); err != nil {
+		return nil, err
+	}
 
 	tags := []*cvm.Tag{{Key: common.StringPtr(tagKey), Value: common.StringPtr("true")}}
 	for k, v := range req.Tags {
@@ -247,8 +249,29 @@ func (p *TencentProvider) describeOne(ctx context.Context, instanceID string) (*
 func (p *TencentProvider) DeleteVM(ctx context.Context, vmID string) error {
 	req := cvm.NewTerminateInstancesRequest()
 	req.InstanceIds = []*string{common.StringPtr(vmID)}
-	if _, err := p.cvmClient.TerminateInstancesWithContext(ctx, req); err != nil && !isNotFound(err) {
-		return fmt.Errorf("failed to terminate instance: %w", err)
+	// A delete that arrives while another termination is still in flight is
+	// answered OperationDenied.InstanceOperationInProgress — a live run hit it
+	// seconds after its own first delete. Retry through that window; anything
+	// else (or a genuinely stuck operation) is still a failure.
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if _, err := p.cvmClient.TerminateInstancesWithContext(ctx, req); err == nil {
+			lastErr = nil
+			break
+		} else {
+			lastErr = err
+			if !isOperationInProgress(err) {
+				break
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("failed to terminate instance: %w", ctx.Err())
+		case <-time.After(3 * time.Second):
+		}
+	}
+	if lastErr != nil {
+		return fmt.Errorf("failed to terminate instance: %w", lastErr)
 	}
 	p.mu.Lock()
 	delete(p.vms, vmID)
@@ -306,6 +329,12 @@ func (p *TencentProvider) ListVMs(ctx context.Context) ([]*provider.VMInfo, erro
 const (
 	tatExecTimeout         = 5 * time.Minute
 	tatRegistrationTimeout = 3 * time.Minute
+	// tatCommandTimeout is the command's own execution budget, sent with every
+	// RunCommand. TAT defaults it to 60 seconds, and this provider left it at the
+	// default: `apt-get install docker` or a cold `docker pull` on a fresh VM
+	// routinely take longer, so the command was killed as TIMEOUT while the
+	// catalog says it "installed Docker in under two minutes".
+	tatCommandTimeout = 15 * time.Minute
 )
 
 // tatTerminalStatuses are the TAT task statuses that mean the invocation has
@@ -325,18 +354,40 @@ var tatTerminalStatuses = map[string]bool{
 // ExecuteCommand runs a shell command via TAT RunCommand and waits for the
 // result. Command content and output are base64-encoded on the wire.
 func (p *TencentProvider) ExecuteCommand(ctx context.Context, vmID, command string) (*provider.CommandResult, error) {
-	// Bound the wait for the TAT agent to register on its own terms. See the
-	// AWS provider: skipping this when the caller has a deadline gives an agent
-	// that will never register the whole provisioning budget.
-	sendCtx, cancel := context.WithTimeout(ctx, tatRegistrationTimeout)
-	defer cancel()
-
 	runReq := tat.NewRunCommandRequest()
 	runReq.Content = common.StringPtr(base64.StdEncoding.EncodeToString([]byte(command)))
 	runReq.CommandType = common.StringPtr("SHELL")
 	runReq.InstanceIds = []*string{common.StringPtr(vmID)}
 	// Don't persist the command definition — a fresh one is created per call.
 	runReq.SaveCommand = common.BoolPtr(false)
+	runReq.Timeout = common.Uint64Ptr(uint64(tatCommandTimeout.Seconds()))
+
+	// A command that never reached the instance (DELIVER_FAILED / START_FAILED)
+	// did not run, so retrying it is safe — and a live run hit DELIVER_FAILED
+	// seconds after the Docker install finished, which failed a create that
+	// would have succeeded on a second attempt.
+	for attempt := 0; ; attempt++ {
+		result, retryable, err := p.runOnce(ctx, runReq, vmID)
+		if err != nil {
+			return nil, err
+		}
+		if !retryable || attempt >= 2 {
+			return result, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("command on %s: %w", vmID, ctx.Err())
+		case <-time.After(5 * time.Second):
+		}
+	}
+}
+
+// runOnce sends the command and waits for its terminal task. retryable means the
+// task ended before the instance ran anything (DELIVER_FAILED, START_FAILED), so
+// resending cannot double-execute.
+func (p *TencentProvider) runOnce(ctx context.Context, runReq *tat.RunCommandRequest, vmID string) (*provider.CommandResult, bool, error) {
+	sendCtx, cancel := context.WithTimeout(ctx, tatRegistrationTimeout)
+	defer cancel()
 
 	var invokeID string
 	for {
@@ -348,15 +399,15 @@ func (p *TencentProvider) ExecuteCommand(ctx context.Context, vmID, command stri
 		if err != nil && isAgentNotReady(err) {
 			select {
 			case <-sendCtx.Done():
-				return nil, fmt.Errorf("instance %s TAT agent not ready before timeout: %w", vmID, err)
+				return nil, false, fmt.Errorf("instance %s TAT agent not ready before timeout: %w", vmID, err)
 			case <-time.After(5 * time.Second):
 				continue
 			}
 		}
 		if err != nil {
-			return nil, fmt.Errorf("failed to run command: %w", err)
+			return nil, false, fmt.Errorf("failed to run command: %w", err)
 		}
-		return nil, fmt.Errorf("RunCommand returned no invocation id")
+		return nil, false, fmt.Errorf("RunCommand returned no invocation id")
 	}
 
 	waitCtx := ctx
@@ -371,7 +422,7 @@ func (p *TencentProvider) ExecuteCommand(ctx context.Context, vmID, command stri
 	for {
 		select {
 		case <-waitCtx.Done():
-			return nil, fmt.Errorf("command on %s did not finish before timeout: %w", vmID, waitCtx.Err())
+			return nil, false, fmt.Errorf("command on %s did not finish before timeout: %w", vmID, waitCtx.Err())
 		case <-ticker.C:
 		}
 
@@ -387,7 +438,7 @@ func (p *TencentProvider) ExecuteCommand(ctx context.Context, vmID, command stri
 			// An empty set means "not visible yet" and is not an error; a real
 			// API error used to be polled through until the deadline and then
 			// reported as a timeout, which sends the reader to the wrong place.
-			return nil, fmt.Errorf("describe invocation %s on %s: %w", invokeID, vmID, err)
+			return nil, false, fmt.Errorf("describe invocation %s on %s: %w", invokeID, vmID, err)
 		}
 		if descResp.Response == nil || len(descResp.Response.InvocationTaskSet) == 0 {
 			continue
@@ -421,7 +472,8 @@ func (p *TencentProvider) ExecuteCommand(ctx context.Context, vmID, command stri
 		if result.ExitCode != 0 && result.Stderr == "" {
 			result.Stderr = result.Output
 		}
-		return result, nil
+		retryable := status == "DELIVER_FAILED" || status == "START_FAILED"
+		return result, retryable, nil
 	}
 }
 
@@ -571,29 +623,36 @@ func internetAccessible(nc *provider.NetworkConfig) *cvm.InternetAccessible {
 }
 
 // applySpot turns a request for preemptible capacity into the Tencent fields:
-// SPOTPAID (the API's spelling) plus a one-time market request. MaxPrice is
-// optional; without it Tencent bids the current spot price.
-func applySpot(runReq *cvm.RunInstancesRequest, req *provider.CreateVMRequest) {
+// SPOTPAID (the API's spelling) plus a one-time market request.
+//
+// MaxPrice is mandatory here — RunInstances answers MissingParameter without it,
+// which a live run found immediately. Tencent has no "bid the market rate"
+// mode, so a deployment that wants spot has to say what it is willing to pay.
+func applySpot(runReq *cvm.RunInstancesRequest, req *provider.CreateVMRequest) error {
 	if !req.Spot {
-		return
+		return nil
+	}
+	if req.SpotPriceLimit <= 0 {
+		return fmt.Errorf("provider \"tencent\" needs a max price for spot capacity: set SANDRPOD_SPOT_MAX_PRICE_TENCENT (hourly, e.g. 0.05) — RunInstances rejects a spot request without MaxPrice")
 	}
 	runReq.InstanceChargeType = common.StringPtr("SPOTPAID")
-	spot := &cvm.SpotMarketOptions{SpotInstanceType: common.StringPtr("one-time")}
-	if req.SpotPriceLimit > 0 {
-		spot.MaxPrice = common.StringPtr(fmt.Sprintf("%.3f", req.SpotPriceLimit))
-	}
 	runReq.InstanceMarketOptions = &cvm.InstanceMarketOptionsRequest{
-		MarketType:  common.StringPtr("spot"),
-		SpotOptions: spot,
+		MarketType: common.StringPtr("spot"),
+		SpotOptions: &cvm.SpotMarketOptions{
+			SpotInstanceType: common.StringPtr("one-time"),
+			MaxPrice:         common.StringPtr(fmt.Sprintf("%.3f", req.SpotPriceLimit)),
+		},
 	}
+	return nil
 }
 
-// isNotFound reports the "no such instance" family, which a delete treats as
-// done and everything else treats as an error.
-func isNotFound(err error) bool {
+// isOperationInProgress reports the "another action on this instance is running"
+// refusal, which is worth retrying for a delete: the action is frequently the
+// termination this call is asking for.
+func isOperationInProgress(err error) bool {
 	var apiErr *sdkerrors.TencentCloudSDKError
 	if !errors.As(err, &apiErr) {
 		return false
 	}
-	return strings.Contains(apiErr.Code, "InvalidInstanceId.NotFound")
+	return strings.Contains(apiErr.Code, "OperationInProgress")
 }
