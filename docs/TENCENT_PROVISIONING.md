@@ -136,6 +136,7 @@ All set on the **API Server** process.
 | `TENCENTCLOUD_SECRET_ID` / `TENCENTCLOUD_SECRET_KEY` | **yes** | — | API auth; enables the provider |
 | `TENCENTCLOUD_REGION` | no | `ap-guangzhou` | client region |
 | `TENCENTCLOUD_ZONE` | no | `ap-guangzhou-3` | default availability zone |
+| `SANDRPOD_SPOT_TENCENT` | no | off | request `SPOTPAID` capacity (`one-time`). On-demand is unchanged when unset |
 | `SANDRPOD_VM_SECURITY_GROUP` (`_TENCENT`) | recommended | — | security group ID |
 | `SANDRPOD_VM_SUBNET_ID` (`_TENCENT`) | **leave unset** | — | see the VPC caveat above |
 | `SANDRPOD_PODER_IMAGE` (`_TENCENT`) | **yes (cloud)** | `ghcr.io/sandrpod/poder:latest` | Poder image (TCR recommended) |
@@ -199,3 +200,17 @@ take a few minutes. Reuse the systemd unit + `service.d` drop-in pattern from
   `sandrpod=true`.
 - **Default image is the newest public Ubuntu.** Override per-request with
   `--image img-xxxxxxxx`.
+
+## What the launch sets for you
+
+- **A zone inside the client's region.** The request's `region` is a zone
+  (`ap-guangzhou-3`), and a zone from another region is refused here rather than
+  left for the API to reject with a message about the zone.
+- **A public IP only when one is asked for.** `SANDRPOD_VM_PUBLIC_IP_TENCENT=false`
+  (or the unscoped form) now produces no public IP — a NAT deployment used to get
+  one anyway.
+- **Spot behind `SANDRPOD_SPOT_TENCENT`** — `SPOTPAID` with a one-time market
+  request; `CreateVMRequest.SpotPriceLimit` becomes `MaxPrice`.
+- Deleting an instance that no longer exists is not an error, and a create whose
+  machine does not reach RUNNING within 90 seconds now says so instead of
+  handing back a pending instance.

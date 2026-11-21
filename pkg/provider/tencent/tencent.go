@@ -10,6 +10,7 @@ package tencent
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -116,9 +117,9 @@ const createVMIPPollTimeout = 90 * time.Second
 
 // CreateVM creates a CVM instance with a public IP and returns once it has one.
 func (p *TencentProvider) CreateVM(ctx context.Context, req *provider.CreateVMRequest) (*provider.VMInfo, error) {
-	zone := req.Region
-	if zone == "" {
-		zone = p.zone
+	zone, err := p.zoneFor(req.Region)
+	if err != nil {
+		return nil, err
 	}
 	imageID := req.ImageID
 	if imageID == "" {
@@ -135,11 +136,10 @@ func (p *TencentProvider) CreateVM(ctx context.Context, req *provider.CreateVMRe
 	runReq.InstanceType = common.StringPtr(req.InstanceType)
 	runReq.InstanceName = common.StringPtr(req.Name)
 	runReq.InstanceCount = common.Int64Ptr(1)
-	// Assign a public IP so the instance can reach the API Server / pull images.
-	runReq.InternetAccessible = &cvm.InternetAccessible{
-		PublicIpAssigned:        common.BoolPtr(true),
-		InternetMaxBandwidthOut: common.Int64Ptr(10),
-	}
+	// A public IP is how the worker reaches the control plane and GHCR; a NAT
+	// deployment asks for none, and this used to assign one anyway.
+	runReq.InternetAccessible = internetAccessible(req.NetworkConfig)
+	applySpot(runReq, req)
 
 	tags := []*cvm.Tag{{Key: common.StringPtr(tagKey), Value: common.StringPtr("true")}}
 	for k, v := range req.Tags {
@@ -192,6 +192,12 @@ func (p *TencentProvider) CreateVM(ctx context.Context, req *provider.CreateVMRe
 		if vmInfo.Name == "" {
 			vmInfo.Name = req.Name
 		}
+	} else {
+		// Returning a pending machine as if it were ready sends the scheduler
+		// into a health-check wait that ends in an orphan cleanup anyway; say
+		// what happened while the caller still has the create in hand.
+		return vmInfo, fmt.Errorf("instance %s was created but did not reach RUNNING (or get a public IP) within %s — check the zone's capacity and the image/instance-type pairing",
+			instanceID, createVMIPPollTimeout)
 	}
 
 	p.mu.Lock()
@@ -218,7 +224,7 @@ func (p *TencentProvider) pollForRunningVM(ctx context.Context, instanceID strin
 		}
 		select {
 		case <-pollCtx.Done():
-			return last, last != nil
+			return last, false
 		case <-ticker.C:
 		}
 	}
@@ -241,7 +247,7 @@ func (p *TencentProvider) describeOne(ctx context.Context, instanceID string) (*
 func (p *TencentProvider) DeleteVM(ctx context.Context, vmID string) error {
 	req := cvm.NewTerminateInstancesRequest()
 	req.InstanceIds = []*string{common.StringPtr(vmID)}
-	if _, err := p.cvmClient.TerminateInstancesWithContext(ctx, req); err != nil {
+	if _, err := p.cvmClient.TerminateInstancesWithContext(ctx, req); err != nil && !isNotFound(err) {
 		return fmt.Errorf("failed to terminate instance: %w", err)
 	}
 	p.mu.Lock()
@@ -377,7 +383,13 @@ func (p *TencentProvider) ExecuteCommand(ctx context.Context, vmID, command stri
 		descReq.HideOutput = common.BoolPtr(false)
 
 		descResp, err := p.tatClient.DescribeInvocationTasksWithContext(waitCtx, descReq)
-		if err != nil || descResp.Response == nil || len(descResp.Response.InvocationTaskSet) == 0 {
+		if err != nil {
+			// An empty set means "not visible yet" and is not an error; a real
+			// API error used to be polled through until the deadline and then
+			// reported as a timeout, which sends the reader to the wrong place.
+			return nil, fmt.Errorf("describe invocation %s on %s: %w", invokeID, vmID, err)
+		}
+		if descResp.Response == nil || len(descResp.Response.InvocationTaskSet) == 0 {
 			continue
 		}
 		task := descResp.Response.InvocationTaskSet[0]
@@ -524,4 +536,64 @@ func (p *TencentProvider) Cleanup(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// zoneFor resolves the request's region as a zone inside this client's region.
+// Tencent's RunInstances takes a zone (`ap-guangzhou-3`) where every other
+// provider takes a region, and a zone from another region fails deep inside the
+// API with a message about the zone, not about the mismatch.
+func (p *TencentProvider) zoneFor(requested string) (string, error) {
+	zone := requested
+	if zone == "" {
+		zone = p.zone
+	}
+	if zone == "" {
+		return "", fmt.Errorf("provider \"tencent\" needs a zone: set SANDRPOD_TENCENT_ZONE or pass the zone as the request's region (e.g. ap-guangzhou-3)")
+	}
+	if p.region != "" && !strings.HasPrefix(zone, p.region+"-") {
+		return "", fmt.Errorf("zone %q is not in region %q: the tencent client is bound to %q, and a create names a zone inside it",
+			zone, p.region, p.region)
+	}
+	return zone, nil
+}
+
+// internetAccessible decides the public-IP settings from the request. The
+// default (no network config) keeps the historical behaviour: a public IP so
+// the worker can dial out.
+func internetAccessible(nc *provider.NetworkConfig) *cvm.InternetAccessible {
+	if nc != nil && !nc.PublicIP {
+		return nil // no public IP: the deployment routes egress itself
+	}
+	return &cvm.InternetAccessible{
+		PublicIpAssigned:        common.BoolPtr(true),
+		InternetMaxBandwidthOut: common.Int64Ptr(10),
+	}
+}
+
+// applySpot turns a request for preemptible capacity into the Tencent fields:
+// SPOTPAID (the API's spelling) plus a one-time market request. MaxPrice is
+// optional; without it Tencent bids the current spot price.
+func applySpot(runReq *cvm.RunInstancesRequest, req *provider.CreateVMRequest) {
+	if !req.Spot {
+		return
+	}
+	runReq.InstanceChargeType = common.StringPtr("SPOTPAID")
+	spot := &cvm.SpotMarketOptions{SpotInstanceType: common.StringPtr("one-time")}
+	if req.SpotPriceLimit > 0 {
+		spot.MaxPrice = common.StringPtr(fmt.Sprintf("%.3f", req.SpotPriceLimit))
+	}
+	runReq.InstanceMarketOptions = &cvm.InstanceMarketOptionsRequest{
+		MarketType:  common.StringPtr("spot"),
+		SpotOptions: spot,
+	}
+}
+
+// isNotFound reports the "no such instance" family, which a delete treats as
+// done and everything else treats as an error.
+func isNotFound(err error) bool {
+	var apiErr *sdkerrors.TencentCloudSDKError
+	if !errors.As(err, &apiErr) {
+		return false
+	}
+	return strings.Contains(apiErr.Code, "InvalidInstanceId.NotFound")
 }

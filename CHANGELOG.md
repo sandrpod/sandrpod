@@ -10,6 +10,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Fixed
 
+- **Tencent provider, the same class of findings as AWS.** A zone outside the
+  client's region is refused with both names instead of an API error about the
+  zone; `SANDRPOD_VM_PUBLIC_IP_TENCENT=false` is honoured (a NAT deployment used
+  to get a public IP anyway); `SANDRPOD_SPOT_TENCENT` requests `SPOTPAID`
+  capacity instead of being silently ignored; deleting an instance that is
+  already gone is not an error; `DescribeInvocationTasks` errors surface instead
+  of being polled into a timeout; and a create whose machine never reaches
+  RUNNING within 90 s reports that instead of returning a pending instance.
+
+### Fixed
+
 - **AWS provider, eight findings from reading it against what the scheduler
   assumes.** The SSM terminal-status mapping now treats only `Success` as
   success (the exit code AWS attaches to a cancelled or timed-out invocation is
