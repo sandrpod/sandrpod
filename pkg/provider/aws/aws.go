@@ -274,15 +274,25 @@ func (p *AWSProvider) CreateVM(ctx context.Context, req *provider.CreateVMReques
 	desc, derr := p.ec2Client.DescribeInstances(ctx, &ec2.DescribeInstancesInput{
 		InstanceIds: []string{instanceID},
 	})
+	haveDesc := false
 	if derr == nil && len(desc.Reservations) > 0 && len(desc.Reservations[0].Instances) > 0 {
 		vmInfo = mapEC2ToVMInfo(desc.Reservations[0].Instances[0])
 		if vmInfo.Name == "" {
 			vmInfo.Name = req.Name
 		}
-	} else if waitErr != nil {
-		// Couldn't confirm the instance is up — surface the failure instead
-		// of returning a VM that looks ready but isn't.
-		return vmInfo, fmt.Errorf("instance %s created but not confirmed running: %w", instanceID, waitErr)
+		haveDesc = true
+	}
+	// The instance counts as created only if it is actually running. A waiter
+	// that timed out plus a describe that succeeded used to be reported as a
+	// normal create, handing the scheduler a pending machine it then spends its
+	// own health budget on before an orphan cleanup: say what happened while the
+	// caller still has the request in hand.
+	if waitErr != nil && (!haveDesc || vmInfo.State != provider.VMStateRunning) {
+		return vmInfo, fmt.Errorf("instance %s created but not running (state %v): %w", instanceID, vmInfo.State, waitErr)
+	}
+	if haveDesc && vmInfo.State != provider.VMStateRunning {
+		return vmInfo, fmt.Errorf("instance %s is %v rather than running — check the AMI/instance-type pairing and the subnet's capacity",
+			instanceID, vmInfo.State)
 	}
 
 	p.mu.Lock()
