@@ -28,9 +28,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   image pull exceeds that on a fresh VM, and the live run watched a healthy VM's
   bootstrap die at that boundary. Commands that never reached the instance
   (`DELIVER_FAILED`, `START_FAILED`) are retried, since they never ran.
-
-### Fixed
-
 - **AWS provider, eight findings from reading it against what the scheduler
   assumes.** The SSM terminal-status mapping now treats only `Success` as
   success (the exit code AWS attaches to a cancelled or timed-out invocation is
@@ -43,7 +40,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
   requests spot capacity (it was a silent no-op), instances launch with IMDSv2
   required and a hop limit of 1 (sandboxes are containers on that host), deleting
   an already-terminated instance is not an error, and only the "invocation not
-  registered yet" error is retried while polling SSM.
+  registered yet" error is retried while polling SSM. A create whose instance is
+  not running when the waiter returns is now reported as a failure instead of
+  being handed back as a pending VM.
 
 ## [0.13.4] - 2026-11-21
 
