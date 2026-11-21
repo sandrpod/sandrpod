@@ -3,7 +3,21 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.13.3 (current)
+## 0.13.4 (current)
+
+A security narrowing and two operational repairs. A **worker credential** can no
+longer use the sandbox API — it exists for the tunnel handshake, the job poll, its
+own heartbeat, the enrolment exchange and the two calls an agent makes directly
+(capabilities, egress), and everything else is refused in the middleware from an
+explicit list. An **async create is `PROVISIONING`, not `PENDING`, while a VM
+boots**, so the resume pass no longer mistakes a multi-minute provisioning for a
+lost delivery (that exact race failed a real provisioning three seconds before its
+worker registered); a row left behind by a crash is reclaimed after 30 minutes.
+**Aliyun spot** is available behind `SANDRPOD_SPOT_ALIYUN` — off by default, with
+on-demand unchanged. `poder -version` reports the build, and
+`deploy/prometheus/sandrpod-alerts.yml` turns `/metrics` into five alerts.
+
+## 0.13.3
 
 Exports `server.VerifyProvisionToken` so an embedding build that supplies its own
 `Config.Authenticator` can accept the credential the scheduler mints for a
