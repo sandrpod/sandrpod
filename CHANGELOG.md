@@ -10,14 +10,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ### Fixed
 
-- **Tencent provider, the same class of findings as AWS.** A zone outside the
-  client's region is refused with both names instead of an API error about the
-  zone; `SANDRPOD_VM_PUBLIC_IP_TENCENT=false` is honoured (a NAT deployment used
-  to get a public IP anyway); `SANDRPOD_SPOT_TENCENT` requests `SPOTPAID`
-  capacity instead of being silently ignored; deleting an instance that is
-  already gone is not an error; `DescribeInvocationTasks` errors surface instead
-  of being polled into a timeout; and a create whose machine never reaches
-  RUNNING within 90 s reports that instead of returning a pending instance.
+- **Tencent provider: code review plus a live run on a real mainland account.**
+  A zone outside the client's region is refused with both names instead of an
+  API error about the zone; `SANDRPOD_VM_PUBLIC_IP_TENCENT=false` is honoured (a
+  NAT deployment used to get a public IP anyway); spot is implemented
+  (`SPOTPAID` + one-time market request) and — as the live run proved —
+  **requires a max price**: `RunInstances` answers `MissingParameter` without
+  `MaxPrice`, so the scheduler now passes `SANDRPOD_SPOT_MAX_PRICE[_TENCENT]` and
+  the provider names the setting when it is missing. Deleting an instance whose
+  termination is already in flight (`OperationDenied.InstanceOperationInProgress`)
+  now retries instead of reporting a fabricated "left running";
+  `DescribeInvocationTasks` errors surface instead of being polled into a
+  timeout; and a create whose machine never reaches RUNNING within 90 s reports
+  that instead of returning a pending instance.
+- **TAT commands get 15 minutes.** Tencent's `RunCommand` defaults `Timeout` to
+  60 seconds and the provider never set it: `apt-get install docker` plus a cold
+  image pull exceeds that on a fresh VM, and the live run watched a healthy VM's
+  bootstrap die at that boundary. Commands that never reached the instance
+  (`DELIVER_FAILED`, `START_FAILED`) are retried, since they never ran.
 
 ### Fixed
 

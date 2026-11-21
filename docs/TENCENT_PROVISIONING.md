@@ -3,6 +3,12 @@
 How SandrPod creates Tencent Cloud (CVM) instances on demand, bootstraps a Poder
 on each via **TAT (TencentCloud Automation Tools)**, and runs sandboxes there.
 
+> **Re-validated 2026-11-21 on a mainland account** (`ap-guangzhou`,
+> zone `ap-guangzhou-5`, `S9.MEDIUM4`, default VPC): create → TAT installs Docker
+> (~49 s) → Poder registers → sandbox RUNNING → `execute` returns. That run is
+> what found the TAT 60-second default (below), the mandatory spot `MaxPrice`,
+> and the slow-registry trap; all three are fixed or documented here.
+>
 > **Status: validated end-to-end on a live account** (region `ap-singapore`,
 > zone `ap-singapore-1`, `S5.MEDIUM2`, default VPC): create → TAT installs
 > Docker (~50 s, real exit codes over base64) → Poder registers over the
@@ -201,7 +207,32 @@ take a few minutes. Reuse the systemd unit + `service.d` drop-in pattern from
 - **Default image is the newest public Ubuntu.** Override per-request with
   `--image img-xxxxxxxx`.
 
+## The one setting that matters on a slow registry
+
+Docker Hub is unreachable from mainland-China regions and GHCR is slow enough
+that the **first create on a fresh VM can exceed the delivery timeout** while the
+worker pulls the toolbox image — observed in Guangzhou as
+`Post "http://poder/sandboxes": context deadline exceeded`, with the worker
+perfectly healthy.
+
+Pin the image and let the scheduler pre-pull it while it provisions the VM:
+
+```
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.13.4
+SANDRPOD_EGRESS_IMAGE=ghcr.io/sandrpod/egress-proxy:v0.13.4
+```
+
+The pre-pull runs through TAT with the same 15-minute budget as every other
+bootstrap command, so a slow pull costs provisioning time instead of a failed
+create.
+
 ## What the launch sets for you
+- **Every command gets 15 minutes.** TAT's default is 60 seconds, which a Docker
+  install plus a cold image pull exceeds on a fresh VM; a live run in Guangzhou
+  proved it.
+- **A command that never reached the instance is retried.** `DELIVER_FAILED` and
+  `START_FAILED` mean the agent never ran it, so resending cannot double-execute.
+
 
 - **A zone inside the client's region.** The request's `region` is a zone
   (`ap-guangzhou-3`), and a zone from another region is refused here rather than
