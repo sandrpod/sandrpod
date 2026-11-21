@@ -279,6 +279,8 @@ All set on the **API Server** process.
 |----------|----------|---------|---------|
 | `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | for static creds | (cred chain) | AWS API auth |
 | `AWS_REGION` | no | `us-east-1` | target region |
+| `SANDRPOD_SPOT_AWS` | no | off | request spot capacity (`one-time`, terminated when interrupted). On-demand is unchanged when unset |
+| `SANDRPOD_VM_SUBNET_ID_AWS` | yes, when a public IP is requested | — | the subnet to launch into; a public IP rides on a network interface, and AWS rejects one without a subnet |
 | `AWS_IAM_INSTANCE_PROFILE` | **yes** | — | instance profile for SSM on VMs |
 | `SANDRPOD_VM_PUBLIC_IP` | no | `true` | assign a public IP to VMs |
 | `SANDRPOD_VM_SECURITY_GROUP` | recommended | — | security group for VMs |
@@ -397,3 +399,16 @@ sudo journalctl -u sandrpod-server -f      # watch provisioning
   `--image` / `ImageID`.
 - The **Aliyun** provider follows the same shape and is likewise live-validated —
   see [ALIYUN_PROVISIONING.md](ALIYUN_PROVISIONING.md).
+
+## What the launch sets for you
+
+- **IMDSv2 is required, hop limit 1.** Sandboxes run as containers on the same
+  machine, and anything that reaches `169.254.169.254` can read the instance
+  role's credentials. IMDSv1 stays off, and a hop limit of 1 stops a container
+  from proxying a token out of the host.
+- **A per-call ClientToken.** `RunInstances` is not idempotent and the SDK
+  retries transport failures; without a token a lost response becomes a second
+  instance billing beside the first.
+- **One region per provider instance.** The clients are bound to `AWS_REGION`,
+  and a create naming a different region is refused rather than launched in the
+  configured one while the sandbox record claims otherwise.
