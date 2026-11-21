@@ -5,6 +5,16 @@ description: 每个版本改了什么，其中哪些改动会破坏东西。
 
 # 发布说明
 
+## 0.13.5
+
+云 provider 按调度器的假设逐条审计，并在真实账号上各跑了一遍。
+
+| 领域 | 改了什么 |
+|---|---|
+| AWS | 强制 IMDSv2 且 hop limit 为 1；每次 `RunInstances` 带 `ClientToken`，SDK 重试不会多开一台在计费的机器；公网 IP 缺子网、region 与 `AWS_REGION` 不一致都会被前置拒绝；`SANDRPOD_SPOT_AWS` 真正请求竞价；只有 `Success` 算 SSM 命令成功；删除已终止实例不再报错；实例没跑起来会如实报错而不是返回 pending |
+| 腾讯云 | TAT 命令给 15 分钟预算（默认 60 秒，装 Docker + 冷拉镜像必然超过）；没到实例的命令会重试；竞价必须带最高价（`SANDRPOD_SPOT_MAX_PRICE[_TENCENT]`）；删除撞上"终止进行中"会重试；zone 与地域不匹配前置拒绝；NAT 部署的"不要公网 IP"被尊重 |
+| 部署 | 大陆网络下钉住 `SANDRPOD_TOOLBOX_IMAGE` / `SANDRPOD_EGRESS_IMAGE` 让调度器预拉——否则首次创建会卡在镜像拉取上超时 |
+
 ## 0.13.4
 
 一次权限收窄、一个调度修复，以及竞价容量。

@@ -5,6 +5,16 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.5
+
+The cloud providers, audited against what the scheduler assumes and then run on real accounts.
+
+| Area | What changed |
+|---|---|
+| AWS | IMDSv2 required with a hop limit of 1; a per-call `ClientToken` so an SDK retry cannot bill a second instance; a public IP without a subnet and a region that differs from `AWS_REGION` are refused up front; `SANDRPOD_SPOT_AWS` requests spot; only `Success` counts as a successful SSM command; deleting an already-terminated instance is not an error; a create whose instance is not running is reported, not returned as pending |
+| Tencent | TAT commands get 15 minutes (the default is 60 seconds, which a Docker install plus a cold image pull exceeds); commands that never reached the instance are retried; spot requires a max price (`SANDRPOD_SPOT_MAX_PRICE[_TENCENT]`); a delete racing an in-flight termination retries; zone/region mismatch is refused; a NAT deployment's "no public IP" is honoured |
+| Deployment | On a mainland network, pin `SANDRPOD_TOOLBOX_IMAGE` / `SANDRPOD_EGRESS_IMAGE` so the scheduler pre-pulls them — the first create otherwise times out on the image pull |
+
 ## 0.13.4
 
 A security narrowing, a scheduling fix, and spot capacity.
