@@ -22,7 +22,7 @@ sandrpod-cli create agent-01 --provider aliyun --region cn-hongkong \
 | 交换机 | `SANDRPOD_VM_SUBNET_ID_ALIYUN` | `SANDRPOD_VM_SUBNET_ID_AWS` |
 | 安全组 | `SANDRPOD_VM_SECURITY_GROUP_ALIYUN` | `SANDRPOD_VM_SECURITY_GROUP_AWS` |
 | 公网 IP | 默认开启；NAT 环境用 `SANDRPOD_VM_PUBLIC_IP_ALIYUN=false` | 同上——AWS 上要公网 IP 必须有交换机，否则直接拒绝 |
-| 竞价 | `SANDRPOD_SPOT_ALIYUN`（`SpotAsPriceGo`） | `SANDRPOD_SPOT_AWS`（one-time，被回收即终止） |
+| 竞价 | `SANDRPOD_SPOT_ALIYUN`（`SpotAsPriceGo`） | `SANDRPOD_SPOT_AWS`（one-time，被回收即终止） · `SANDRPOD_SPOT_TENCENT`（必须配 `SANDRPOD_SPOT_MAX_PRICE_TENCENT`——腾讯云不接受没有最高价的竞价请求） |
 | 地域 / 可用区 | 地域 | 地域（一个部署一个） · 腾讯云要传地域内的可用区 |
 
 厂商只有注册成功后才会出现在 `/api/v1/capabilities` 里，控制台据此禁用其余选项 ——
@@ -98,3 +98,17 @@ sandrpod-cli delete canary
 AWS 上的启动默认加固：**强制 IMDSv2 且 hop limit 为 1**，宿主上的容器读不到实例角色
 凭据；每次 `RunInstances` 都带一个只属于这次调用的 `ClientToken`，重试不会变成第二台
 在计费的机器。
+
+### 大陆网络下要钉住镜像
+
+Docker Hub 在大陆地域完全不可达，GHCR 又慢到**首次创建会超过投递超时**——全新的 VM
+在拉 toolbox 镜像，worker 完全健康，创建却报
+`Post "http://poder/sandboxes": context deadline exceeded`。解决办法是把镜像钉住：
+
+```
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.13.x
+SANDRPOD_EGRESS_IMAGE=ghcr.io/sandrpod/egress-proxy:v0.13.x
+```
+
+调度器会在起 VM 的过程中（同一份 bootstrap 预算内）预拉。另一半答案是给 GHCR 前面放
+镜像代理：`ghcr.nju.edu.cn` 实测可用，`docker.m.daocloud.io` 不可用。

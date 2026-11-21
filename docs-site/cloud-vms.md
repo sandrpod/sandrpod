@@ -23,7 +23,7 @@ sandrpod-cli create agent-01 --provider aliyun --region cn-hongkong \
 | Subnet | `SANDRPOD_VM_SUBNET_ID_ALIYUN` | `SANDRPOD_VM_SUBNET_ID_AWS` |
 | Security group | `SANDRPOD_VM_SECURITY_GROUP_ALIYUN` | `SANDRPOD_VM_SECURITY_GROUP_AWS` |
 | Public IP | on by default; `SANDRPOD_VM_PUBLIC_IP_ALIYUN=false` for NAT | same — and a public IP needs a subnet on AWS, or the launch is refused |
-| Spot | `SANDRPOD_SPOT_ALIYUN` (`SpotAsPriceGo`) | `SANDRPOD_SPOT_AWS` (one-time, terminated when interrupted) |
+| Spot | `SANDRPOD_SPOT_ALIYUN` (`SpotAsPriceGo`) | `SANDRPOD_SPOT_AWS` (one-time, terminated when interrupted) · `SANDRPOD_SPOT_TENCENT` (needs `SANDRPOD_SPOT_MAX_PRICE_TENCENT` — Tencent rejects a spot request without a max price) |
 | Region / zone | region | region (one per deployment) · Tencent takes a zone inside its region |
 
 A provider only appears in `/api/v1/capabilities` once it registers, and the console
@@ -109,3 +109,19 @@ On AWS the launch is hardened by default: **IMDSv2 is required with a hop limit
 of 1**, so a container on that host cannot read the instance role's credentials,
 and every `RunInstances` carries a per-call `ClientToken` so a retried request
 cannot become a second billing instance.
+
+### On a mainland-China network, pin the images
+
+Docker Hub is unreachable from mainland regions and GHCR is slow enough that the
+**first create can exceed the delivery timeout** while a fresh VM pulls the
+toolbox image — the worker is healthy, the create still fails with
+`Post "http://poder/sandboxes": context deadline exceeded`. Set
+
+```
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.13.x
+SANDRPOD_EGRESS_IMAGE=ghcr.io/sandrpod/egress-proxy:v0.13.x
+```
+
+so the scheduler pre-pulls them on the VM while it provisions, inside the same
+bootstrap budget. A registry mirror in front of GHCR (`ghcr.nju.edu.cn` worked,
+`docker.m.daocloud.io` did not) is the other half of the answer.
