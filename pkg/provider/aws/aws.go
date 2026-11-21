@@ -444,11 +444,11 @@ func (p *AWSProvider) ExecuteCommand(ctx context.Context, vmID, command string) 
 
 // commandResult turns a terminal SSM invocation into what the scheduler reads.
 //
-// Only Success carries a real exit code. TimedOut and Cancelled invocations have
-// none — their ResponseCode is 0 or absent — and returning that unchanged made a
-// machine that never finished `apt-get install docker` look like it had exit 0.
-// The scheduler then started the Poder on it and surfaced the failure three
-// steps later, as something unrelated.
+// Only Success is a success. The exit code for any other terminal status is
+// whatever AWS chose to put in ResponseCode — measured at -1 for Cancelled on
+// this API version — and depending on that is a coin flip away from a machine
+// that never finished `apt-get install docker` reading as exit 0, with the
+// scheduler starting a Poder on it and surfacing the failure steps later.
 func commandResult(inv *ssm.GetCommandInvocationOutput, commandID string) *provider.CommandResult {
 	out := strings.TrimSpace(aws.ToString(inv.StandardOutputContent))
 	stderr := strings.TrimSpace(aws.ToString(inv.StandardErrorContent))

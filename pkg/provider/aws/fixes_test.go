@@ -11,9 +11,9 @@ import (
 	"github.com/sandrpod/sandrpod/pkg/provider"
 )
 
-// Only Success carries an exit code. A TimedOut or Cancelled invocation has none
-// (ResponseCode 0), and returning that made a machine whose docker install never
-// finished look like exit 0 — the scheduler then started the Poder on it.
+// Only Success is a success. A non-Success terminal status is a failure whatever
+// code it carries: depending on ResponseCode there is one AWS version away from a
+// machine whose docker install never finished reading as exit 0.
 func TestCommandResult_TerminalStatuses(t *testing.T) {
 	inv := func(status ssmtypes.CommandInvocationStatus, code int32, out, errOut string) *ssm.GetCommandInvocationOutput {
 		return &ssm.GetCommandInvocationOutput{
