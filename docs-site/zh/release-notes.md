@@ -5,6 +5,18 @@ description: 每个版本改了什么，其中哪些改动会破坏东西。
 
 # 发布说明
 
+## 0.13.6
+
+AWS provider 再修五处，逐条在真实账号上验过。
+
+| 领域 | 改了什么 |
+|---|---|
+| 实例状态 | 已终止实例报 `TERMINATED` 而不是 `STOPPED`——等待实例消失的调用方不再看到一台"永远停不掉"的机器 |
+| 区域字段 | `GetVM` 的 Region 填请求的区域，而不是可用区 |
+| 清理 | `Cleanup` 必须显式设 `SANDRPOD_AWS_ALLOW_CLEANUP=1`：它会终止该区域**所有** SandrPod 实例，不分租户，所以不能靠一次方法调用触发 |
+| 机型 | `ListInstanceTypes` 改调 `DescribeInstanceTypes`（`us-east-1` 分页返回 1373 个机型），原静态列表仅作离线兜底 |
+| 计费归属 | EBS 卷与实例一起打标签，成本分摊和按标签找孤儿都能看到它 |
+
 ## 0.13.5
 
 云 provider 按调度器的假设逐条审计，并在真实账号上各跑了一遍。

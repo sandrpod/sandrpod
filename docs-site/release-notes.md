@@ -5,6 +5,18 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.6
+
+Five more AWS findings, each checked on a live account.
+
+| Area | What changed |
+|---|---|
+| AWS state | A terminated instance reports `TERMINATED`, not `STOPPED` — a caller waiting for removal no longer sees a machine that never goes away |
+| AWS region | `GetVM` reports the region it was asked for rather than the availability zone in that field |
+| AWS cleanup | `Cleanup` refuses to run unless `SANDRPOD_AWS_ALLOW_CLEANUP=1`: it terminates every SandrPod instance in the region regardless of workspace |
+| AWS capacity | `ListInstanceTypes` asks `DescribeInstanceTypes` (1 373 types in `us-east-1`, paginated); the old static list is the offline fallback |
+| AWS billing | The EBS volume is tagged alongside the instance, so cost allocation and tag-based orphan searches see it |
+
 ## 0.13.5
 
 The cloud providers, audited against what the scheduler assumes and then run on real accounts.

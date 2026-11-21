@@ -3,7 +3,22 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.13.5 (current)
+## 0.13.6 (current)
+
+Five AWS findings that only showed up when the provider was read against the
+scheduler and then exercised on a live account.
+
+A terminated instance now reports `TERMINATED` instead of `STOPPED` (a caller
+waiting for removal, or an orphan sweep, saw a machine that never went away);
+`GetVM` reports the region it was asked for, not the availability zone, in that
+field; `Cleanup` refuses to run without `SANDRPOD_AWS_ALLOW_CLEANUP=1`, because
+it terminates every SandrPod instance in the region regardless of workspace;
+`ListInstanceTypes` asks `DescribeInstanceTypes` (1 373 types in `us-east-1`,
+paginated) with the old static list kept as an offline fallback; and the EBS
+volume is tagged alongside the instance, so cost allocation and tag-based orphan
+searches see it.
+
+## 0.13.5
 
 The cloud providers, audited against what the scheduler assumes and then run on
 real accounts.
