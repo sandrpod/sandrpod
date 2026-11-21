@@ -106,8 +106,8 @@ Docker Hub 在大陆地域完全不可达，GHCR 又慢到**首次创建会超�
 `Post "http://poder/sandboxes": context deadline exceeded`。解决办法是把镜像钉住：
 
 ```
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.13.x
-SANDRPOD_EGRESS_IMAGE=ghcr.io/sandrpod/egress-proxy:v0.13.x
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.13.5x
+SANDRPOD_EGRESS_IMAGE=ghcr.io/sandrpod/egress-proxy:v0.13.5x
 ```
 
 调度器会在起 VM 的过程中（同一份 bootstrap 预算内）预拉。另一半答案是给 GHCR 前面放

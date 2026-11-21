@@ -3,7 +3,33 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.13.4 (current)
+## 0.13.5 (current)
+
+The cloud providers, audited against what the scheduler assumes and then run on
+real accounts.
+
+**AWS** launches with IMDSv2 required and a hop limit of 1 (sandboxes are
+containers on that host, and the metadata service holds the instance role's
+credentials), carries a per-call `ClientToken` so an SDK retry cannot become a
+second billing instance, refuses a public IP without a subnet and a region that
+differs from `AWS_REGION`, and honours `SANDRPOD_SPOT_AWS`. Only `Success` counts
+as a successful SSM command now; deleting an already-terminated instance is not
+an error; a create whose machine is not running when the waiter returns says so
+instead of handing back a pending VM.
+
+**Tencent** is the same treatment plus what only a live mainland run found: TAT
+kills a command after 60 seconds by default and the provider never set `Timeout`
+— every command now carries 15 minutes, and one that never reached the instance
+(`DELIVER_FAILED` / `START_FAILED`) is retried. Spot (`SPOTPAID`) requires a max
+price, so `SANDRPOD_SPOT_MAX_PRICE[_TENCENT]` is plumbed through and the provider
+names the setting when it is missing. A delete that races an in-flight
+termination retries instead of reporting a fabricated "left running".
+
+On a mainland network, pin `SANDRPOD_TOOLBOX_IMAGE` / `SANDRPOD_EGRESS_IMAGE`:
+the scheduler pre-pulls them while it provisions, which is the difference
+between a slow create and one that times out on its first image pull.
+
+## 0.13.4
 
 A security narrowing and two operational repairs. A **worker credential** can no
 longer use the sandbox API — it exists for the tunnel handshake, the job poll, its
