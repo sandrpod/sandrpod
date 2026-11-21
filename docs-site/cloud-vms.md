@@ -24,6 +24,7 @@ sandrpod-cli create agent-01 --provider aliyun --region cn-hongkong \
 | Security group | `SANDRPOD_VM_SECURITY_GROUP_ALIYUN` | `SANDRPOD_VM_SECURITY_GROUP_AWS` |
 | Public IP | on by default; `SANDRPOD_VM_PUBLIC_IP_ALIYUN=false` for NAT | same — and a public IP needs a subnet on AWS, or the launch is refused |
 | Spot | `SANDRPOD_SPOT_ALIYUN` (`SpotAsPriceGo`) | `SANDRPOD_SPOT_AWS` (one-time, terminated when interrupted) |
+| Region / zone | region | region (one per deployment) · Tencent takes a zone inside its region |
 
 A provider only appears in `/api/v1/capabilities` once it registers, and the console
 disables the rest — offering a substrate the server cannot provision produces a form
