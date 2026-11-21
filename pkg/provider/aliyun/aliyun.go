@@ -180,6 +180,8 @@ func (p *AliyunProvider) CreateVM(ctx context.Context, req *provider.CreateVMReq
 		runReq.InternetMaxBandwidthOut = requests.NewInteger(10) // 10 Mbps
 	}
 
+	applySpot(req, runReq)
+
 	// Disk configuration
 	if req.DiskConfig != nil && req.DiskConfig.SizeGiB > 0 {
 		runReq.SystemDiskSize = strconv.Itoa(req.DiskConfig.SizeGiB)
@@ -314,6 +316,22 @@ func (p *AliyunProvider) DeleteVM(ctx context.Context, vmID string) error {
 	p.mu.Unlock()
 
 	return nil
+}
+
+// applySpot turns a request for preemptible capacity into RunInstances fields.
+// Split out so the mapping is testable without an ECS client: SpotAsPriceGo is
+// the only strategy that reliably yields an instance, and SpotDuration=0 is the
+// "no guaranteed duration" mode — a duration makes the price behave like an
+// on-demand reservation.
+func applySpot(req *provider.CreateVMRequest, runReq *ecs.RunInstancesRequest) {
+	if req.Spot {
+		runReq.SpotStrategy = "SpotAsPriceGo"
+		runReq.SpotDuration = requests.NewInteger(0)
+		if req.SpotPriceLimit > 0 {
+			runReq.SpotStrategy = "SpotWithPriceLimit"
+			runReq.SpotPriceLimit = requests.NewFloat(req.SpotPriceLimit)
+		}
+	}
 }
 
 // GetVM retrieves information about a VM instance.

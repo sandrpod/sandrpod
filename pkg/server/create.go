@@ -179,36 +179,17 @@ func runSandboxCreate(
 	// Detached from any request context so client disconnects can't abort it.
 	schedCtx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	// An async create's job row already exists, and provisioning a VM takes
-	// minutes while the resume pass treats a PENDING row older than 45 s as a
-	// delivery that never happened — it handed the create to a worker that did
-	// not exist yet and failed it, on the first real provisioning run, three
-	// seconds before that worker registered. Keep the row fresh for as long as
-	// this call is the one doing the work; a real crash still leaves a stale row
-	// for the resumer to pick up.
-	var stopKeepalive, keepaliveDone chan struct{}
+	// minutes. Mark it PROVISIONING before the work starts: the resume pass only
+	// touches PENDING rows, so this is what says "somebody is on it" without
+	// pretending a timestamp is a state. A row left PROVISIONING by a crash is
+	// put back by the resume pass once provisioningStaleAfter has passed.
 	if preJobID != "" {
-		stopKeepalive = make(chan struct{})
-		keepaliveDone = make(chan struct{})
-		go func() {
-			defer close(keepaliveDone)
-			t := time.NewTicker(15 * time.Second)
-			defer t.Stop()
-			for {
-				select {
-				case <-stopKeepalive:
-					return
-				case <-t.C:
-					_ = jobStore.UpdateJob(preJobID, func(*podpkg.Job) {})
-				}
-			}
-		}()
+		_ = jobStore.UpdateJob(preJobID, func(j *podpkg.Job) {
+			j.Status = podpkg.JobStatusProvisioning
+		})
 	}
 	schedJob, err := sched.ScheduleSandboxCreation(schedCtx, req)
 	cancel()
-	if stopKeepalive != nil {
-		close(stopKeepalive)
-		<-keepaliveDone
-	}
 	if err != nil {
 		log.Printf("create sandbox %s (provider=%s) failed: %v", req.Name, req.ProviderType, err)
 		failBoth(preJobID, err.Error())

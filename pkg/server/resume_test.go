@@ -247,3 +247,50 @@ func TestResume_IgnoresCompletedJobs(t *testing.T) {
 		t.Fatal("re-delivered a completed job")
 	}
 }
+
+// A create whose VM is still booting says so with its status. The pass must not
+// treat it as a delivery that never happened — that is what failed a real
+// provisioning three seconds before its worker registered.
+func TestResume_LeavesProvisioningJobsAlone(t *testing.T) {
+	memory := store.NewMemoryStores()
+	job := &podpkg.Job{
+		ID: "j-prov", Type: podpkg.JobTypeCreateSandbox, Status: podpkg.JobStatusProvisioning,
+		SandboxName: "booting", PoderID: "", Request: []byte(`{"name":"booting"}`),
+		CreatedAt: time.Now().Add(-10 * time.Minute), UpdatedAt: time.Now().Add(-10 * time.Minute),
+	}
+	_ = memory.Jobs.AddJob(job)
+	delivered := false
+	d := resumeDeps{
+		jobs: memory.Jobs, sandboxes: memory.Sandboxes, tunnels: tunnel.NewTunnelStore(),
+		deliver: func(*podpkg.Job, *podpkg.CreateSandboxRequest) error { delivered = true; return nil },
+	}
+	if n := resumeOnce(d); n != 0 || delivered {
+		t.Fatal("delivered a create that was still being provisioned")
+	}
+	if got, _ := memory.Jobs.GetJob("j-prov"); got.Status != podpkg.JobStatusProvisioning {
+		t.Fatalf("status = %s, want it left alone", got.Status)
+	}
+}
+
+// One whose owner is long gone goes back to PENDING, and the next pass delivers
+// it like any other lost create.
+func TestResume_ReclaimsAbandonedProvisioning(t *testing.T) {
+	memory := store.NewMemoryStores()
+	job := &podpkg.Job{
+		ID: "j-dead", Type: podpkg.JobTypeCreateSandbox, Status: podpkg.JobStatusProvisioning,
+		SandboxName: "abandoned", PoderID: "p1", Request: []byte(`{"name":"abandoned"}`),
+		CreatedAt: time.Now().Add(-2 * time.Hour), UpdatedAt: time.Now().Add(-2 * time.Hour),
+	}
+	_ = memory.Jobs.AddJob(job)
+	d := resumeDeps{
+		jobs: memory.Jobs, sandboxes: memory.Sandboxes, tunnels: tunnel.NewTunnelStore(),
+		deliver: func(*podpkg.Job, *podpkg.CreateSandboxRequest) error { return nil },
+	}
+	if n := resumeOnce(d); n != 0 {
+		t.Fatalf("delivered %d jobs in the pass that only reclaims", n)
+	}
+	got, _ := memory.Jobs.GetJob("j-dead")
+	if got.Status != podpkg.JobStatusPending {
+		t.Fatalf("status = %s, want PENDING for the next pass", got.Status)
+	}
+}

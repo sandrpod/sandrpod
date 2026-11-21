@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [Unreleased]
+
+### Security
+
+- **A worker credential can no longer use the sandbox API.** It exists for the
+  tunnel handshake, the job poll, its own heartbeat, the enrolment exchange and
+  the two calls an agent makes directly (capabilities, egress decisions). A
+  compromised worker used to reach `POST /api/v1/sandboxes` like any tenant.
+
+### Changed
+
+- **Async creates are `PROVISIONING`, not `PENDING`, while a VM boots.** The
+  resume pass only resumes `PENDING` rows, so a create that is legitimately
+  taking minutes is no longer handed to a worker that does not exist yet. A row
+  left `PROVISIONING` by a crash is put back after 30 minutes
+  (`SANDRPOD_PROVISIONING_STALE_AFTER`).
+- **Aliyun spot instances**: `SANDRPOD_SPOT_ALIYUN=true` (or `SANDRPOD_SPOT`)
+  requests `SpotAsPriceGo` capacity. Off by default.
+
 ## [0.13.3] - 2026-11-20
 
 ### Fixed

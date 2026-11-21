@@ -51,6 +51,10 @@ var (
 	// ResumeInterval is how often the resumer looks.
 	// `SANDRPOD_RESUME_INTERVAL` overrides it.
 	ResumeInterval = envDurationOr("SANDRPOD_RESUME_INTERVAL", 20*time.Second)
+	// provisioningStaleAfter is how long a PROVISIONING create may sit before the
+	// pass assumes its owner died. Longer than the 20-minute create budget: a VM
+	// that is still booting at that point is not abandoned, it is slow.
+	provisioningStaleAfter = envDurationOr("SANDRPOD_PROVISIONING_STALE_AFTER", 30*time.Minute)
 )
 
 // ResumeMaxAttempts caps retries so a permanently broken request does not retry
@@ -82,6 +86,20 @@ func resumeOnce(d resumeDeps) int {
 	delivered := 0
 	for _, job := range pending {
 		if job == nil || job.Type != podpkg.JobTypeCreateSandbox {
+			continue
+		}
+		// A create that is being provisioned right now is not a lost delivery. It
+		// says so with its status; the owner refreshes nothing, and this pass only
+		// puts the row back when the owner is clearly gone (a crash mid-provision),
+		// so the next pass can deliver it like any other pending create.
+		if job.Status == podpkg.JobStatusProvisioning {
+			if now.Sub(job.UpdatedAt) < provisioningStaleAfter {
+				continue
+			}
+			_ = d.jobs.UpdateJob(job.ID, func(j *podpkg.Job) {
+				j.Status = podpkg.JobStatusPending
+				j.ErrorMessage = "provisioning was abandoned; retrying the delivery"
+			})
 			continue
 		}
 		// Only a job whose delivery never finished is ours. ListJobs returns every

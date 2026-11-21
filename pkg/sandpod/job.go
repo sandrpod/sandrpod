@@ -27,6 +27,12 @@ const (
 	JobStatusInProgress JobStatus = "IN_PROGRESS"
 	JobStatusCompleted  JobStatus = "COMPLETED"
 	JobStatusFailed     JobStatus = "FAILED"
+	// JobStatusProvisioning is an async create whose work is happening inside the
+	// control plane right now — booting a VM takes minutes, and the resume pass
+	// exists for deliveries that never happened. Telling the two apart by
+	// timestamp alone was the bug: a PENDING row older than the stale window was
+	// handed to a worker that did not exist yet.
+	JobStatusProvisioning JobStatus = "PROVISIONING"
 )
 
 // Job is the job model.

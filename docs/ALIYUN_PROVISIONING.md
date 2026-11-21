@@ -278,6 +278,22 @@ are recorded verbatim.
 | `poder registration timeout`, and the VM's worker logs show `dial tcp 127.0.0.1:8090` | the worker was told to reach the control plane on loopback. Fixed in 0.7.1: `SANDRPOD_PUBLIC_URL` is what a VM is given |
 | First create times out, then a container appears on the VM anyway | the sandbox image was being pulled inside the 2-minute create budget. Fixed in 0.7.1 by pre-pulling during bootstrap |
 | VM still running long after every sandbox is deleted | no `SANDRPOD_PODER_IDLE_TIMEOUT`, or a build older than 0.7.1 where the reaper only started from `Main()` |
+| `IncorrectInstanceStatus.Initializing` on cleanup | the create failed while the VM was still booting; `DeleteVM` retries for 90 s, then force-stops and retries, so the machine is not left billing |
+
+## Spot instances
+
+`SANDRPOD_SPOT_ALIYUN=true` (or the unscoped `SANDRPOD_SPOT=true`) makes the
+scheduler ask for preemptible capacity: `SpotAsPriceGo`, no guaranteed duration.
+A spot machine can disappear, which the fleet already survives — an offline
+worker stops being scheduled onto and its sandbox goes `ERROR`, and the create
+that was waiting on it can be retried. Off by default: paying for stability is a
+choice, not a default.
+
+`SANDRPOD_SPOT_ALIYUN` is read per provider, like the other `_<PROVIDER>` knobs.
+A per-request price cap is not exposed yet; `SpotWithPriceLimit` is wired in
+`provider.CreateVMRequest.SpotPriceLimit` for callers that use the package
+directly.
+
 | `InvalidSecurityGroupId` | `SANDRPOD_VM_SECURITY_GROUP_ALIYUN` (or the unscoped form) is missing; Aliyun has no default VPC to fall back to |
 | VM launches, command never runs | Cloud Assist agent not present on the image, or the AK lacks `RunCommand`/`DescribeInvocationResults` |
 | Docker install or image pull slow, fails | mainland-China VM pulling `ghcr.io` — use ACR; check SG egress 443 |

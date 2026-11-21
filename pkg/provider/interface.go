@@ -104,6 +104,15 @@ type CreateVMRequest struct {
 	DiskConfig    *DiskConfig            // Disk configuration (optional)
 	RunnerConfig  *RunnerBootstrapConfig // Poder bootstrap configuration
 	Tags          map[string]string      // Resource tags
+	// Spot asks for preemptible capacity. Where the provider has no such market
+	// it is ignored rather than failing the create; where it does, the machine is
+	// cheaper and can disappear, which the fleet already survives (an offline
+	// worker stops being scheduled onto, and its sandbox goes ERROR).
+	Spot bool
+	// SpotPriceLimit caps the hourly price when the provider supports a bid
+	// (Aliyun SpotPriceLimit). Zero means "whatever the market asks", the
+	// behaviour that actually gets instances.
+	SpotPriceLimit float64
 }
 
 // Provider is the abstract interface for a cloud provider.

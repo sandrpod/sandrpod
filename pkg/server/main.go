@@ -453,6 +453,17 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		return func(w http.ResponseWriter, r *http.Request) {
 			id, err := authenticator.Authenticate(r)
 			if err == nil {
+				// A worker credential is a machine's, and a machine has exactly
+				// four reasons to call this API: enrol, handshake, poll for work,
+				// and say it is alive. Everything else on the sandbox API was open
+				// to it — a compromised worker could create sandboxes on any node
+				// in its tenant. Refuse the rest here, once, rather than trusting
+				// each handler to remember.
+				if id.IsWorker() && !workerMayReach(r) {
+					http.Error(w, "Forbidden: a worker credential may only use the tunnel, job poll and its own heartbeat",
+						http.StatusForbidden)
+					return
+				}
 				next(w, WithIdentity(r, id))
 				return
 			}

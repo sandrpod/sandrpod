@@ -301,6 +301,9 @@ func (s *Scheduler) createVMWithProvider(ctx context.Context, providerType strin
 		RunnerConfig: &provider.RunnerBootstrapConfig{
 			APIURL: s.apiURL,
 		},
+		// Preemptible capacity, when the deployment asks for it. Off by default:
+		// a spot machine can vanish, and that should be a choice.
+		Spot: providerEnvBool("SANDRPOD_SPOT", providerType, false),
 	}
 
 	vm, err := p.CreateVM(ctx, createReq)
