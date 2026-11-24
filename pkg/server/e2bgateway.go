@@ -797,7 +797,7 @@ func (b *e2bSandboxBackend) PauseSandbox(ident, sandboxID string) bool {
 	if err := b.d.poderPodAction(sb, "stop"); err != nil {
 		return false
 	}
-	b.d.sandboxes.Update(sandboxID, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopped })
+	transitionState(b.d.sandboxes, sandboxID, podpkg.StateStopped)
 	return true
 }
 
@@ -810,7 +810,7 @@ func (b *e2bSandboxBackend) ResumeSandbox(ident, sandboxID string, seconds int32
 	if err := b.d.poderPodAction(sb, "start"); err != nil {
 		return e2bcompat.SandboxDetail{}, false
 	}
-	b.d.sandboxes.Update(sandboxID, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateRunning })
+	transitionState(b.d.sandboxes, sandboxID, podpkg.StateRunning)
 	if seconds > 0 {
 		b.SetTimeout(ident, sandboxID, seconds)
 	}

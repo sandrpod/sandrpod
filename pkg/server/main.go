@@ -1132,7 +1132,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					return
 				}
 				proxyHTTP(t, r, "http://poder/sandboxes/"+sandboxName+"/start", w)
-				sandboxStore.Update(sb.Name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateRunning })
+				transitionState(sandboxStore, sb.Name, podpkg.StateRunning)
 			case sbAction == "stop" && r.Method == http.MethodPost:
 				sb, ok := sandboxStore.Get(sandboxName)
 				if !ok {
@@ -1140,7 +1140,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					return
 				}
 				proxyHTTP(t, r, "http://poder/sandboxes/"+sandboxName+"/stop", w)
-				sandboxStore.Update(sb.Name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopped })
+				transitionState(sandboxStore, sb.Name, podpkg.StateStopped)
 			case sbAction == "" && r.Method == http.MethodDelete:
 				sb, ok := sandboxStore.Get(sandboxName)
 				if !ok {
@@ -2066,17 +2066,21 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				}
 				if strings.HasPrefix(sb.ProxyURL, "direct://") {
 					// Local agent is always running; start is a no-op
-					sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateRunning })
+					transitionState(sandboxStore, name, podpkg.StateRunning)
 					w.Header().Set("Content-Type", "application/json")
 					json.NewEncoder(w).Encode(map[string]any{"status": "running"})
 					return
 				}
+				// STARTING is transient: the transition that matters to a
+				// metering sink is from what the sandbox was before it.
+				before := sb.State
 				sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStarting })
 				if err := proxyHTTPErr(t, r, "http://poder/sandboxes/"+name+"/start", w); err != nil {
 					sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateError })
 					return
 				}
 				sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateRunning })
+				emitTransition(sandboxStore, name, before, podpkg.StateRunning)
 				return
 			}
 
@@ -2087,7 +2091,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 				}
 				if strings.HasPrefix(sb.ProxyURL, "direct://") {
 					// Local agent cannot be paused; stop is a no-op
-					sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopped })
+					transitionState(sandboxStore, name, podpkg.StateStopped)
 					w.Header().Set("Content-Type", "application/json")
 					json.NewEncoder(w).Encode(map[string]any{"status": "stopped"})
 					return
@@ -2097,7 +2101,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateError })
 					return
 				}
-				sandboxStore.Update(name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopped })
+				transitionState(sandboxStore, name, podpkg.StateStopped)
 				return
 			}
 
@@ -2304,7 +2308,10 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 
 		// Phase 2: update sandbox state under the sandbox store's own lock.
 		if req.Status == podpkg.JobStatusCompleted || req.Status == podpkg.JobStatusFailed {
+			var from, to podpkg.State
 			sandboxStore.Update(sandboxName, func(sb *podpkg.SandboxInfo) {
+				from = sb.State
+				defer func() { to = sb.State }()
 				switch jobType {
 				case podpkg.JobTypeCreateSandbox:
 					if req.Status == podpkg.JobStatusCompleted {
@@ -2341,6 +2348,7 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 					}
 				}
 			})
+			emitTransition(sandboxStore, sandboxName, from, to)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"status": "ok"})
@@ -3108,17 +3116,13 @@ func reconcileByHeartbeat(poderID string, containerNames []string, ss podpkg.San
 		case podpkg.StateRunning, podpkg.StateStarting:
 			if !isAlive {
 				log.Printf("reconcile %s/%s: container not in heartbeat list → marking ERROR", poderID, sb.Name)
-				_ = ss.Update(sb.Name, func(s *podpkg.SandboxInfo) {
-					s.State = podpkg.StateError
-				})
+				transitionState(ss, sb.Name, podpkg.StateError)
 			}
 		case podpkg.StateError:
 			if isAlive {
 				// Container survived the Poder restart — restore to RUNNING.
 				log.Printf("reconcile %s/%s: container alive after reconnect → restoring RUNNING", poderID, sb.Name)
-				_ = ss.Update(sb.Name, func(s *podpkg.SandboxInfo) {
-					s.State = podpkg.StateRunning
-				})
+				transitionState(ss, sb.Name, podpkg.StateRunning)
 			}
 		}
 	}

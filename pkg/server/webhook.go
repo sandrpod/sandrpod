@@ -104,3 +104,60 @@ func sandboxEvent(sb *podpkg.SandboxInfo, extra map[string]any) map[string]any {
 	}
 	return out
 }
+
+// stateStore is what a lifecycle transition needs from the sandbox store.
+type stateStore interface {
+	Get(name string) (*podpkg.SandboxInfo, bool)
+	Update(name string, fn func(*podpkg.SandboxInfo)) error
+}
+
+// transitionState moves a sandbox to a new state and, when that begins or ends a
+// stretch of running, reports it to the event sink (see transitionEvent).
+func transitionState(ss stateStore, name string, to podpkg.State) {
+	var from podpkg.State
+	if err := ss.Update(name, func(s *podpkg.SandboxInfo) {
+		from = s.State
+		s.State = to
+	}); err != nil {
+		return
+	}
+	emitTransition(ss, name, from, to)
+}
+
+// emitTransition reports a state change that already happened.
+func emitTransition(ss stateStore, name string, from, to podpkg.State) {
+	ev := transitionEvent(from, to)
+	if ev == "" {
+		return
+	}
+	if sb, ok := ss.Get(name); ok {
+		notifyEvent(ev, sandboxEvent(sb, map[string]any{"from": string(from)}))
+	}
+}
+
+// transitionEvent names the lifecycle event for a state change, or "" when
+// nothing a consumer bills by changed.
+//
+//	sandbox.stopped  a running sandbox stopped: by request, by an E2B pause, by
+//	                 the idle reaper, or because its container disappeared
+//	sandbox.started  a stopped (or errored) sandbox runs again
+//
+// Creation keeps its own sandbox.running and deletion its sandbox.deleted.
+// Without these two, a metering sink saw only create and delete, and billed a
+// stopped or paused sandbox for every hour until it was deleted.
+func transitionEvent(from, to podpkg.State) string {
+	if from == to {
+		return ""
+	}
+	switch to {
+	case podpkg.StateStopped, podpkg.StateError:
+		if from == podpkg.StateRunning || from == podpkg.StateStopping {
+			return "sandbox.stopped"
+		}
+	case podpkg.StateRunning:
+		if from == podpkg.StateStopped || from == podpkg.StateStopping || from == podpkg.StateError {
+			return "sandbox.started"
+		}
+	}
+	return ""
+}

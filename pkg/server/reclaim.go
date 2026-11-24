@@ -115,7 +115,7 @@ func stopSandbox(ctx context.Context, sb *podpkg.SandboxInfo, ss podpkg.SandboxR
 		log.Printf("idle reaper: stop %s failed: HTTP %d", sb.Name, resp.StatusCode)
 		return
 	}
-	_ = ss.Update(sb.Name, func(s *podpkg.SandboxInfo) { s.State = podpkg.StateStopped })
+	transitionState(ss, sb.Name, podpkg.StateStopped)
 	log.Printf("idle reaper: sandbox %s stopped, data kept in its workspace volume", sb.Name)
 }
 
