@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [Unreleased]
+
+### Security
+
+- **A tree search now authorizes every path it reads, not just its root.**
+  `files.find` / `files.search` checked the directory once and then read
+  everything beneath it: searching an authorized `~` returned the contents of
+  hard-locked `~/.ssh` files, a symlink inside the root was followed anywhere,
+  and a `../` glob climbed out. Each reached path is resolved and dropped when
+  it leaves the root, hits the read blacklist, or lies under a hardlock
+  (`permission.Manager.HardlockMatcher` — non-prompting, rules resolved once).
+  `files.find` also reads regular files only, so a FIFO can no longer hang it.
+- **Revoking the last API key cannot leave the server without a credential.**
+  An empty DB key index used to make `authDisabled` true, turning a running
+  server into an anonymous-admin endpoint the moment the last key was revoked;
+  the index now latches once it has held a key, and the last key is refused
+  (409) unless a static `-token` / tokens file exists. The refusal is atomic
+  with the delete (`DeleteByPrefixIfNotLast`; the SQL repo locks the rows first,
+  so two concurrent revocations cannot both win).
+- **`GET /api/v1/jobs/poll` is gone.** Nothing polled (creates are pushed down
+  the tunnel and lost deliveries are re-sent by the resumer), but any worker
+  credential — including a tenant's provision token — could call it and receive
+  every tenant's pending create requests, env vars included, while each call
+  flipped job statuses under the resumer.
+
 ## [0.13.6] - 2026-11-21
 
 ### Fixed
