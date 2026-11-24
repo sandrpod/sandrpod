@@ -1,6 +1,7 @@
 package store
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -331,5 +332,30 @@ func TestMemTokenRepo(t *testing.T) {
 	}
 	if list, _ := r.List(); len(list) != 0 {
 		t.Errorf("after delete: want empty, got %+v", list)
+	}
+}
+
+// The guarded delete exists so the last credential cannot be revoked by two
+// concurrent requests: the check and the delete hold one lock.
+func TestMemTokenRepo_DeleteByPrefixIfNotLast(t *testing.T) {
+	r := NewMemTokenRepo()
+	mk := func(name, prefix, hash string) *sandpod.APIToken {
+		return &sandpod.APIToken{Name: name, Prefix: prefix, Hash: hash, Role: "user", CreatedAt: time.Now()}
+	}
+	_ = r.Create(mk("a", "e2b_aaaa", "h-a"))
+	_ = r.Create(mk("b", "e2b_bbbb", "h-b"))
+
+	if removed, err := r.DeleteByPrefixIfNotLast("e2b_nope"); err != nil || len(removed) != 0 {
+		t.Fatalf("miss: removed=%v err=%v, want none", removed, err)
+	}
+	if removed, err := r.DeleteByPrefixIfNotLast("e2b_aaaa"); err != nil || len(removed) != 1 {
+		t.Fatalf("first of two: removed=%v err=%v", removed, err)
+	}
+	removed, err := r.DeleteByPrefixIfNotLast("e2b_bbbb")
+	if !errors.Is(err, sandpod.ErrLastToken) || removed != nil {
+		t.Fatalf("last token: removed=%v err=%v, want ErrLastToken", removed, err)
+	}
+	if list, _ := r.List(); len(list) != 1 || list[0].Hash != "h-b" {
+		t.Fatalf("the last token must survive: %+v", list)
 	}
 }

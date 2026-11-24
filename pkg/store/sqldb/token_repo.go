@@ -92,3 +92,50 @@ func (r *tokenRepo) DeleteByPrefix(prefix string) ([]string, error) {
 	}
 	return removed, nil
 }
+
+// DeleteByPrefixIfNotLast deletes a prefix only when another token survives.
+// It reads and locks the whole table first (FOR UPDATE on PostgreSQL), so two
+// instances revoking the last two keys concurrently serialise: the second waits
+// for the first to commit, then sees one row left and refuses.
+func (r *tokenRepo) DeleteByPrefixIfNotLast(prefix string) ([]string, error) {
+	tx, err := r.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("store/sqlite: api token guarded delete begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	rows, err := tx.Query(`SELECT hash, prefix FROM api_tokens` + r.db.d.RowLock())
+	if err != nil {
+		return nil, fmt.Errorf("store/sqlite: api token guarded select: %w", err)
+	}
+	var removed []string
+	total := 0
+	for rows.Next() {
+		var h, p string
+		if err := rows.Scan(&h, &p); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		total++
+		if p == prefix {
+			removed = append(removed, h)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if total == len(removed) {
+		return nil, sandpod.ErrLastToken
+	}
+	if _, err := tx.Exec(`DELETE FROM api_tokens WHERE prefix=?`, prefix); err != nil {
+		return nil, fmt.Errorf("store/sqlite: api token guarded delete %q: %w", prefix, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("store/sqlite: api token guarded delete commit: %w", err)
+	}
+	return removed, nil
+}

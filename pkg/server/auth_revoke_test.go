@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
@@ -83,4 +84,53 @@ func handleTokenDeleteCode(cfg Config, repo podpkg.APITokenRepository, prefix st
 	rec := httptest.NewRecorder()
 	handleTokenDelete(cfg, repo)(rec, httptest.NewRequest(http.MethodDelete, "/api/v1/tokens/"+prefix, nil))
 	return rec.Code
+}
+
+// Two admins revoking the last two keys at the same moment must not leave the
+// table empty — the repository decides atomically with the delete. Exactly one
+// revocation succeeds; the other is refused with 409.
+func TestTokenDeleteConcurrentCannotEmptyTable(t *testing.T) {
+	repo := store.NewMemTokenRepo()
+	toks := []*podpkg.APIToken{
+		{Hash: "h1", Prefix: "e2b_aaaa", Name: "a", Role: RoleAdmin},
+		{Hash: "h2", Prefix: "e2b_bbbb", Name: "b", Role: RoleAdmin},
+	}
+	for _, tok := range toks {
+		if err := repo.Create(tok); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := Config{}
+	start := make(chan struct{})
+	codes := make(chan int, 2)
+	var wg sync.WaitGroup
+	for _, prefix := range []string{"e2b_aaaa", "e2b_bbbb"} {
+		wg.Add(1)
+		go func(p string) {
+			defer wg.Done()
+			<-start
+			codes <- handleTokenDeleteCode(cfg, repo, p)
+		}(prefix)
+	}
+	close(start)
+	wg.Wait()
+	close(codes)
+
+	noContent, conflict := 0, 0
+	for code := range codes {
+		switch code {
+		case http.StatusNoContent:
+			noContent++
+		case http.StatusConflict:
+			conflict++
+		default:
+			t.Fatalf("unexpected status %d", code)
+		}
+	}
+	if noContent != 1 || conflict != 1 {
+		t.Fatalf("revocations: %d succeeded, %d refused; want exactly one of each", noContent, conflict)
+	}
+	if left, _ := repo.List(); len(left) != 1 {
+		t.Fatalf("tokens left = %d, want 1", len(left))
+	}
 }

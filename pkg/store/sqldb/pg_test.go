@@ -1,6 +1,7 @@
 package sqldb_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -171,5 +172,53 @@ func TestPostgres_ClaimJobRaw_AcceptsAForeignTimestampSpelling(t *testing.T) {
 	}
 	if claimed, _ := raw.ClaimJobRaw("foreign-job", job.UpdatedAtRaw, time.Now()); claimed {
 		t.Fatal("a second claim on the same timestamp succeeded")
+	}
+}
+
+// The race the guard exists for: two instances revoke the last two keys at the
+// same moment. Without FOR UPDATE both transactions count two rows, both
+// delete, and the table ends empty; with it the second waits, re-reads, and
+// refuses. Exactly one delete must succeed.
+func TestPostgres_TokenDeleteKeepsOneKey(t *testing.T) {
+	db := openPG(t)
+	repo := sqldb.NewTokenRepo(db)
+	for _, tok := range []*sandpod.APIToken{
+		{Name: "a", Prefix: "e2b_aaaa", Hash: "h-a", Role: "user", CreatedAt: time.Now()},
+		{Name: "b", Prefix: "e2b_bbbb", Hash: "h-b", Role: "user", CreatedAt: time.Now()},
+	} {
+		if err := repo.Create(tok); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, prefix := range []string{"e2b_aaaa", "e2b_bbbb"} {
+		wg.Add(1)
+		go func(p string) {
+			defer wg.Done()
+			<-start
+			_, err := repo.DeleteByPrefixIfNotLast(p)
+			errs <- err
+		}(prefix)
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	refusals := 0
+	for err := range errs {
+		if errors.Is(err, sandpod.ErrLastToken) {
+			refusals++
+		} else if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if refusals != 1 {
+		t.Fatalf("refusals = %d, want exactly 1 (both deletes succeeded or both refused)", refusals)
+	}
+	if list, _ := repo.List(); len(list) != 1 {
+		t.Fatalf("tokens left = %d, want 1", len(list))
 	}
 }

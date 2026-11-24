@@ -23,6 +23,11 @@ type Dialect interface {
 	// ClaimLock is appended to the PENDING-job SELECT so concurrent pollers
 	// don't double-claim a job. Empty for SQLite (a single writer serialises).
 	ClaimLock() string
+	// RowLock is appended to a SELECT whose rows the transaction goes on to
+	// decide from and delete, so a concurrent identical transaction blocks
+	// instead of deciding from the same stale snapshot. Empty for SQLite (one
+	// writer at a time already gives that serialisation).
+	RowLock() string
 }
 
 // ─── SQLite ──────────────────────────────────────────────────────────────────
@@ -36,6 +41,7 @@ func (sqliteDialect) IsDupColumn(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "duplicate column name")
 }
 func (sqliteDialect) ClaimLock() string { return "" }
+func (sqliteDialect) RowLock() string   { return "" }
 
 // ─── PostgreSQL ──────────────────────────────────────────────────────────────
 
@@ -85,6 +91,10 @@ func (pgDialect) IsDupColumn(err error) bool {
 // ClaimLock uses SKIP LOCKED so N concurrent pollers each claim a disjoint set
 // of PENDING jobs — the concurrency that SQLite's single writer can't provide.
 func (pgDialect) ClaimLock() string { return " FOR UPDATE SKIP LOCKED" }
+
+// RowLock has no SKIP LOCKED: the point is to make the second transaction wait
+// for the first, then decide from the rows that actually survived it.
+func (pgDialect) RowLock() string { return " FOR UPDATE" }
 
 // ─── DB / Tx wrappers: auto-rebind placeholders per dialect ───────────────────
 

@@ -1,6 +1,7 @@
 package sqldb_test
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -757,5 +758,38 @@ func TestJobRepo_ClaimJobRaw_ClaimsTheRowItRead(t *testing.T) {
 	// Exactly once: the successful claim moved the timestamp.
 	if claimed, _ := raw.ClaimJobRaw("raw-job", job.UpdatedAtRaw, time.Now()); claimed {
 		t.Fatal("a second claim on the same timestamp succeeded")
+	}
+}
+
+// The guarded delete decides and deletes in one transaction: revoking the last
+// key is refused, so a restart cannot come up with authentication disabled.
+func TestTokenRepo_DeleteByPrefixIfNotLast(t *testing.T) {
+	db, err := sqldb.Open(":memory:")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	defer db.Close()
+	repo := sqldb.NewTokenRepo(db)
+
+	for _, tok := range []*sandpod.APIToken{
+		{Name: "a", Prefix: "e2b_aaaa", Hash: "h-a", Role: "user", CreatedAt: time.Now()},
+		{Name: "b", Prefix: "e2b_bbbb", Hash: "h-b", Role: "admin", CreatedAt: time.Now()},
+	} {
+		if err := repo.Create(tok); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+	}
+	if removed, err := repo.DeleteByPrefixIfNotLast("e2b_nope"); err != nil || len(removed) != 0 {
+		t.Fatalf("miss: removed=%v err=%v", removed, err)
+	}
+	if removed, err := repo.DeleteByPrefixIfNotLast("e2b_aaaa"); err != nil || len(removed) != 1 || removed[0] != "h-a" {
+		t.Fatalf("first of two: removed=%v err=%v", removed, err)
+	}
+	removed, err := repo.DeleteByPrefixIfNotLast("e2b_bbbb")
+	if !errors.Is(err, sandpod.ErrLastToken) || removed != nil {
+		t.Fatalf("last token: removed=%v err=%v, want ErrLastToken", removed, err)
+	}
+	if list, _ := repo.List(); len(list) != 1 || list[0].Hash != "h-b" {
+		t.Fatalf("the last token must survive: %+v", list)
 	}
 }

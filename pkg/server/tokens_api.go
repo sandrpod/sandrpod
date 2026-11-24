@@ -8,13 +8,44 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sandrpod/sandrpod/pkg/e2bcompat"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 )
+
+const lastKeyRefusal = "refusing to revoke the last API key: with no key left and no -token / -tokens-file configured, " +
+	"the server would run with authentication disabled after its next restart. " +
+	"Issue a replacement key first (or configure SANDRPOD_TOKEN), then revoke this one."
+
+// tokenRevokeMu serialises the check-then-delete fallback for repositories that
+// do not implement LastTokenGuard. Repositories that do are atomic on their own.
+var tokenRevokeMu sync.Mutex
+
+// deleteUnlessLast revokes a prefix unless it is the table's only content. It
+// is the fallback for a repository without LastTokenGuard; refused reports the
+// refusal separately from "nothing matched", which is a 404.
+func deleteUnlessLast(tokens podpkg.APITokenRepository, prefix string) (removed []string, refused bool, err error) {
+	list, err := tokens.List()
+	if err != nil {
+		return nil, false, err
+	}
+	left := 0
+	for _, t := range list {
+		if t.Prefix != prefix {
+			left++
+		}
+	}
+	if left == 0 && len(list) > 0 {
+		return nil, true, nil
+	}
+	removed, err = tokens.DeleteByPrefix(prefix)
+	return removed, false, err
+}
 
 func writeTokenJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -119,29 +150,45 @@ func handleTokenDelete(cfg Config, tokens podpkg.APITokenRepository) http.Handle
 		// Refuse to revoke the last credential. The running server stays closed
 		// either way (the key index latches), but with no key left and no static
 		// token the next restart would come up as an anonymous-admin endpoint.
+		var removed []string
 		if !cfg.hasStaticCredential() {
-			list, err := tokens.List()
+			if guard, ok := tokens.(podpkg.LastTokenGuard); ok {
+				// The repository decides atomically with the delete, so two
+				// concurrent revocations cannot both see a survivor.
+				var err error
+				removed, err = guard.DeleteByPrefixIfNotLast(prefix)
+				if errors.Is(err, podpkg.ErrLastToken) {
+					http.Error(w, lastKeyRefusal, http.StatusConflict)
+					return
+				}
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			} else {
+				// A repository without the guard: serialise in this process and
+				// accept that a peer instance could still race us.
+				tokenRevokeMu.Lock()
+				var refused bool
+				var err error
+				removed, refused, err = deleteUnlessLast(tokens, prefix)
+				tokenRevokeMu.Unlock()
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				if refused {
+					http.Error(w, lastKeyRefusal, http.StatusConflict)
+					return
+				}
+			}
+		} else {
+			var err error
+			removed, err = tokens.DeleteByPrefix(prefix)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			left := 0
-			for _, t := range list {
-				if t.Prefix != prefix {
-					left++
-				}
-			}
-			if left == 0 && len(list) > 0 {
-				http.Error(w, "refusing to revoke the last API key: with no key left and no -token / -tokens-file configured, "+
-					"the server would run with authentication disabled after its next restart. "+
-					"Issue a replacement key first (or configure SANDRPOD_TOKEN), then revoke this one.", http.StatusConflict)
-				return
-			}
-		}
-		removed, err := tokens.DeleteByPrefix(prefix)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
 		}
 		if len(removed) == 0 {
 			http.Error(w, "no token with that prefix", http.StatusNotFound)

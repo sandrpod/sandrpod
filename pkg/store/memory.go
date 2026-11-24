@@ -80,6 +80,29 @@ func (r *MemTokenRepo) DeleteByPrefix(prefix string) ([]string, error) {
 	return removed, nil
 }
 
+// DeleteByPrefixIfNotLast refuses to empty the table. The check and the delete
+// hold the same lock, so two concurrent revocations cannot both see a survivor.
+func (r *MemTokenRepo) DeleteByPrefixIfNotLast(prefix string) ([]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var removed []string
+	for h, t := range r.m {
+		if t.Prefix == prefix {
+			removed = append(removed, h)
+		}
+	}
+	if len(removed) == 0 {
+		return nil, nil
+	}
+	if len(removed) == len(r.m) {
+		return nil, sandpod.ErrLastToken
+	}
+	for _, h := range removed {
+		delete(r.m, h)
+	}
+	return removed, nil
+}
+
 // MemTunnelOwnerRepo is an in-memory TunnelOwnerRepository. Single-process, so
 // the cross-instance forwarding it enables only matters with a shared SQL
 // backend; here it just records local claims harmlessly.

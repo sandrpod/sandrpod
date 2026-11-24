@@ -1,6 +1,9 @@
 package sandpod
 
-import "time"
+import (
+	"errors"
+	"time"
+)
 
 // APIToken is a persisted API credential. The raw secret is never stored — only
 // its SHA-256 hash — so a leaked database yields no usable keys. Prefix keeps
@@ -31,4 +34,19 @@ type APITokenRepository interface {
 	// hashes, so an in-memory auth index can drop the same entries. removed is
 	// empty when nothing matched.
 	DeleteByPrefix(prefix string) (removed []string, err error)
+}
+
+// ErrLastToken is returned by LastTokenGuard.DeleteByPrefixIfNotLast when the
+// delete would leave the table empty.
+var ErrLastToken = errors.New("refusing to delete the last API token")
+
+// LastTokenGuard is an optional capability on an APITokenRepository: delete a
+// prefix only if at least one other token remains, decided atomically with the
+// delete. The plain check-then-delete in the HTTP handler is a race two
+// concurrent revocations can win, leaving a server with no credential at all.
+type LastTokenGuard interface {
+	// DeleteByPrefixIfNotLast behaves like DeleteByPrefix but returns
+	// ErrLastToken (and removes nothing) when every remaining row belongs to
+	// prefix. A prefix that matches nothing returns an empty removed slice.
+	DeleteByPrefixIfNotLast(prefix string) (removed []string, err error)
 }
