@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.13.8] - 2026-11-24
+
+### Added
+
+- **`sandbox.stopped` / `sandbox.started` lifecycle events.** The event sink
+  saw only creation and deletion, so a metering consumer billed a stopped,
+  E2B-paused or idle-reaped sandbox for every hour until it was deleted. A
+  transition out of `RUNNING`/`STOPPING` into `STOPPED`/`ERROR` now emits
+  `sandbox.stopped`, and the reverse emits `sandbox.started`. Wired at every
+  site that changes state: REST start/stop (both routes), E2B pause/resume, the
+  idle reaper, heartbeat reconciliation (container vanished / restored) and the
+  job-status report. Creation keeps `sandbox.running`; deletion keeps its own
+  event.
+
 ## [0.13.7] - 2026-11-24
 
 ### Security

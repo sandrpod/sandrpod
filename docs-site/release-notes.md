@@ -5,6 +5,16 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.8
+
+Lifecycle events a metering or audit consumer can bill by.
+
+| Area | What changed |
+|---|---|
+| Events | `sandbox.stopped` when a sandbox leaves `RUNNING`/`STOPPING` for `STOPPED`/`ERROR`, `sandbox.started` when it resumes — emitted from REST start/stop, E2B pause/resume, the idle reaper, heartbeat reconciliation and the job-status report |
+| Payload | Same owner / CPU / memory / GPU / runtime fields as the other sandbox events, plus `from` |
+| Compatibility | Additive: creation keeps `sandbox.running`, deletion keeps its event, and sinks that ignore unknown events are unaffected |
+
 ## 0.13.7
 
 Three security fixes on the worker boundary and the file gate. If you run

@@ -3,7 +3,20 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.13.7 (current)
+## 0.13.8 (current)
+
+Lifecycle events for metering and audit consumers.
+
+The event sink reported creation and deletion only, so anything metering by
+event had to treat "created until deleted" as billable — a stopped, paused
+(E2B pause) or idle-reaped sandbox kept being billed. The server now emits
+**`sandbox.stopped`** when a sandbox leaves `RUNNING`/`STOPPING` for
+`STOPPED`/`ERROR`, and **`sandbox.started`** when it comes back — from the REST
+start/stop routes, E2B pause/resume, the idle reaper, heartbeat reconciliation
+and the job-status report. Creation and deletion keep their existing events, and
+the payload carries the same owner/resources/runtime fields, plus `from`.
+
+## 0.13.7
 
 Three security fixes that came out of reading the worker boundary and the file
 gate against what they were assumed to protect.

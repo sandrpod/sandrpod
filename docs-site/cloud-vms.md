@@ -118,8 +118,8 @@ toolbox image — the worker is healthy, the create still fails with
 `Post "http://poder/sandboxes": context deadline exceeded`. Set
 
 ```
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.13.7
-SANDRPOD_EGRESS_IMAGE=ghcr.io/sandrpod/egress-proxy:v0.13.7
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.13.8
+SANDRPOD_EGRESS_IMAGE=ghcr.io/sandrpod/egress-proxy:v0.13.8
 ```
 
 so the scheduler pre-pulls them on the VM while it provisions, inside the same

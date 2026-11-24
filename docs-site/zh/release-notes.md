@@ -5,6 +5,16 @@ description: 每个版本改了什么，其中哪些改动会破坏东西。
 
 # 发布说明
 
+## 0.13.8
+
+给计量/审计消费者提供可计费的沙箱生命周期事件。
+
+| 领域 | 改了什么 |
+|---|---|
+| 事件 | 沙箱从 `RUNNING`/`STOPPING` 进入 `STOPPED`/`ERROR` 时发 `sandbox.stopped`，恢复运行时发 `sandbox.started`——覆盖 REST start/stop、E2B pause/resume、空闲回收、心跳对账和任务状态回报五条路径 |
+| 载荷 | 与其他沙箱事件相同的 owner / CPU / 内存 / GPU / runtime 字段，另加 `from` |
+| 兼容性 | 纯增量：创建仍发 `sandbox.running`，删除仍发自己的事件，忽略未知事件的下游不受影响 |
+
 ## 0.13.7
 
 三处安全修复，涉及 worker 权限边界与文件门禁。使用员工机模式（`sandrpod-agent`）
