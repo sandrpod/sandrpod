@@ -9,8 +9,8 @@
 // first boot gets it too.
 //
 // A provision token is scoped to one VM, carries the tenant that asked for it,
-// authenticates as a worker (the tunnel handshake and the job poll, nothing
-// else), and is signed with the platform secret so any instance can verify it
+// authenticates as a worker (the tunnel handshake and its own heartbeat,
+// nothing else), and is signed with the platform secret so any instance can verify it
 // without shared state. It is not short-lived in the enrolment sense: a poder
 // keeps using it for its whole life, so the TTL is the longest a machine may
 // serve, not the boot window. What shrinks is the privilege, which is the part

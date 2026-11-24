@@ -453,14 +453,16 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		return func(w http.ResponseWriter, r *http.Request) {
 			id, err := authenticator.Authenticate(r)
 			if err == nil {
-				// A worker credential is a machine's, and a machine has exactly
-				// four reasons to call this API: enrol, handshake, poll for work,
-				// and say it is alive. Everything else on the sandbox API was open
-				// to it — a compromised worker could create sandboxes on any node
-				// in its tenant. Refuse the rest here, once, rather than trusting
-				// each handler to remember.
+				// A worker credential is a machine's, and a machine has only a
+				// few reasons to call this API: enrol, handshake, say it is alive,
+				// and (for an agent) probe capabilities and the egress policy it
+				// must enforce. Work itself arrives over the tunnel; nothing
+				// polls. Everything else on the sandbox API was open to it — a
+				// compromised worker could create sandboxes on any node in its
+				// tenant. Refuse the rest here, once, rather than trusting each
+				// handler to remember.
 				if id.IsWorker() && !workerMayReach(r) {
-					http.Error(w, "Forbidden: a worker credential may only use the tunnel, job poll and its own heartbeat",
+					http.Error(w, "Forbidden: a worker credential may only use its tunnel, its own heartbeat, enrolment and the agent's capability/egress routes",
 						http.StatusForbidden)
 					return
 				}
@@ -499,8 +501,8 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		})
 	}
 
-	// workerRoute is the gate for the two routes a worker (a poder) actually
-	// needs: the tunnel handshake and the job poll. Deliberately separate from
+	// workerRoute is the gate for the routes a worker (a poder) actually needs:
+	// the tunnel handshake and its own heartbeat. Deliberately separate from
 	// adminOnly so a worker credential cannot reach the management API — a
 	// per-tenant join token must not be able to list or delete other tenants'
 	// sandboxes.
@@ -2237,20 +2239,14 @@ func New(cfg Config, stores podpkg.Stores, tunnelStore, directStore *tunnel.Tunn
 		}
 	}))
 
-	// === Job API (called by Poder Agent) ===
-	mux.HandleFunc("/api/v1/jobs/poll", workerRoute(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		jobs, err := jobStore.PollJobs(30*time.Second, 10)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{"jobs": jobs})
-	}))
+	// === Job API ===
+	//
+	// There is no job poll. Creates are pushed to the worker down its tunnel and
+	// re-delivered by the outbox resumer (resume.go); no binary polls. The poll
+	// route that used to live here was a leftover of the first design, and it
+	// was harmful: any worker credential could call it and receive every
+	// tenant's pending create requests (env vars included), while each call
+	// flipped job statuses under the resumer, which only re-delivers PENDING jobs.
 
 	mux.HandleFunc("/api/v1/jobs/", authMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		jobID := r.URL.Path[len("/api/v1/jobs/"):]

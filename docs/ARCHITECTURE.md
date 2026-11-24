@@ -121,8 +121,8 @@ configured purely by env (`SANDRPOD_E2B_DOMAIN` et al). Full list in
 | `POST` | `/api/v1/sandboxes/execute` | Execute code (proxied to Toolbox) |
 | `GET/POST` | `/api/v1/sandboxes/stream` | Streaming execution (SSE) |
 | `GET` | `/api/v1/sandboxes/{name}/toolbox/*` | Generic Toolbox proxy (files, PTY, sessions, watch) |
-| `GET` | `/api/v1/jobs/poll` | Poder polls for pending Jobs |
-| `PATCH` | `/api/v1/jobs/{id}` | Poder reports Job outcome |
+| `GET` | `/api/v1/jobs/{id}` | Job status (async create polling) |
+| `PATCH` | `/api/v1/jobs/{id}` | Update a Job's status (admin) |
 | `GET/POST/DELETE` | `/api/v1/tokens…` | API token issuance and revocation (admin) |
 
 ---
@@ -134,7 +134,8 @@ configured purely by env (`SANDRPOD_E2B_DOMAIN` et al). Full list in
 - Dial the API Server over WebSocket and establish the yamux reverse tunnel
 - Serve HTTP over that tunnel: forward execute / file / PTY requests to the
   Toolbox inside the target container
-- Poll `/api/v1/jobs/poll` and run CREATE / DELETE / START / STOP jobs
+- Serve the create / delete / start / stop requests the server pushes down the
+  tunnel (`/sandboxes`); there is no job poll
 - Heartbeat host and container usage
 
 **Flags**
@@ -488,12 +489,9 @@ Poder                                    API Server
   ├── PUT /api/v1/poders/{id}/heartbeat ─────▶│  update last_heartbeat + usage
   │   (every 10s, its own HTTP request)       │
   │                                           │
-  ├── GET /api/v1/jobs/poll ─────────────────▶│
-  │◀────────────── [{job}, {job}] ────────────│
-  │                                           │
-  │  run the job (CREATE/DELETE/START/STOP)   │
-  │                                           │
-  ├── PATCH /api/v1/jobs/{id} ───────────────▶│  update job + sandbox state
+  │◀── POST http://poder/sandboxes ───────────│  creates are pushed down
+  │   (over the tunnel)                       │  the tunnel; the server
+  │──── 2xx / error ─────────────────────────▶│  updates job + sandbox state
 ```
 
 ### 4.2 Creating a sandbox (Poder path)
@@ -507,14 +505,14 @@ Client          API Server          Poder           Docker
   │                 │ write Job(PENDING)              │
   │◀── 202 job_id ──│                 │               │
   │                 │                 │               │
-  │                 │◀── PollJobs ────│               │
-  │                 │─── [{job}] ────▶│               │
+  │                 │ POST /sandboxes │               │
+  │                 │ (tunnel) ──────▶│               │
   │                 │                 │ docker run    │
   │                 │                 ├──────────────▶│
   │                 │                 │◀── container ─│
-  │                 │ PATCH job       │               │
-  │                 │◀────────────────│               │
-  │                 │ sandbox.State = RUNNING         │
+  │                 │◀──── 2xx ───────│               │
+  │                 │ job + sandbox.State = RUNNING   │
+  │                 │ (lost delivery → resumer retries)
   │ GET /sandboxes/{name}             │               │
   ├────────────────▶│                 │               │
   │◀── {state:RUNNING, ip:…} ─────────│               │

@@ -225,9 +225,10 @@ type Identity struct {
 func (id Identity) IsAdmin() bool { return id.Role == RoleAdmin }
 
 // IsWorker reports a worker identity: the machine credential a poder uses to
-// join the fleet and take jobs. Workers are not administrators — they must not
-// read every sandbox or mint tokens — but they do have to pass the two routes
-// that exist for them (the tunnel handshake and the job poll).
+// join the fleet and be handed work. Workers are not administrators — they must
+// not read every sandbox or mint tokens — and they may reach only the routes
+// workerMayReach lists (the tunnel handshake, their own heartbeat, enrolment,
+// and the capability/egress calls an agent makes).
 func (id Identity) IsWorker() bool { return id.Role == RoleWorker }
 
 // Authenticator decides who made a request. The default implementation is the

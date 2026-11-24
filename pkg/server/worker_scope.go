@@ -9,10 +9,9 @@ import (
 )
 
 // workerMayReach lists the routes a machine's credential exists for. A worker is
-// a poder (the tunnel handshake, the job poll, its own heartbeat) or an agent
-// (the handshake, the capability probe, the egress policy it must enforce). None
-// of them manages sandboxes over HTTP: a poder acts on a job, and an agent acts
-// on what arrives through its tunnel.
+// a poder (the tunnel handshake, its own heartbeat) or an agent (the handshake,
+// the capability probe, the egress policy it must enforce). None of them manages
+// sandboxes over HTTP: both act on what arrives through their tunnel.
 //
 // The list is deliberately explicit. The alternative — refusing a handful of
 // paths — fails open every time a route is added, and the route that gets added
@@ -25,8 +24,6 @@ func workerMayReach(r *http.Request) bool {
 		// The invitation is presented before the machine has a credential; it
 		// resolves to the worker role, so this has to stay open.
 		return true
-	case "/api/v1/jobs/poll":
-		return r.Method == http.MethodGet
 	case "/api/v1/capabilities":
 		// An agent probes this before starting -egress-mode=server|decider, so
 		// that a control plane too old for the endpoints is a startup error

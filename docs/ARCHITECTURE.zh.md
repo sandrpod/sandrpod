@@ -117,8 +117,8 @@ Client / SDK / CLI                    E2B SDK（未经修改）
 | `POST` | `/api/v1/sandboxes/execute` | 执行代码（代理到 Toolbox） |
 | `GET/POST` | `/api/v1/sandboxes/stream` | 流式执行（SSE） |
 | `GET` | `/api/v1/sandboxes/{name}/toolbox/*` | 通用 Toolbox 代理（文件 / PTY / session / watch） |
-| `GET` | `/api/v1/jobs/poll` | Poder 轮询待处理 Job |
-| `PATCH` | `/api/v1/jobs/{id}` | Poder 回报 Job 结果 |
+| `GET` | `/api/v1/jobs/{id}` | Job 状态（异步创建时轮询） |
+| `PATCH` | `/api/v1/jobs/{id}` | 更新 Job 状态（admin） |
 | `GET/POST/DELETE` | `/api/v1/tokens…` | API token 签发与吊销（admin） |
 
 ---
@@ -129,7 +129,7 @@ Client / SDK / CLI                    E2B SDK（未经修改）
 
 - 拨出 WebSocket 连到 API Server，建立 yamux 反向隧道
 - 在隧道上提供 HTTP 服务：把 execute / 文件 / PTY 请求转发给目标容器内的 Toolbox
-- 轮询 `/api/v1/jobs/poll`，执行 CREATE / DELETE / START / STOP 任务
+- 处理 server 经隧道推送的 create / delete / start / stop 请求（`/sandboxes`）；没有 Job 轮询
 - 定时心跳上报宿主机与容器用量
 
 **启动参数**
@@ -439,12 +439,9 @@ Poder                                    API Server
   ├── PUT /api/v1/poders/{id}/heartbeat ─────▶│  更新 last_heartbeat + 用量
   │   （每 10s，独立 HTTP 请求）              │
   │                                           │
-  ├── GET /api/v1/jobs/poll ─────────────────▶│
-  │◀────────────── [{job}, {job}] ────────────│
-  │                                           │
-  │  执行 Job（CREATE/DELETE/START/STOP）     │
-  │                                           │
-  ├── PATCH /api/v1/jobs/{id} ───────────────▶│  更新 Job 与 Sandbox 状态
+  │◀── POST http://poder/sandboxes ───────────│  创建请求经隧道推送；
+  │   （经隧道）                              │  由 server 更新
+  │──── 2xx / 错误 ──────────────────────────▶│  Job 与 Sandbox 状态
 ```
 
 ### 4.2 创建 Sandbox（Poder 路径）
@@ -458,14 +455,14 @@ Client          API Server          Poder           Docker
   │                 │ 写 Job(PENDING) │               │
   │◀── 202 job_id ──│                 │               │
   │                 │                 │               │
-  │                 │◀── PollJobs ────│               │
-  │                 │─── [{job}] ────▶│               │
+  │                 │ POST /sandboxes │               │
+  │                 │ (tunnel) ──────▶│               │
   │                 │                 │ docker run    │
   │                 │                 ├──────────────▶│
   │                 │                 │◀── container ─│
-  │                 │ PATCH job       │               │
-  │                 │◀────────────────│               │
-  │                 │ sandbox.State = RUNNING         │
+  │                 │◀──── 2xx ───────│               │
+  │                 │ job + sandbox.State = RUNNING   │
+  │                 │ （投递丢失 → resumer 重投）
   │ GET /sandboxes/{name}             │               │
   ├────────────────▶│                 │               │
   │◀── {state:RUNNING, ip:…} ─────────│               │

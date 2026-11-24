@@ -160,7 +160,7 @@ func main() {
 	}
 
 	// The invitation becomes a key, once. Everything after this uses token():
-	// the tunnel handshake, the heartbeat, the job poll.
+	// the tunnel handshake and the heartbeat. Work is pushed down the tunnel.
 	if resolved := resolveWorkerToken(*apiURL, *apiToken, poderID); resolved != *apiToken {
 		*apiToken = resolved
 	}
