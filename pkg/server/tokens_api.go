@@ -116,6 +116,28 @@ func handleTokenDelete(cfg Config, tokens podpkg.APITokenRepository) http.Handle
 			http.Error(w, "usage: DELETE /api/v1/tokens/{prefix}", http.StatusBadRequest)
 			return
 		}
+		// Refuse to revoke the last credential. The running server stays closed
+		// either way (the key index latches), but with no key left and no static
+		// token the next restart would come up as an anonymous-admin endpoint.
+		if !cfg.hasStaticCredential() {
+			list, err := tokens.List()
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			left := 0
+			for _, t := range list {
+				if t.Prefix != prefix {
+					left++
+				}
+			}
+			if left == 0 && len(list) > 0 {
+				http.Error(w, "refusing to revoke the last API key: with no key left and no -token / -tokens-file configured, "+
+					"the server would run with authentication disabled after its next restart. "+
+					"Issue a replacement key first (or configure SANDRPOD_TOKEN), then revoke this one.", http.StatusConflict)
+				return
+			}
+		}
 		removed, err := tokens.DeleteByPrefix(prefix)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)

@@ -189,7 +189,44 @@ func (e *Executor) SearchFiles(ctx context.Context, path, pattern string) (*Sear
 	if err != nil {
 		return nil, fmt.Errorf("failed to search: %w", err)
 	}
-	return &SearchFilesResult{Files: matches}, nil
+	// Only the root was authorized. A pattern can climb out of it ("../*") or
+	// through a symlink, and a match can sit under a hardlock inside it, so
+	// every match is re-checked against the root it was granted under.
+	allowed := e.treeReadFilter(safe)
+	files := make([]string, 0, len(matches))
+	for _, m := range matches {
+		resolved, err := filepath.EvalSymlinks(m)
+		if err != nil || !allowed(resolved) {
+			continue
+		}
+		files = append(files, m)
+	}
+	return &SearchFilesResult{Files: files}, nil
+}
+
+// treeReadFilter returns a predicate for paths reached beneath root, an
+// already-authorized directory. The argument must be symlink-resolved. A path
+// is allowed when it is still inside root, outside the read blacklist, and
+// under no hardlock: authorizing root (say ~) does not authorize a hardlock
+// nested in it (~/.ssh), and checking each file through the permission gate
+// would prompt the human once per file.
+func (e *Executor) treeReadFilter(root string) func(resolved string) bool {
+	e.mu.RLock()
+	mgr := e.permMgr
+	e.mu.RUnlock()
+	var locked func(string) bool
+	if mgr != nil {
+		locked = mgr.HardlockMatcher()
+	}
+	return func(resolved string) bool {
+		if !permission.PathInside(resolved, root) {
+			return false
+		}
+		if isBlacklisted(resolved, readBlacklist) {
+			return false
+		}
+		return locked == nil || !locked(resolved)
+	}
 }
 
 // FindInFiles searches file contents for lines containing pattern, walking the directory tree.
@@ -209,19 +246,42 @@ func (e *Executor) FindInFiles(ctx context.Context, path, pattern string) ([]*Fi
 		findMaxFileSize = 5 << 20 // 5 MiB per file
 		findMaxMatches  = 5000
 	)
+	allowed := e.treeReadFilter(safe)
 	var results []*FindMatch
 	err = filepath.Walk(safe, func(filePath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // skip files that cannot be accessed
 		}
+		// Walk does not descend through symlinked directories, so every
+		// component above a leaf is a real directory; only the leaf may be a link,
+		// and os.ReadFile would follow it anywhere.
+		resolved := filePath
+		if info.Mode()&os.ModeSymlink != 0 {
+			r, err := filepath.EvalSymlinks(filePath)
+			if err != nil {
+				return nil
+			}
+			resolved = r
+		}
+		if !allowed(resolved) {
+			if info.IsDir() && filePath != safe {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if info.IsDir() {
 			return nil
 		}
-		if info.Size() > findMaxFileSize {
+		if info.Mode()&os.ModeSymlink != 0 {
+			st, err := os.Stat(resolved)
+			if err != nil || !st.Mode().IsRegular() || st.Size() > findMaxFileSize {
+				return nil
+			}
+		} else if !info.Mode().IsRegular() || info.Size() > findMaxFileSize {
 			return nil
 		}
 
-		content, err := os.ReadFile(filePath)
+		content, err := os.ReadFile(resolved)
 		if err != nil {
 			return nil
 		}

@@ -144,6 +144,13 @@ func hashKey(raw string) string {
 type apiKeyIndex struct {
 	mu sync.RWMutex
 	m  map[string]Identity
+
+	// armed latches once the index has held a key. Auth stays on after that
+	// even if every key is revoked: an empty index would otherwise make
+	// authDisabled true and turn the running server into an anonymous-admin
+	// endpoint the moment an operator deletes their last key (for instance
+	// while rotating, before issuing the replacement).
+	armed bool
 }
 
 func newAPIKeyIndex() *apiKeyIndex { return &apiKeyIndex{m: map[string]Identity{}} }
@@ -158,6 +165,7 @@ func (x *apiKeyIndex) get(hash string) (Identity, bool) {
 func (x *apiKeyIndex) put(hash string, id Identity) {
 	x.mu.Lock()
 	x.m[hash] = id
+	x.armed = true
 	x.mu.Unlock()
 }
 
@@ -167,10 +175,11 @@ func (x *apiKeyIndex) remove(hash string) {
 	x.mu.Unlock()
 }
 
-func (x *apiKeyIndex) len() int {
+// isArmed reports whether the index has ever held a key (see armed).
+func (x *apiKeyIndex) isArmed() bool {
 	x.mu.RLock()
 	defer x.mu.RUnlock()
-	return len(x.m)
+	return x.armed || len(x.m) > 0
 }
 
 // load bulk-populates the index from persisted tokens (startup).
@@ -179,6 +188,9 @@ func (x *apiKeyIndex) load(toks []*podpkg.APIToken) {
 	defer x.mu.Unlock()
 	for _, t := range toks {
 		x.m[t.Hash] = Identity{Name: t.Name, Role: t.Role}
+	}
+	if len(toks) > 0 {
+		x.armed = true
 	}
 }
 
@@ -191,6 +203,9 @@ func (x *apiKeyIndex) replace(toks []*podpkg.APIToken) {
 	}
 	x.mu.Lock()
 	x.m = m
+	if len(m) > 0 {
+		x.armed = true
+	}
 	x.mu.Unlock()
 }
 
@@ -282,7 +297,14 @@ func (cfg Config) authDisabled() bool {
 	return cfg.Token == "" &&
 		len(cfg.Tokens) == 0 &&
 		(cfg.Registry == nil || len(cfg.Registry.get()) == 0) &&
-		(cfg.Keys == nil || cfg.Keys.len() == 0)
+		(cfg.Keys == nil || !cfg.Keys.isArmed())
+}
+
+// hasStaticCredential reports whether a credential other than DB-issued keys
+// is configured (-token, Config.Tokens, or a non-empty -tokens-file).
+func (cfg Config) hasStaticCredential() bool {
+	return cfg.Token != "" || len(cfg.Tokens) > 0 ||
+		(cfg.Registry != nil && len(cfg.Registry.get()) > 0)
 }
 
 func resolveToken(cfg Config, presented string) (Identity, bool) {
@@ -297,7 +319,10 @@ func resolveToken(cfg Config, presented string) (Identity, bool) {
 	if id, ok := verifyProvisionToken(cfg.Token, presented, time.Now()); ok {
 		return id, true
 	}
-	candidates := cfg.Tokens
+	// Copy rather than append to cfg.Tokens: an embedder's slice may have
+	// spare capacity, and concurrent requests would then write into one
+	// shared backing array.
+	candidates := append([]NamedToken(nil), cfg.Tokens...)
 	if cfg.Registry != nil {
 		candidates = append(candidates, cfg.Registry.get()...)
 	}

@@ -578,6 +578,37 @@ func matchHardlock(path string, rules []Rule, home string) *Rule {
 	return nil
 }
 
+// HardlockMatcher returns a predicate reporting whether a canonical path lies
+// under a hardlock, with the rules resolved once up front.
+//
+// It is for operations that authorize one root and then touch many paths
+// beneath it (a content search walking a tree): Check on the root does not
+// cover a hardlock nested inside it, and calling Check per file would prompt
+// the human for every file. The predicate never prompts and never audits; the
+// caller skips what it matches.
+func (m *Manager) HardlockMatcher() func(path string) bool {
+	snap := m.store.Snapshot()
+	var locked []string
+	for _, r := range snap.Rules {
+		if r.Scope == ScopeHardlock {
+			locked = append(locked, ruleAbsPath(r.Path, m.homeDir))
+		}
+	}
+	return func(path string) bool {
+		for _, rp := range locked {
+			if pathInside(path, rp) {
+				return true
+			}
+		}
+		return false
+	}
+}
+
+// PathInside reports whether child is parent itself or a path beneath it,
+// folding case on case-insensitive filesystems. Both must be clean, absolute
+// and symlink-resolved.
+func PathInside(child, parent string) bool { return pathInside(child, parent) }
+
 // HardlocksUnder reports the hardlock entries that live inside dir, in their
 // stored (unexpanded) form, e.g. ["~/.ssh", "~/.sandrpod/permissions.json"].
 //
