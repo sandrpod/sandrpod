@@ -19,15 +19,20 @@ cd "$(dirname "$0")/.."
 fail=0
 tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT
 
+# The built docs site is a working-tree artifact, not a pin: it is regenerated
+# from the sources, and a leftover build from the previous release would make
+# `make docs && make check-versions` fail on a clean tree.
+skip='^\./(\.git|media|docs-site/\.vitepress/dist)/'
+
 # Pinned container images: ghcr.io/sandrpod/<name>:vX.Y.Z
 grep -rn --include='*.md' --include='*.yml' --include='*.yaml' \
      -o 'ghcr\.io/sandrpod/[a-z-]*:v[0-9][0-9.]*' . 2>/dev/null \
-  | grep -Ev '^\./(\.git|media)/' \
+  | grep -Ev "$skip" \
   | sed 's/.*:v\([0-9][0-9.]*\)$/\1|&/' >> "$tmp" || true
 
 # Doc version headers, both languages.
 grep -rn --include='*.md' -E '^> \*\*(Version|版本)\*\*: v[0-9]' . 2>/dev/null \
-  | grep -Ev '^\./(\.git|media)/' \
+  | grep -Ev "$skip" \
   | sed 's/.*: v\([0-9][0-9.]*\).*/\1|&/' >> "$tmp" || true
 
 # The CLI is released independently from the engine and carries its own

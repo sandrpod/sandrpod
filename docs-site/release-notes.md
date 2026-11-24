@@ -5,6 +5,17 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.7
+
+Three security fixes on the worker boundary and the file gate. If you run
+employee-PC mode (`sandrpod-agent`) or issue API keys, upgrade.
+
+| Area | What changed |
+|---|---|
+| File search | `files.find` / `files.search` authorize every path they read, not just the root: hard-locked files are skipped, symlinks cannot leave the authorized directory, `../` cannot climb out, and a FIFO can no longer hang a search |
+| API keys | Revoking the last key no longer turns the server into an anonymous-admin endpoint; the index latches once it has held a key, the last key is refused unless a static token exists, and the refusal is atomic with the delete |
+| Jobs | `GET /api/v1/jobs/poll` is removed: no client used it, and any worker credential — including a tenant's provision token — could read every tenant's pending create requests, environment variables included |
+
 ## 0.13.6
 
 Five more AWS findings, each checked on a live account.

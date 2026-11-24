@@ -3,7 +3,32 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.13.6 (current)
+## 0.13.7 (current)
+
+Three security fixes that came out of reading the worker boundary and the file
+gate against what they were assumed to protect.
+
+**File searches now authorize every path they read, not just their root.** A
+search of an authorized directory authorized that directory once, then read
+everything beneath it: searching `~` returned the contents of hard-locked
+`~/.ssh` files, a symlink inside the root was followed anywhere, and a `../`
+glob climbed out. Each reached path is now resolved and dropped when it leaves
+the root, hits the read blacklist, or lies under a hardlock, and a search reads
+regular files only (a FIFO could previously hang it).
+
+**Revoking the last API key can no longer leave the server open.** An empty DB
+key index used to mean "no credentials configured", so revoking the last key
+turned a running server into an anonymous-admin endpoint; the index now latches
+once it has held a key, and the last key is refused unless a static token
+exists. The refusal is atomic with the delete, so two concurrent revocations
+cannot both win.
+
+**`GET /api/v1/jobs/poll` is gone.** Nothing polled — creates are pushed down
+the worker's tunnel and re-delivered by the resumer — but any worker credential,
+including a tenant's provision token, could call it and receive every tenant's
+pending create requests with their environment variables.
+
+## 0.13.6
 
 Five AWS findings that only showed up when the provider was read against the
 scheduler and then exercised on a live account.
