@@ -4,13 +4,17 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/hashicorp/yamux"
 	podpkg "github.com/sandrpod/sandrpod/pkg/sandpod"
 	"github.com/sandrpod/sandrpod/pkg/store"
+	"github.com/sandrpod/sandrpod/pkg/tunnel"
 )
 
 // mcpTestServer wires a real mux (in-memory stores, auth disabled) behind the
@@ -57,9 +61,18 @@ func TestMCPInitializeAndList(t *testing.T) {
 	for _, tl := range tools {
 		names[tl.(map[string]any)["name"].(string)] = true
 	}
-	for _, want := range []string{"sandbox_create", "sandbox_exec", "sandbox_write_file", "sandbox_stop", "sandbox_start"} {
+	for _, want := range []string{
+		"sandbox_create", "sandbox_exec", "sandbox_write_file",
+		"sandbox_stop", "sandbox_start",
+		"sandbox_mcp_list", "sandbox_mcp_call",
+	} {
 		if !names[want] {
 			t.Fatalf("tool %q missing from tools/list", want)
+		}
+	}
+	for _, removed := range []string{"desktop_screenshot", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll"} {
+		if names[removed] {
+			t.Fatalf("hardcoded tool %q should not be exposed on platform /mcp (use sandbox_mcp_list/call)", removed)
 		}
 	}
 }
@@ -112,4 +125,222 @@ func TestMCPCreateDefaultsToPersist(t *testing.T) {
 	})
 	_ = context.Background()
 	_ = podpkg.StateRunning
+}
+
+// TestMCPSandboxMCPListAndCall exercises sandbox_mcp_list and sandbox_mcp_call
+// end-to-end through the platform /mcp endpoint over a yamux tunnel:
+//   - tool discovery via sandbox_mcp_list
+//   - tool invocation via sandbox_mcp_call preserving image content blocks
+//   - Mcp-Session-Id caching (initialize runs once across calls)
+//   - transparent re-initialize when a cached session expires
+//   - platform Bearer token never leaks into the sandbox; mcp_token does
+func TestMCPSandboxMCPListAndCall(t *testing.T) {
+	const (
+		apiToken = "platform-secret-token"
+		mcpToken = "sandbox-mcp-secret"
+		sandbox  = "box-1"
+	)
+
+	var (
+		mu             sync.Mutex
+		initCount      int
+		activeSession  = "sess-1"
+		seenAuthHeader string
+		seenPlatHeader string
+	)
+
+	fakeBridge := http.NewServeMux()
+	fakeBridge.HandleFunc("/mcp", func(w http.ResponseWriter, r *http.Request) {
+		var req mcpRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "bad json", http.StatusBadRequest)
+			return
+		}
+		mu.Lock()
+		seenAuthHeader = r.Header.Get("Authorization")
+		seenPlatHeader = r.Header.Get("X-Sandrpod-Token")
+		if seenAuthHeader != "Bearer "+mcpToken {
+			mu.Unlock()
+			http.Error(w, "unauthorized mcp token", http.StatusUnauthorized)
+			return
+		}
+		switch req.Method {
+		case "initialize":
+			initCount++
+			sess := activeSession
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.Header().Set("Mcp-Session-Id", sess)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result":  map[string]any{"protocolVersion": "2025-06-18"},
+			})
+		case "tools/list":
+			wantSess := activeSession
+			mu.Unlock()
+			if r.Header.Get("Mcp-Session-Id") != wantSess {
+				http.Error(w, "Invalid session ID", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{
+					"tools": []map[string]any{
+						{"name": "browser__screenshot", "description": "Take a browser screenshot"},
+						{"name": "notion__search", "description": "Search Notion"},
+					},
+				},
+			})
+		case "tools/call":
+			wantSess := activeSession
+			mu.Unlock()
+			if r.Header.Get("Mcp-Session-Id") != wantSess {
+				http.Error(w, "Invalid session ID", http.StatusBadRequest)
+				return
+			}
+			var params struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			}
+			_ = json.Unmarshal(req.Params, &params)
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{
+					"content": []map[string]any{
+						{"type": "text", "text": "called:" + params.Name},
+						{"type": "image", "data": "iVBORw0KGgo=", "mimeType": "image/png"},
+					},
+					"isError": false,
+				},
+			})
+		default:
+			mu.Unlock()
+			http.Error(w, "unknown method", http.StatusBadRequest)
+		}
+	})
+
+	apiSide, agentSide := net.Pipe()
+	t.Cleanup(func() { _ = apiSide.Close(); _ = agentSide.Close() })
+	agentSession, err := yamux.Server(agentSide, yamux.DefaultConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	agentSrv := &http.Server{Handler: fakeBridge}
+	go func() { _ = agentSrv.Serve(agentSession) }()
+	t.Cleanup(func() { _ = agentSrv.Shutdown(context.Background()) })
+
+	tt, err := tunnel.NewPoderTunnelFromConn(sandbox, apiSide)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stores := store.NewMemoryStores()
+	if err := stores.Sandboxes.Add(&podpkg.SandboxInfo{
+		ID:       sandbox,
+		Name:     sandbox,
+		State:    podpkg.StateRunning,
+		ProxyURL: "direct://" + sandbox,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ds := tunnel.NewDirectTunnelStore()
+	ds.Set(sandbox, tt)
+	mux := New(Config{Token: apiToken}, stores, tunnel.NewTunnelStore(), ds)
+
+	callPlatform := func(toolName string, args map[string]any) map[string]any {
+		t.Helper()
+		raw, _ := json.Marshal(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      1,
+			"method":  "tools/call",
+			"params":  map[string]any{"name": toolName, "arguments": args},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(string(raw)))
+		req.Header.Set("Authorization", "Bearer "+apiToken)
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		var out map[string]any
+		if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+			t.Fatalf("%s: bad JSON-RPC (%d): %v (%s)", toolName, rec.Code, err, rec.Body.String())
+		}
+		return out
+	}
+
+	// 1. Discover tools via sandbox_mcp_list.
+	listOut := callPlatform("sandbox_mcp_list", map[string]any{
+		"sandbox":   sandbox,
+		"mcp_token": mcpToken,
+	})
+	listRes := listOut["result"].(map[string]any)
+	if listRes["isError"] == true {
+		t.Fatalf("sandbox_mcp_list failed: %v", listRes)
+	}
+	listText := listRes["content"].([]any)[0].(map[string]any)["text"].(string)
+	if !strings.Contains(listText, "browser__screenshot") || !strings.Contains(listText, "notion__search") {
+		t.Fatalf("sandbox_mcp_list missing expected tools: %s", listText)
+	}
+
+	// 2. Call tool via sandbox_mcp_call — must reuse cached session and preserve image block.
+	callOut := callPlatform("sandbox_mcp_call", map[string]any{
+		"sandbox":   sandbox,
+		"tool":      "browser__screenshot",
+		"arguments": map[string]any{"fullPage": true},
+		"mcp_token": mcpToken,
+	})
+	callRes := callOut["result"].(map[string]any)
+	if callRes["isError"] == true {
+		t.Fatalf("sandbox_mcp_call failed: %v", callRes)
+	}
+	blocks := callRes["content"].([]any)
+	if len(blocks) != 2 || blocks[1].(map[string]any)["type"] != "image" {
+		t.Fatalf("expected text+image blocks preserved, got %v", blocks)
+	}
+
+	mu.Lock()
+	gotInits := initCount
+	gotAuth := seenAuthHeader
+	gotPlat := seenPlatHeader
+	mu.Unlock()
+	if gotInits != 1 {
+		t.Fatalf("initialize called %d times across list+call, want 1 (session cache)", gotInits)
+	}
+	if gotAuth != "Bearer "+mcpToken {
+		t.Fatalf("sandbox saw Authorization=%q, want Bearer %s", gotAuth, mcpToken)
+	}
+	if gotPlat != "" {
+		t.Fatalf("platform token leaked to sandbox: X-Sandrpod-Token=%q", gotPlat)
+	}
+
+	// 3. Simulate sandbox restart invalidating the cached session → transparent retry.
+	mu.Lock()
+	activeSession = "sess-2"
+	mu.Unlock()
+
+	retryOut := callPlatform("sandbox_mcp_call", map[string]any{
+		"sandbox":   sandbox,
+		"tool":      "notion__search",
+		"mcp_token": mcpToken,
+	})
+	retryRes := retryOut["result"].(map[string]any)
+	if retryRes["isError"] == true {
+		t.Fatalf("sandbox_mcp_call after session rotation failed: %v", retryRes)
+	}
+	mu.Lock()
+	gotInits = initCount
+	mu.Unlock()
+	if gotInits != 2 {
+		t.Fatalf("expected 1 re-initialize after stale session (total 2), got %d", gotInits)
+	}
+
+	// 4. Unknown sandbox returns a clear isError message.
+	missOut := callPlatform("sandbox_mcp_list", map[string]any{"sandbox": "no-such-box"})
+	missRes := missOut["result"].(map[string]any)
+	if missRes["isError"] != true {
+		t.Fatalf("expected isError=true for missing sandbox, got %v", missRes)
+	}
 }

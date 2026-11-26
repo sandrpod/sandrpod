@@ -13,8 +13,8 @@ one:
 
 | Endpoint | Tools | Who it is for |
 |---|---|---|
-| `https://<your-control-plane>/mcp` | 16: lifecycle, exec, files, snapshot, preview, **and the 5 desktop tools** (each takes a `sandbox` argument) | A client whose MCP config is static: Claude Desktop, Cursor, Cline |
-| `https://<your-control-plane>/api/v1/sandboxes/<name>/toolbox/mcp` | 5 desktop tools for *that* sandbox, plus every MCP server the sandbox has configured | A harness that adds servers at runtime, or a user who wants credentials to stay inside the sandbox |
+| `https://<your-control-plane>/mcp` | 15: lifecycle, exec, code interpreter, files, snapshot, preview, **and `sandbox_mcp_list` / `sandbox_mcp_call`** to discover and invoke any tool inside any sandbox | Default for every client (Claude Desktop, Cursor, Cline) — configure one static URL and reach everything |
+| `https://<your-control-plane>/api/v1/sandboxes/<name>/mcp` | Direct access to *that* sandbox's MCP bridge (desktop tools, headless browser tools, `mcp.json` servers, resources / MCP Apps `ui://`) | A harness that wants first-class native schemas / MCP Apps for one sandbox, or single-sandbox least-privilege scoping |
 
 Both authenticate the same way (the platform API key), and both are tenant-scoped:
 a credential can only reach its own sandboxes, answered as `404` rather than `403`
@@ -26,12 +26,14 @@ so a stranger learns nothing about the name.
 |---|---|---|
 | Can the client add an MCP server at runtime? | irrelevant — configure once | required, since the URL contains the sandbox name |
 | Needs to create/list/stop sandboxes | ✅ | ❌ (no lifecycle tools) |
-| Wants to drive a desktop | ✅ `desktop_*{sandbox, …}` | ✅ `desktop_*` |
-| Wants its GitHub/Notion MCP servers | ❌ — the platform does not forward your credentials | ✅ the tokens never leave the sandbox |
+| Wants to drive desktop / browser / third-party MCP servers inside a sandbox | ✅ via `sandbox_mcp_list` + `sandbox_mcp_call` (credentials still stay in the sandbox) | ✅ native top-level tool schemas + MCP Apps (`ui://`) |
+| Single-sandbox least-privilege isolation | ❌ (API key can see workspace's sandboxes) | ✅ scoped to one sandbox |
 
-The common setup is the platform entry alone: one URL, create a desktop sandbox,
-then screenshot or click it through the same connection. Add the sandbox entry
-when a third-party server is involved — that is the whole reason it exists.
+The default setup is the platform entry alone: one URL lets you create any sandbox
+(code, desktop, headless browser, or one with your `mcp.json` servers) and call both
+its sandbox primitives and its internal MCP tools over the same connection. Use the
+sandbox entry directly when you want top-level native tool schemas, MCP Apps UI
+resources, or single-sandbox scoping.
 
 ## Connecting a client
 
@@ -69,11 +71,8 @@ tools the endpoint currently serves (read live, so it never goes stale).
 | `sandbox_preview_url` | `sandbox`, `port` | A **signed** URL (2h) that opens the port |
 | `sandbox_run_code` | `sandbox`, `code`, `context?`, `timeout?` | A **stateful** kernel: variables survive between calls; matplotlib figures come back as image blocks |
 | `sandbox_contexts` | `sandbox`, `action`, `context?` | `list` / `create` / `restart` / `remove` a kernel |
-| `desktop_screenshot` | `sandbox` | A PNG image block of that sandbox's screen |
-| `desktop_click` | `sandbox`, `x`, `y`, `button?` | left / middle / right |
-| `desktop_type` | `sandbox`, `text` | Into the focused window |
-| `desktop_key` | `sandbox`, `key` | `Return`, `ctrl+c`, `Alt+Tab` |
-| `desktop_scroll` | `sandbox`, `x`, `y`, `amount` | Negative scrolls up |
+| `sandbox_mcp_list` | `sandbox`, `mcp_token?` | Discover MCP tools inside a sandbox (desktop, headless browser, and `mcp.json` servers) |
+| `sandbox_mcp_call` | `sandbox`, `tool`, `arguments?`, `mcp_token?` | Call any MCP tool inside a sandbox; image blocks and errors pass straight through |
 
 A fork is `sandbox_snapshot` followed by `sandbox_create` with
 `image=<snapshot>`: the image layers *and* the workspace volume come across.
@@ -100,17 +99,9 @@ the sandbox).
 The kernel is the same object the E2B gateway drives, so the two surfaces cannot
 disagree about behaviour.
 
-## How the desktop tools are forwarded
+## How sandbox MCP calls are forwarded
 
-The platform entry does not re-implement the desktop tools: it runs the same
-JSON-RPC call against the sandbox's own bridge, through the mux (so the tenant
-check applies exactly as for a direct connection), and passes the bridge's result
-straight through — an image block stays an image block. That costs two round-trips
-per call, because the bridge issues a session id on `initialize` and refuses a
-`tools/call` without one.
-
-A headless sandbox answers `this sandbox has no desktop — create it with a desktop
-image`, so an agent can ask the question instead of guessing.
+`sandbox_mcp_list` and `sandbox_mcp_call` forward JSON-RPC calls to `/api/v1/sandboxes/{sandbox}/mcp` through the same mux (so tenant scoping and both container/agent routing apply unchanged) and pass the bridge's result straight through — an image block stays an image block. The platform caches the `Mcp-Session-Id` per `(caller, sandbox)` for 5 minutes (transparently re-initializing once if the sandbox restarted), and strips the platform API key before forwarding so credentials never leak into the sandbox.
 
 ## Why every tool goes through REST
 

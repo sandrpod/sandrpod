@@ -10,19 +10,16 @@
 SandrPod answers MCP in two places. They are not duplicates — pick by whether your
 client can add a server at runtime.
 
-| | **Platform entry** `/mcp` | **Sandbox entry** `/api/v1/sandboxes/<name>/toolbox/mcp` |
+| | **Platform entry** `/mcp` | **Sandbox entry** `/api/v1/sandboxes/<name>/mcp` |
 |---|---|---|
 | URL | one, fixed | contains the sandbox name |
-| Tools | 16: create/list/stop/delete, exec, files, snapshot, preview, **5 desktop tools** (each takes `sandbox`) | 5 desktop tools for that sandbox + every server in its `mcp.json` |
+| Tools | 15: create/list/stop/delete, exec, code interpreter, files, snapshot, preview, **`sandbox_mcp_list` / `sandbox_mcp_call`** | Every tool inside *that* sandbox (desktop, headless browser, `mcp.json` servers) + MCP Apps (`ui://`) |
 | Create a sandbox | ✅ | — |
-| Drive a desktop | ✅ `desktop_screenshot{sandbox:…}` | ✅ |
-| Your GitHub/Notion tokens | ❌ not forwarded | ✅ never leave the sandbox |
-| Best for | Claude Desktop, Cursor, Cline (static config) | a harness that adds servers at runtime; credentials that must not transit the platform |
+| Drive desktop / browser / `mcp.json` tools | ✅ via `sandbox_mcp_list` + `sandbox_mcp_call` | ✅ native top-level tool schemas |
+| Your GitHub/Notion tokens | ✅ stay inside the sandbox (control plane only forwards JSON-RPC) | ✅ never leave the sandbox |
+| Best for | Claude Desktop, Cursor, Cline (one static URL) | single-sandbox least-privilege scoping, native schemas, or MCP Apps UI |
 
-The usual setup is the platform entry alone: one URL, create a desktop sandbox, then
-screenshot or click it over the same connection. Add the sandbox entry when a
-third-party server is involved — that is the only thing it can do that the platform
-entry cannot, and it exists to keep those credentials out of the platform's path.
+The default setup is the platform entry alone: one URL lets you create a sandbox (code, desktop, headless browser, or with your `mcp.json` servers), discover its internal MCP tools with `sandbox_mcp_list`, and call them with `sandbox_mcp_call` over the same connection. Use the sandbox entry directly when you want native top-level tool schemas, MCP Apps (`ui://`), or single-sandbox isolation.
 
 Both entries authenticate with the same platform API key and are tenant-scoped: a
 credential reaches only its own sandboxes, and a stranger's name answers `404`, not
@@ -230,15 +227,10 @@ screen they act on.
 | `sandbox_delete` | `sandbox` | Deletes the sandbox **and** its workspace |
 | `sandbox_snapshot` | `sandbox`, `image` | Commits the filesystem to an image (and pushes it when a registry is configured) |
 | `sandbox_preview_url` | `sandbox`, `port` | Signed URL (2 h) for a port inside the sandbox |
-| `desktop_screenshot` | `sandbox` | PNG image block of that screen |
-| `desktop_click` | `sandbox`, `x`, `y`, `button` | `left` (default), `middle`, `right` |
-| `desktop_type` | `sandbox`, `text` | Types into the focused window |
-| `desktop_key` | `sandbox`, `key` | `Return`, `ctrl+c`, `Alt+Tab` |
-| `desktop_scroll` | `sandbox`, `x`, `y`, `amount` | Negative scrolls up |
+| `sandbox_mcp_list` | `sandbox`, `mcp_token?` | List MCP tools inside a sandbox (desktop, headless browser, `mcp.json` servers) |
+| `sandbox_mcp_call` | `sandbox`, `tool`, `arguments?`, `mcp_token?` | Invoke any MCP tool inside a sandbox (image blocks pass straight through) |
 
-The **sandbox entry** serves the five `desktop_*` tools without the `sandbox`
-argument (it is that sandbox), plus every server in the sandbox's `mcp.json` — those
-appear under whatever names the server declares (e.g. `github_create_issue`).
+The **sandbox entry** (`/api/v1/sandboxes/<name>/mcp`) exposes that sandbox's built-in tools (such as `desktop_*` on desktop images) plus every server in its `mcp.json` directly as top-level tools — those are the same tools `sandbox_mcp_list` / `sandbox_mcp_call` discover and invoke from the platform entry.
 
 Nothing is inferred at runtime: a tool that is not in this table does not exist, and
 `tools/list` on either entry is always the authority.

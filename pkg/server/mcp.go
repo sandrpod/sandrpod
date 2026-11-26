@@ -12,6 +12,8 @@ package server
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,6 +22,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 )
 
 // jsonrpc errors
@@ -59,10 +63,9 @@ type mcpRawBody struct {
 }
 
 type mcpTool struct {
-	// forward marks a tool whose work happens in a sandbox's own MCP bridge. The
-	// call is proxied as JSON-RPC (two steps: initialize for a session id, then
-	// tools/call) instead of being re-dispatched as a REST request.
-	forward bool
+	// custom handles tools that talk to a sandbox's own MCP bridge (JSON-RPC)
+	// rather than translating onto a REST endpoint.
+	custom func(h *mcpHandler, w http.ResponseWriter, r *http.Request, req mcpRequest, args map[string]any)
 	// render turns the dispatched endpoint's JSON into MCP content blocks. Without
 	// it the body is one text block — right for a JSON answer, wrong for a chart: a
 	// base64 PNG belongs in an image block so the client draws it.
@@ -72,6 +75,44 @@ type mcpTool struct {
 	InputSchema map[string]any
 	// call builds the internal request. It returns method, path and body.
 	call func(args map[string]any) (method, path string, body any, err error)
+}
+
+type mcpSessionKey struct {
+	callerKey string
+	sandbox   string
+}
+
+type mcpCachedSession struct {
+	id        string
+	expiresAt time.Time
+}
+
+const mcpSessionCacheTTL = 5 * time.Minute
+const mcpSessionCacheMax = 1024
+
+// mcpHandler serves the protocol. `dispatch` runs a request through the mux.
+type mcpHandler struct {
+	dispatch func(*http.Request) *captureWriter
+	tools    []mcpTool
+	byName   map[string]mcpTool
+
+	sessionMu sync.Mutex
+	sessions  map[mcpSessionKey]mcpCachedSession
+}
+
+// newMCPHandler builds the endpoint. dispatch is wired by the caller to the mux
+// that serves the REST API.
+func newMCPHandler(dispatch func(*http.Request) *captureWriter) http.Handler {
+	h := &mcpHandler{
+		dispatch: dispatch,
+		byName:   map[string]mcpTool{},
+		sessions: map[mcpSessionKey]mcpCachedSession{},
+	}
+	h.tools = builtinMCPTools()
+	for _, t := range h.tools {
+		h.byName[t.Name] = t
+	}
+	return h
 }
 
 // captureWriter records what the mux handler wrote, so a tool can translate a
@@ -92,24 +133,6 @@ func (c *captureWriter) Write(p []byte) (int, error) {
 	return c.body.Write(p)
 }
 func (c *captureWriter) WriteHeader(code int) { c.code = code }
-
-// mcpHandler serves the protocol. `dispatch` runs a request through the mux.
-type mcpHandler struct {
-	dispatch func(*http.Request) *captureWriter
-	tools    []mcpTool
-	byName   map[string]mcpTool
-}
-
-// newMCPHandler builds the endpoint. dispatch is wired by the caller to the mux
-// that serves the REST API.
-func newMCPHandler(dispatch func(*http.Request) *captureWriter) http.Handler {
-	h := &mcpHandler{dispatch: dispatch, byName: map[string]mcpTool{}}
-	h.tools = builtinMCPTools()
-	for _, t := range h.tools {
-		h.byName[t.Name] = t
-	}
-	return h
-}
 
 func builtinMCPTools() []mcpTool {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
@@ -290,57 +313,30 @@ func builtinMCPTools() []mcpTool {
 		},
 	}
 
-	// The desktop tools, forwarded to the sandbox that owns the screen. Declared
-	// here as well as on the sandbox bridge so a client with one static server can
-	// create a desktop sandbox and then drive it; `sandbox` is the only argument
-	// the sandbox entry's version does not have.
-	sbArg := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
+	// Generic bridge into any sandbox's own MCP server (desktop tools, headless
+	// browser tools, and user-configured servers from mcp.json). One static
+	// platform endpoint can therefore discover and invoke any tool inside any
+	// sandbox without bloating tools/list or hardcoding per-image tool schemas.
 	tools = append(tools,
 		mcpTool{
-			forward:     true,
-			Name:        "desktop_screenshot",
-			Description: "Screenshot of a desktop sandbox's screen (returns a PNG image block).",
-			InputSchema: obj(map[string]any{"sandbox": sbArg("desktop sandbox name")}, "sandbox"),
+			Name:        "sandbox_mcp_list",
+			Description: "List MCP tools exposed inside a sandbox (desktop tools, headless browser tools, and servers in the sandbox's mcp.json). Call this first to discover tool names and argument schemas for sandbox_mcp_call.",
+			InputSchema: obj(map[string]any{
+				"sandbox":   str("sandbox name"),
+				"mcp_token": str("optional per-sandbox MCP bearer token (only needed when the sandbox/worker enforces -mcp-token)"),
+			}, "sandbox"),
+			custom: (*mcpHandler).handleSandboxMCPList,
 		},
 		mcpTool{
-			forward:     true,
-			Name:        "desktop_click",
-			Description: "Click at (x,y) in a desktop sandbox. button: left (default), middle, right.",
+			Name:        "sandbox_mcp_call",
+			Description: "Call an MCP tool exposed inside a sandbox (discovered via sandbox_mcp_list). Returns the sandbox tool's content blocks directly, including images.",
 			InputSchema: obj(map[string]any{
-				"sandbox": sbArg("desktop sandbox name"),
-				"x":       num("pixel x"),
-				"y":       num("pixel y"),
-				"button":  str("left (default) | middle | right"),
-			}, "sandbox", "x", "y"),
-		},
-		mcpTool{
-			forward:     true,
-			Name:        "desktop_type",
-			Description: "Type text into the focused window of a desktop sandbox.",
-			InputSchema: obj(map[string]any{
-				"sandbox": sbArg("desktop sandbox name"),
-				"text":    str("text to type"),
-			}, "sandbox", "text"),
-		},
-		mcpTool{
-			forward:     true,
-			Name:        "desktop_key",
-			Description: "Press a key or chord (e.g. Return, ctrl+c, Alt+Tab) in a desktop sandbox.",
-			InputSchema: obj(map[string]any{
-				"sandbox": sbArg("desktop sandbox name"),
-				"key":     str("key or chord"),
-			}, "sandbox", "key"),
-		},
-		mcpTool{
-			forward:     true,
-			Name:        "desktop_scroll",
-			Description: "Scroll at (x,y): negative = up, positive = down.",
-			InputSchema: obj(map[string]any{
-				"sandbox": sbArg("desktop sandbox name"),
-				"x":       num("pixel x"),
-				"y":       num("pixel y"),
-				"amount":  num("wheel clicks, negative up"),
-			}, "sandbox", "x", "y"),
+				"sandbox":   str("sandbox name"),
+				"tool":      str("tool name inside the sandbox (from sandbox_mcp_list)"),
+				"arguments": map[string]any{"type": "object", "description": "arguments object passed to the sandbox tool"},
+				"mcp_token": str("optional per-sandbox MCP bearer token (only needed when the sandbox/worker enforces -mcp-token)"),
+			}, "sandbox", "tool"),
+			custom: (*mcpHandler).handleSandboxMCPCall,
 		},
 	)
 	// The code interpreter: a stateful kernel, and charts come back as images. This
@@ -512,14 +508,8 @@ func (h *mcpHandler) callTool(w http.ResponseWriter, r *http.Request, req mcpReq
 			Error: &mcpError{Code: rpcMethodNotFound, Message: "unknown tool " + params.Name}})
 		return
 	}
-	// The desktop tools are forwarded, not re-dispatched like the REST-shaped ones:
-	// their answer is MCP content (an image block for a screenshot), and wrapping
-	// that inside another text block would hand the client a base64 blob in a
-	// string. Forward = run the same JSON-RPC call against the sandbox's own
-	// bridge, through the mux, so tenant checks apply exactly as they do for a
-	// direct connection.
-	if tool.forward {
-		h.callForwarded(w, r, req, params.Name, params.Arguments)
+	if tool.custom != nil {
+		tool.custom(h, w, r, req, params.Arguments)
 		return
 	}
 
@@ -610,30 +600,137 @@ func boolArg(a map[string]any, k string, def bool) bool {
 	return def
 }
 
-// desktopToolNames are the five tools the sandbox bridge exposes for driving the
-// screen. They are declared on the platform entry too (with a `sandbox` argument)
-// so a client that keeps one static MCP server — Claude Desktop, Cursor — can
-// create a desktop sandbox and then look at it without editing its config.
-var desktopToolNames = []string{
-	"desktop_screenshot", "desktop_click", "desktop_type", "desktop_key", "desktop_scroll",
-}
-
-// callForwarded runs one of the sandbox-bridge tools against a named sandbox.
-//
-// Two round-trips on purpose: the bridge issues a session id on initialize, and a
-// tools/call without one is refused ("Invalid session ID"). The platform keeps no
-// session state between calls, so each forwarded call does its own handshake.
-func (h *mcpHandler) callForwarded(w http.ResponseWriter, r *http.Request, req mcpRequest, toolName string, args map[string]any) {
+// handleSandboxMCPList forwards tools/list to the target sandbox's MCP bridge
+// and returns the tool definitions as JSON text.
+func (h *mcpHandler) handleSandboxMCPList(w http.ResponseWriter, r *http.Request, req mcpRequest, args map[string]any) {
 	sandbox := strArg(args, "sandbox")
 	if sandbox == "" {
-		writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
-			"content": []map[string]any{{"type": "text", "text": "sandbox is required (which desktop should this act on?)"}},
-			"isError": true,
-		}})
+		writeToolError(w, req, "sandbox is required")
 		return
 	}
-	delete(args, "sandbox")
-	path := "/api/v1/sandboxes/" + urlq(sandbox) + "/toolbox/mcp"
+	mcpToken := strArg(args, "mcp_token")
+
+	result, errMsg := h.forwardSandboxMCP(r, sandbox, mcpToken, "tools/list", nil)
+	if errMsg != "" {
+		writeToolError(w, req, errMsg)
+		return
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		writeToolError(w, req, "failed to encode sandbox tools: "+err.Error())
+		return
+	}
+	writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
+		"content": []map[string]any{{"type": "text", "text": string(encoded)}},
+		"isError": false,
+	}})
+}
+
+// handleSandboxMCPCall forwards tools/call to the target sandbox's MCP bridge
+// and passes its MCP result straight through so image blocks and isError stay intact.
+func (h *mcpHandler) handleSandboxMCPCall(w http.ResponseWriter, r *http.Request, req mcpRequest, args map[string]any) {
+	sandbox := strArg(args, "sandbox")
+	if sandbox == "" {
+		writeToolError(w, req, "sandbox is required")
+		return
+	}
+	toolName := strArg(args, "tool")
+	if toolName == "" {
+		writeToolError(w, req, "tool is required (call sandbox_mcp_list first to discover available tools)")
+		return
+	}
+	mcpToken := strArg(args, "mcp_token")
+
+	var toolArgs map[string]any
+	if raw, ok := args["arguments"]; ok && raw != nil {
+		m, ok := raw.(map[string]any)
+		if !ok {
+			writeToolError(w, req, "arguments must be a JSON object")
+			return
+		}
+		toolArgs = m
+	} else {
+		toolArgs = map[string]any{}
+	}
+
+	result, errMsg := h.forwardSandboxMCP(r, sandbox, mcpToken, "tools/call", map[string]any{
+		"name":      toolName,
+		"arguments": toolArgs,
+	})
+	if errMsg != "" {
+		writeToolError(w, req, errMsg)
+		return
+	}
+	writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: result})
+}
+
+func writeToolError(w http.ResponseWriter, req mcpRequest, msg string) {
+	writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
+		"content": []map[string]any{{"type": "text", "text": msg}},
+		"isError": true,
+	}})
+}
+
+// mcpCallerKey hashes the caller's credentials so cached Mcp-Session-Ids are
+// strictly scoped per tenant/credential without storing raw secrets in memory.
+func mcpCallerKey(r *http.Request, mcpToken string) string {
+	sum := sha256.New()
+	_, _ = sum.Write([]byte(r.Header.Get("X-Sandrpod-Token")))
+	_, _ = sum.Write([]byte{0})
+	_, _ = sum.Write([]byte(r.Header.Get("Authorization")))
+	_, _ = sum.Write([]byte{0})
+	_, _ = sum.Write([]byte(r.Header.Get("Cookie")))
+	_, _ = sum.Write([]byte{0})
+	_, _ = sum.Write([]byte(mcpToken))
+	return hex.EncodeToString(sum.Sum(nil))
+}
+
+func (h *mcpHandler) getCachedSession(key mcpSessionKey) string {
+	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
+	entry, ok := h.sessions[key]
+	if !ok {
+		return ""
+	}
+	if time.Now().After(entry.expiresAt) {
+		delete(h.sessions, key)
+		return ""
+	}
+	return entry.id
+}
+
+func (h *mcpHandler) putCachedSession(key mcpSessionKey, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
+	now := time.Now()
+	if len(h.sessions) >= mcpSessionCacheMax {
+		for k, v := range h.sessions {
+			if now.After(v.expiresAt) {
+				delete(h.sessions, k)
+			}
+		}
+		if len(h.sessions) >= mcpSessionCacheMax {
+			h.sessions = map[mcpSessionKey]mcpCachedSession{}
+		}
+	}
+	h.sessions[key] = mcpCachedSession{id: sessionID, expiresAt: now.Add(mcpSessionCacheTTL)}
+}
+
+func (h *mcpHandler) deleteCachedSession(key mcpSessionKey) {
+	h.sessionMu.Lock()
+	defer h.sessionMu.Unlock()
+	delete(h.sessions, key)
+}
+
+// forwardSandboxMCP sends one JSON-RPC method to /api/v1/sandboxes/{sandbox}/mcp
+// through the server mux (so auth, tenant scoping, and both poder and direct
+// agent routing apply unchanged). Reuses a cached Mcp-Session-Id per
+// (caller, sandbox) and transparently re-initializes once if the session expired.
+func (h *mcpHandler) forwardSandboxMCP(r *http.Request, sandbox, mcpToken, method string, params map[string]any) (map[string]any, string) {
+	path := "/api/v1/sandboxes/" + urlq(sandbox) + "/mcp"
 
 	post := func(payload map[string]any, session string) *captureWriter {
 		encoded, _ := json.Marshal(payload)
@@ -646,66 +743,121 @@ func (h *mcpHandler) callForwarded(w http.ResponseWriter, r *http.Request, req m
 		inner.ContentLength = int64(len(encoded))
 		inner.Header.Set("Content-Type", "application/json")
 		inner.Header.Set("Accept", "application/json")
+
+		// Split platform auth vs per-sandbox MCP bearer so the platform API key
+		// is never forwarded into the worker/sandbox: move a platform Bearer
+		// token into X-Sandrpod-Token (which copyProxyHeaders strips) and only
+		// put an explicit mcp_token (or a caller's separate Authorization when
+		// X-Sandrpod-Token was already set) in Authorization.
+		if inner.Header.Get("X-Sandrpod-Token") == "" {
+			if auth := inner.Header.Get("Authorization"); strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+				inner.Header.Set("X-Sandrpod-Token", strings.TrimSpace(auth[len("bearer "):]))
+				inner.Header.Del("Authorization")
+			}
+		}
+		if mcpToken != "" {
+			inner.Header.Set("Authorization", "Bearer "+mcpToken)
+		}
+
 		if session != "" {
 			inner.Header.Set("Mcp-Session-Id", session)
+		} else {
+			inner.Header.Del("Mcp-Session-Id")
 		}
 		return h.dispatch(inner)
 	}
 
-	init := post(map[string]any{
-		"jsonrpc": "2.0", "id": 1, "method": "initialize",
-		"params": map[string]any{
-			"protocolVersion": "2025-06-18",
-			"capabilities":    map[string]any{},
-			"clientInfo":      map[string]any{"name": "sandrpod-platform", "version": "1"},
-		},
-	}, "")
-	if init.code >= 400 {
-		h.forwardError(w, req, init)
-		return
+	initSession := func() (string, string) {
+		initResp := post(map[string]any{
+			"jsonrpc": "2.0", "id": 1, "method": "initialize",
+			"params": map[string]any{
+				"protocolVersion": "2025-06-18",
+				"capabilities":    map[string]any{},
+				"clientInfo":      map[string]any{"name": "sandrpod-platform", "version": "1"},
+			},
+		}, "")
+		if initResp.code >= 400 {
+			return "", formatForwardHTTPError(initResp)
+		}
+		return initResp.header.Get("Mcp-Session-Id"), ""
 	}
-	session := init.header.Get("Mcp-Session-Id")
 
-	resp := post(map[string]any{
-		"jsonrpc": "2.0", "id": 2, "method": "tools/call",
-		"params": map[string]any{"name": toolName, "arguments": args},
-	}, session)
-	if resp.code >= 400 {
-		h.forwardError(w, req, resp)
-		return
+	cacheKey := mcpSessionKey{callerKey: mcpCallerKey(r, mcpToken), sandbox: sandbox}
+	session := h.getCachedSession(cacheKey)
+	usedCached := session != ""
+	if !usedCached {
+		var errMsg string
+		session, errMsg = initSession()
+		if errMsg != "" {
+			return nil, errMsg
+		}
+		h.putCachedSession(cacheKey, session)
 	}
-	// The bridge answered with a JSON-RPC envelope; hand its result straight to the
-	// client so an image block stays an image block.
+
+	callPayload := map[string]any{"jsonrpc": "2.0", "id": 2, "method": method}
+	if params != nil {
+		callPayload["params"] = params
+	}
+
+	resp := post(callPayload, session)
+	if usedCached && isStaleMCPSession(resp) {
+		h.deleteCachedSession(cacheKey)
+		var errMsg string
+		session, errMsg = initSession()
+		if errMsg != "" {
+			return nil, errMsg
+		}
+		h.putCachedSession(cacheKey, session)
+		resp = post(callPayload, session)
+	}
+
+	if resp.code >= 400 {
+		if usedCached {
+			h.deleteCachedSession(cacheKey)
+		}
+		return nil, formatForwardHTTPError(resp)
+	}
+
 	var envelope struct {
 		Result map[string]any `json:"result"`
 		Error  *mcpError      `json:"error"`
 	}
 	if err := json.Unmarshal(resp.body.Bytes(), &envelope); err != nil {
-		writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
-			"content": []map[string]any{{"type": "text", "text": "unreadable answer from the sandbox: " + err.Error()}},
-			"isError": true,
-		}})
-		return
+		return nil, "unreadable answer from the sandbox: " + err.Error()
 	}
 	if envelope.Error != nil {
-		writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
-			"content": []map[string]any{{"type": "text", "text": envelope.Error.Message}},
-			"isError": true,
-		}})
-		return
+		return nil, envelope.Error.Message
 	}
-	writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: envelope.Result})
+	return envelope.Result, ""
 }
 
-func (h *mcpHandler) forwardError(w http.ResponseWriter, req mcpRequest, resp *captureWriter) {
-	text := strings.TrimSpace(resp.body.String())
-	// A 404 here is the tenant check answering — say so in the words the client can
-	// act on instead of echoing an HTTP status.
-	if resp.code == http.StatusNotFound {
-		text = "no such sandbox (or it does not belong to this credential)"
+func isStaleMCPSession(resp *captureWriter) bool {
+	if resp.code == http.StatusBadRequest || resp.code == http.StatusNotFound {
+		body := strings.ToLower(resp.body.String())
+		if strings.Contains(body, "session") {
+			return true
+		}
 	}
-	writeRPC(w, mcpResponse{JSONRPC: "2.0", ID: req.ID, Result: map[string]any{
-		"content": []map[string]any{{"type": "text", "text": text}},
-		"isError": true,
-	}})
+	var env struct {
+		Error *mcpError `json:"error"`
+	}
+	if json.Unmarshal(resp.body.Bytes(), &env) == nil && env.Error != nil {
+		if strings.Contains(strings.ToLower(env.Error.Message), "session") {
+			return true
+		}
+	}
+	return false
+}
+
+func formatForwardHTTPError(resp *captureWriter) string {
+	text := strings.TrimSpace(resp.body.String())
+	// A 404 here is usually the tenant check answering — say so in words the
+	// client can act on instead of echoing an HTTP status.
+	if resp.code == http.StatusNotFound {
+		return "no such sandbox (or it does not belong to this credential)"
+	}
+	if text == "" {
+		return fmt.Sprintf("HTTP %d from sandbox MCP", resp.code)
+	}
+	return fmt.Sprintf("HTTP %d: %s", resp.code, text)
 }

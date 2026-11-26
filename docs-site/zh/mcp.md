@@ -177,14 +177,9 @@ bridge 每 5 秒 watch 一次配置文件。确认路径：`sandrpod-cli mcp ls`
 | `sandbox_delete` | `sandbox` | 删除沙箱**及其**工作区 |
 | `sandbox_snapshot` | `sandbox`、`image` | 把文件系统提交为镜像（配了 registry 时会推送） |
 | `sandbox_preview_url` | `sandbox`、`port` | 该端口的签名 URL（2 小时） |
-| `desktop_screenshot` | `sandbox` | 该屏幕的 PNG 图片块 |
-| `desktop_click` | `sandbox`、`x`、`y`、`button` | `left`（默认）/ `middle` / `right` |
-| `desktop_type` | `sandbox`、`text` | 输入到当前焦点窗口 |
-| `desktop_key` | `sandbox`、`key` | `Return`、`ctrl+c`、`Alt+Tab` |
-| `desktop_scroll` | `sandbox`、`x`、`y`、`amount` | 负值向上 |
+| `sandbox_mcp_list` | `sandbox`、`mcp_token?` | 列出沙箱内的全部 MCP 工具（桌面、无头浏览器、`mcp.json` 服务） |
+| `sandbox_mcp_call` | `sandbox`、`tool`、`arguments?`、`mcp_token?` | 调用沙箱内任意 MCP 工具（原样透传图片块和错误信息） |
 
-**沙箱入口**提供这 5 个 `desktop_*`（不带 `sandbox` 参数，它就是那个沙箱），外加该沙箱
-`mcp.json` 里的所有 server——那些工具按 server 自己声明的名字出现（例如
-`github_create_issue`）。
+**沙箱入口**（`/api/v1/sandboxes/<name>/mcp`）会将该沙箱内置工具（如桌面镜像的 `desktop_*`）以及 `mcp.json` 里的所有 server 直接作为顶层工具暴露出来——通过平台入口的 `sandbox_mcp_list` / `sandbox_mcp_call` 同样可以发现并调用它们，且凭证始终留在沙箱内。
 
 运行时没有任何隐式推断：不在这张表里的工具就不存在，两个入口的 `tools/list` 永远是权威。
