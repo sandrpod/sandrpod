@@ -5,6 +5,14 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.10
+
+Fixed JSON Schema compliance on platform `/mcp` (`sandbox_list`).
+
+| Area | What changed |
+|---|---|
+| Platform MCP | Omitted empty `required` instead of emitting `"required": null` on `sandbox_list` (fixes strict MCP clients rejecting the tool), and added optional `limit` / `offset` pagination arguments to `sandbox_list` |
+
 ## 0.13.9
 
 Unified platform MCP (`/mcp`) to discover and call any tool inside any sandbox.

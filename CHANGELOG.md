@@ -6,6 +6,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.13.10] - 2026-11-26
+
+### Fixed
+
+- **Omit empty `required` from `/mcp` tool JSON schemas.** `obj()` in
+  `pkg/server/mcp.go` serialized a nil variadic `[]string` as `"required": null`
+  on `sandbox_list`, causing strict MCP clients to reject or disable the tool.
+  `required` is now omitted when empty, `sandbox_list` exposes its optional
+  `limit`/`offset` pagination parameters, and tests validate every `/mcp` tool's
+  JSON Schema.
+
 ## [0.13.9] - 2026-11-26
 
 ### Changed

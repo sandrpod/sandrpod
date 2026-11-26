@@ -5,6 +5,14 @@ description: 每个版本改了什么，其中哪些改动会破坏东西。
 
 # 发布说明
 
+## 0.13.10
+
+修复平台层 `/mcp`（`sandbox_list`）的 JSON Schema 序列化问题。
+
+| 领域 | 改了什么 |
+|---|---|
+| 平台层 MCP | `required` 为空时不再输出 `"required": null`（修复严格校验 JSON Schema 的 MCP 客户端禁用 `sandbox_list` 的问题），同时为 `sandbox_list` 补充可选分页参数 `limit` / `offset` |
+
 ## 0.13.9
 
 统一平台层 MCP（`/mcp`），通过单一静态入口即可发现并调用任意沙箱内的全部 MCP 工具。

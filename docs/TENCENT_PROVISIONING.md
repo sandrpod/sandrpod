@@ -218,8 +218,8 @@ perfectly healthy.
 Pin the image and let the scheduler pre-pull it while it provisions the VM:
 
 ```
-SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.13.9
-SANDRPOD_EGRESS_IMAGE=ghcr.io/sandrpod/egress-proxy:v0.13.9
+SANDRPOD_TOOLBOX_IMAGE=ghcr.io/sandrpod/toolbox:v0.13.10
+SANDRPOD_EGRESS_IMAGE=ghcr.io/sandrpod/egress-proxy:v0.13.10
 ```
 
 The pre-pull runs through TAT with the same 15-minute budget as every other

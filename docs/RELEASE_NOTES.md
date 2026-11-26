@@ -3,7 +3,16 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.13.9 (current)
+## 0.13.10 (current)
+
+Fixed JSON Schema serialization on `/mcp` (`sandbox_list`).
+
+`sandbox_list` previously emitted `"required": null` because Go serializes a
+nil variadic slice as JSON `null`, causing strict MCP clients to reject the
+tool. `required` is now omitted when empty and `sandbox_list` exposes its
+optional `limit` and `offset` pagination arguments.
+
+## 0.13.9
 
 Unified platform MCP for discovering and calling any sandbox MCP tool.
 
