@@ -3,7 +3,21 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.13.8 (current)
+## 0.13.9 (current)
+
+Unified platform MCP for discovering and calling any sandbox MCP tool.
+
+The platform `/mcp` endpoint previously hardcoded 5 `desktop_*` forwarding
+tools while leaving other sandbox MCP servers (such as Obscura headless browser
+tools or user `mcp.json` servers) unreachable without configuring per-sandbox
+URLs. Those 5 hardcoded tools are replaced by two generic meta-tools —
+**`sandbox_mcp_list`** and **`sandbox_mcp_call`** — bringing `/mcp` to 15
+orthogonal tools. Calls route through `/api/v1/sandboxes/{sandbox}/mcp`
+(covering both container and direct-agent sandboxes), cache `Mcp-Session-Id`
+per `(caller, sandbox)` with automatic retry on stale sessions, and strip the
+platform API key before forwarding so credentials stay inside the sandbox.
+
+## 0.13.8
 
 Lifecycle events for metering and audit consumers.
 

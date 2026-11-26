@@ -5,6 +5,16 @@ description: 每个版本改了什么，其中哪些改动会破坏东西。
 
 # 发布说明
 
+## 0.13.9
+
+统一平台层 MCP（`/mcp`），通过单一静态入口即可发现并调用任意沙箱内的全部 MCP 工具。
+
+| 领域 | 改了什么 |
+|---|---|
+| 平台层 MCP | 移除 `/mcp` 上硬编码的 5 个 `desktop_*` 转发工具，改为通用元工具 `sandbox_mcp_list` 和 `sandbox_mcp_call`（总计 15 个正交工具）；配置一个固定 URL 即可统一调用桌面、Obscura 无头浏览器及沙箱 `mcp.json` 里的全部工具 |
+| 路由与性能 | 统一经 `/api/v1/sandboxes/{sandbox}/mcp` 转发（同时支持容器与直连 `sandrpod-agent`），按 `(caller, sandbox)` 缓存 `Mcp-Session-Id` 5 分钟并在会话失效时自动重握手重试 |
+| 安全边界 | 转发前将平台 Bearer Token 移入会被剥离的 `X-Sandrpod-Token`，仅透传显式指定的 `mcp_token`，确保平台 API Key 绝不泄露到沙箱 |
+
 ## 0.13.8
 
 给计量/审计消费者提供可计费的沙箱生命周期事件。

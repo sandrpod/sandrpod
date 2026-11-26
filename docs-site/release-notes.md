@@ -5,6 +5,16 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.9
+
+Unified platform MCP (`/mcp`) to discover and call any tool inside any sandbox.
+
+| Area | What changed |
+|---|---|
+| Platform MCP | Replaced the 5 hardcoded `desktop_*` forwarding tools on `/mcp` with `sandbox_mcp_list` and `sandbox_mcp_call` (15 tools total), letting one static URL reach desktop, headless browser (Obscura), and `mcp.json` tools inside any sandbox |
+| Routing & performance | Forwards via `/api/v1/sandboxes/{sandbox}/mcp` (works for both container and direct-agent sandboxes), caches `Mcp-Session-Id` per `(caller, sandbox)` for 5 minutes with transparent retry on session expiry |
+| Security | Moves platform Bearer tokens to `X-Sandrpod-Token` (stripped before the tunnel) and forwards only an explicit `mcp_token`, so platform API keys never reach the sandbox |
+
 ## 0.13.8
 
 Lifecycle events a metering or audit consumer can bill by.

@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.13.9] - 2026-11-26
+
+### Changed
+
+- **Unified platform MCP (`/mcp`) via `sandbox_mcp_list` and `sandbox_mcp_call`.**
+  Replaced the 5 hardcoded `desktop_*` forwarding tools on `/mcp` with two
+  generic meta-tools (`sandbox_mcp_list`, `sandbox_mcp_call`) that discover and
+  invoke any MCP tool exposed inside a sandbox — desktop, Obscura headless
+  browser, and user-configured `mcp.json` servers — through a single static
+  platform endpoint (15 tools total). Requests forward through
+  `/api/v1/sandboxes/{sandbox}/mcp` (supporting both container and direct-agent
+  sandboxes), cache `Mcp-Session-Id` per `(caller, sandbox)` with automatic
+  re-initialization on expiry, and strip the platform API key before forwarding
+  so credentials never leak into the sandbox. Direct sandbox endpoints
+  (`/api/v1/sandboxes/{name}/mcp`) remain unchanged.
+
 ## [0.13.8] - 2026-11-24
 
 ### Added
