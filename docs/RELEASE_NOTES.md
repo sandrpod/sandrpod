@@ -3,7 +3,19 @@
 The running, per-commit list is [CHANGELOG.md](../CHANGELOG.md); the public
 narrative version is [docs.sandrpod.com/release-notes](https://docs.sandrpod.com/release-notes).
 
-## 0.13.10 (current)
+## 0.13.11 (current)
+
+Two fixes from live MCP end-to-end testing: upload parent directories and
+snapshot workspace cloning.
+
+- **`sandbox_write_file` / `POST /files/upload`** now creates missing parent
+  directories (`os.MkdirAll` after permission authorization) instead of failing
+  with `no such file or directory`.
+- **Snapshot forks (`copyVolume`)** now run the volume-copy helper using the
+  snapshot image itself (already present on the worker), avoiding silent
+  empty-`/workspace` forks when `SANDRPOD_TOOLBOX_IMAGE` is unset.
+
+## 0.13.10
 
 Fixed JSON Schema serialization on `/mcp` (`sandbox_list`).
 

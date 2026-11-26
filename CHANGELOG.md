@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ---
 
+## [0.13.11] - 2026-11-26
+
+### Fixed
+
+- **`/files/upload` (`sandbox_write_file`) now creates missing parent directories.**
+  `filesUploadHandler` in `pkg/toolbox/api.go` now runs `os.MkdirAll` on the
+  authorized destination's parent directory before opening the file, matching
+  the tool schema and documentation.
+- **Snapshot fork workspace volume copy no longer fails on unset `SANDRPOD_TOOLBOX_IMAGE`.**
+  `DockerPoder.copyVolume` now runs its volume-copy helper container using the
+  snapshot image itself (already verified locally by `CreatePod`), falling back
+  to `p.toolboxImage()` only when empty. This prevents silent empty-`/workspace`
+  forks when a worker has no local `sandrpod-toolbox:v2` tag.
+
 ## [0.13.10] - 2026-11-26
 
 ### Fixed

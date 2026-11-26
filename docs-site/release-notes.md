@@ -5,6 +5,15 @@ description: What each release changed, and which of those changes break somethi
 
 # Release notes
 
+## 0.13.11
+
+Fixes for nested file writes and snapshot `/workspace` cloning.
+
+| Area | What changed |
+|---|---|
+| Toolbox files | `POST /files/upload` (used by `sandbox_write_file`) now creates missing parent directories after authorization |
+| Snapshot fork | `DockerPoder.copyVolume` now uses the already-present snapshot image as the copy helper instead of falling back to a missing default toolbox tag, ensuring `/workspace` data reliably carries over on fork |
+
 ## 0.13.10
 
 Fixed JSON Schema compliance on platform `/mcp` (`sandbox_list`).

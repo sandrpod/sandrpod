@@ -5,6 +5,15 @@ description: 每个版本改了什么，其中哪些改动会破坏东西。
 
 # 发布说明
 
+## 0.13.11
+
+修复嵌套目录写文件与快照 fork 拷贝 `/workspace` 卷的问题。
+
+| 领域 | 改了什么 |
+|---|---|
+| Toolbox 文件上传 | `POST /files/upload`（`sandbox_write_file`）在通过权限校验后自动创建缺失的父目录，不再因父目录不存在报 500 |
+| 快照 Fork | `DockerPoder.copyVolume` 直接复用当前已就绪的快照镜像拷贝 `/workspace` 卷，避免 worker 未配 `SANDRPOD_TOOLBOX_IMAGE` 时静默回退为空工作区 |
+
 ## 0.13.10
 
 修复平台层 `/mcp`（`sandbox_list`）的 JSON Schema 序列化问题。
