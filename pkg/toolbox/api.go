@@ -1020,6 +1020,11 @@ func (s *Server) filesUploadHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := os.MkdirAll(filepath.Dir(safeDest), 0755); err != nil {
+		http.Error(w, fmt.Sprintf("failed to create parent directory: %v", err), http.StatusInternalServerError)
+		return
+	}
+
 	// Stream the upload to disk instead of buffering the whole body in memory.
 	// 32 MiB form limit above only bounds the parser; the file we create here
 	// could legitimately be larger if the client uses chunked encoding.

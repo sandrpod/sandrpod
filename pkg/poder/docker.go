@@ -345,7 +345,7 @@ func (p *DockerPoder) CreatePod(ctx context.Context, req *CreatePodRequest) (pod
 		// source's volume (docker commit excludes mounts). Copy it so a "fork"
 		// actually carries the working state it was forked from.
 		if src := p.snapshotSource(ctx, imageName); src != "" {
-			if err := p.copyVolume(ctx, WorkspaceVolumeName(src), wsVol); err != nil {
+			if err := p.copyVolume(ctx, imageName, WorkspaceVolumeName(src), wsVol); err != nil {
 				log.Printf("poder: copy snapshot workspace %s -> %s failed (fork starts with an empty /workspace): %v", src, req.Name, err)
 			} else {
 				log.Printf("poder: forked workspace from %s into volume %s", src, wsVol)
@@ -772,13 +772,16 @@ func (p *DockerPoder) toolboxImage() string {
 // copyVolume copies one docker volume into another using a throwaway container
 // from the toolbox image (already present on a worker; no registry round-trip).
 // It is best-effort: a fork with an empty workspace is still a usable sandbox.
-func (p *DockerPoder) copyVolume(ctx context.Context, from, to string) error {
+func (p *DockerPoder) copyVolume(ctx context.Context, helperImage, from, to string) error {
+	if helperImage == "" {
+		helperImage = p.toolboxImage()
+	}
 	// Entrypoint, not Cmd: the toolbox image's entrypoint IS the toolbox binary,
 	// so a Cmd rode along with it and the helper container never exited — the
 	// copy waited forever and the create hung in PENDING.
 	resp, err := p.dockerClient.ContainerCreate(ctx,
 		&container.Config{
-			Image:      p.toolboxImage(),
+			Image:      helperImage,
 			Entrypoint: []string{"sh", "-c", "cp -a /from/. /to/ 2>/dev/null || true"},
 		},
 		&container.HostConfig{Mounts: []mount.Mount{

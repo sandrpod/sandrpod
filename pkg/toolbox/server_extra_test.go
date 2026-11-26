@@ -121,6 +121,28 @@ func TestFilesUploadHandler_WritesFile(t *testing.T) {
 	}
 }
 
+func TestFilesUploadHandler_CreatesParentDirs(t *testing.T) {
+	s, dir := newTestServer(t)
+	body, ct := newMultipartBody(t, map[string]string{"file": "nested-content"})
+
+	target := filepath.Join(dir, "nested", "deep", "hello.txt")
+	req := httptest.NewRequest(http.MethodPost, "/files/upload?path="+target, body)
+	req.Header.Set("Content-Type", ct)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	got, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read nested file: %v", err)
+	}
+	if string(got) != "nested-content" {
+		t.Errorf("content = %q, want nested-content", got)
+	}
+}
+
 func TestFilesUploadHandler_MissingPath_Returns400(t *testing.T) {
 	s, _ := newTestServer(t)
 	body, ct := newMultipartBody(t, map[string]string{"file": "x"})
