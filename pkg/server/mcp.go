@@ -138,7 +138,11 @@ func builtinMCPTools() []mcpTool {
 	str := func(desc string) map[string]any { return map[string]any{"type": "string", "description": desc} }
 	num := func(desc string) map[string]any { return map[string]any{"type": "number", "description": desc} }
 	obj := func(props map[string]any, required ...string) map[string]any {
-		return map[string]any{"type": "object", "properties": props, "required": required}
+		schema := map[string]any{"type": "object", "properties": props}
+		if len(required) > 0 {
+			schema["required"] = required
+		}
+		return schema
 	}
 	tools := []mcpTool{
 		{
@@ -178,9 +182,23 @@ func builtinMCPTools() []mcpTool {
 		{
 			Name:        "sandbox_list",
 			Description: "List sandboxes with their state, node and image.",
-			InputSchema: obj(map[string]any{}),
-			call: func(map[string]any) (string, string, any, error) {
-				return http.MethodGet, "/api/v1/sandboxes", nil, nil
+			InputSchema: obj(map[string]any{
+				"limit":  num("optional maximum number of sandboxes to return"),
+				"offset": num("optional pagination offset"),
+			}),
+			call: func(a map[string]any) (string, string, any, error) {
+				path := "/api/v1/sandboxes"
+				var q []string
+				if limit := int(floatArg(a, "limit", 0)); limit > 0 {
+					q = append(q, "limit="+strconv.Itoa(limit))
+				}
+				if offset := int(floatArg(a, "offset", 0)); offset > 0 {
+					q = append(q, "offset="+strconv.Itoa(offset))
+				}
+				if len(q) > 0 {
+					path += "?" + strings.Join(q, "&")
+				}
+				return http.MethodGet, path, nil, nil
 			},
 		},
 		{

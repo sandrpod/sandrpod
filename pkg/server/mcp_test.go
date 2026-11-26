@@ -75,6 +75,32 @@ func TestMCPInitializeAndList(t *testing.T) {
 			t.Fatalf("hardcoded tool %q should not be exposed on platform /mcp (use sandbox_mcp_list/call)", removed)
 		}
 	}
+	// Every tool's inputSchema must be valid JSON Schema: non-null properties
+	// object, and `required` omitted rather than serialized as `null` when empty.
+	for _, tl := range tools {
+		tm := tl.(map[string]any)
+		tname := tm["name"].(string)
+		schema, ok := tm["inputSchema"].(map[string]any)
+		if !ok || schema["type"] != "object" {
+			t.Fatalf("tool %q has invalid inputSchema: %v", tname, tm["inputSchema"])
+		}
+		props, ok := schema["properties"].(map[string]any)
+		if !ok {
+			t.Fatalf("tool %q inputSchema.properties is not an object: %v", tname, schema["properties"])
+		}
+		if reqRaw, hasReq := schema["required"]; hasReq {
+			reqList, ok := reqRaw.([]any)
+			if !ok || len(reqList) == 0 {
+				t.Fatalf("tool %q inputSchema.required must be a non-empty array when present, got %T (%v)", tname, reqRaw, reqRaw)
+			}
+			for _, r := range reqList {
+				key, ok := r.(string)
+				if !ok || props[key] == nil {
+					t.Fatalf("tool %q required field %v missing from properties", tname, r)
+				}
+			}
+		}
+	}
 }
 
 func TestMCPToolCallExecutesThroughMux(t *testing.T) {
